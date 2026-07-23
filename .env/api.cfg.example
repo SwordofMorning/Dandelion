@@ -1,0 +1,5 @@
+[API]
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_API_KEY=sk-input-your-API-Key-here
+MODEL_ID=deepseek-v4-pro
+MAX_TOKENS=81920
