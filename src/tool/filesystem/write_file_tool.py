@@ -1,0 +1,95 @@
+# .update_src/tool/filesystem/write_file_tool.py
+
+import os
+from ..base_tool import BaseTool
+
+# Maximum file size to write (5 MB)
+_MAX_WRITE_BYTES = 5 * 1024 * 1024
+
+class WriteFileTool(BaseTool):
+    def __init__(self, workspace_dir=None):
+        super().__init__(workspace_dir)
+
+    def get_name(self):
+        return "write_file"
+
+    def get_description(self):
+        return (
+            "Write content to a file. Creates the file if it does not exist, "
+            "overwrites it if it does. Parent directories are created automatically. "
+            "Use this to generate source code, configuration files, or any text output. "
+            "WARNING: This tool will overwrite existing files without confirmation. "
+            "Use read_file first if you need to preserve existing content."
+        )
+
+    def get_schema(self):
+        return {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute or relative path to the target file."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The complete text content to write to the file."
+                }
+            },
+            "required": ["file_path", "content"]
+        }
+
+    # ---------------------------------------------------------
+    # Brief: Execute file writing.
+    # ---------------------------------------------------------
+    def execute(self, **kwargs):
+        file_path = kwargs.get("file_path", "")
+        content = kwargs.get("content", "")
+
+        if not file_path:
+            return False, "Error: No file_path provided."
+
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(self.workspace_dir, file_path)
+        file_path = os.path.abspath(file_path)
+
+        # Security sandbox check
+        if not self.check_workspace_permission(file_path, action_desc=f"WRITE File at '{file_path}'"):
+            return False, (
+                f"CRITICAL SECURITY BLOCK: Permission denied to write file '{file_path}'. "
+                f"STOP and acknowledge this restriction to the user."
+            )
+
+        # Check content size
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > _MAX_WRITE_BYTES:
+            return False, (
+                f"Error: Content is too large ({content_bytes / 1024:.1f} KB). "
+                f"Maximum allowed size is {_MAX_WRITE_BYTES / 1024:.0f} KB."
+            )
+
+        # Determine if this is a new file or overwrite
+        file_existed = os.path.exists(file_path)
+
+        try:
+            # Ensure parent directories exist
+            parent_dir = os.path.dirname(file_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            action_verb = "Updated" if file_existed else "Created"
+            lines = content.count("\n") + (0 if content.endswith("\n") else 1)
+            return True, (
+                f"{action_verb} file: '{file_path}'\n"
+                f"  Size: {content_bytes}B ({content_bytes / 1024:.1f} KB)\n"
+                f"  Lines: {lines}"
+            )
+
+        except PermissionError:
+            return False, f"Error: Permission denied when writing to '{file_path}'."
+        except OSError as e:
+            return False, f"Error writing file: {e}"
+        except Exception as e:
+            return False, f"Unexpected error writing file: {e}"

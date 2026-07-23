@@ -10,6 +10,10 @@ from src.tool.shell.bash_tool import BashTool
 from src.tool.agent.reporter_tool import ReporterTool
 from src.tool.agent.skill_tool import LoadSkillTool
 from src.tool.editor.markdown_tool import MarkdownTool
+from src.tool.filesystem.grep_search_tool import GrepSearchTool
+from src.tool.filesystem.write_file_tool import WriteFileTool
+from src.tool.filesystem.read_file_tool import ReadFileTool
+from src.tool.filesystem.list_directory_tool import ListDirectoryTool
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
@@ -62,6 +66,10 @@ class MyAgent:
         reporter = ReporterTool(self.client, self.logger, self.config, workspace_dir=BASE_DIR)
         skill_loader = LoadSkillTool(self.skill)
         md_editor = MarkdownTool(workspace_dir=BASE_DIR)
+        grep_tool = GrepSearchTool(workspace_dir=BASE_DIR)
+        write_tool = WriteFileTool(workspace_dir=BASE_DIR)
+        read_tool = ReadFileTool(workspace_dir=BASE_DIR)
+        list_tool = ListDirectoryTool(workspace_dir=BASE_DIR)
         
         for t in [bash, reporter, skill_loader, md_editor]:
             self.tools[t.get_name()] = t
