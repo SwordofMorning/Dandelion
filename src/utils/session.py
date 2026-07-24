@@ -52,7 +52,7 @@ class SessionManager:
                     with open(meta_file, "r", encoding="utf-8") as f:
                         meta = json.load(f)
                         sessions.append(meta)
-                except Exception:
+                except Exception as e:
                     print(f"[-] Warning: Failed to parse session meta at {meta_file}: {e}")
         return sessions
 
@@ -86,7 +86,7 @@ class SessionManager:
         try:
             with open(hist_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
             print(f"[-] Warning: Failed to load history from {hist_file}: {e}")
             return []
 

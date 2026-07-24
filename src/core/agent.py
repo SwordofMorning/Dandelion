@@ -120,6 +120,8 @@ class MyAgent:
                 break
                 
         if memories_content and last_user_idx != -1:
+            msg_content = req_messages[last_user_idx].get("content", "")
+
             # Preventing forced type casting to lists from violating API structure specifications
             if isinstance(msg_content, str):
                 req_messages[last_user_idx] = {
