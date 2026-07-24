@@ -1,9 +1,6 @@
-# src/utils/session.py
-
 import os
 import json
 import datetime
-import time
 
 class SessionManager:
     def __init__(self, log_dir=".log"):
@@ -30,7 +27,7 @@ class SessionManager:
             name = session_id
             
         session_dir = os.path.join(self.log_dir, session_id)
-        os.makedirs(session_dir)
+        os.makedirs(session_dir, exist_ok=True)
         
         meta = {
             "id": session_id,
@@ -38,7 +35,7 @@ class SessionManager:
             "created_at": datetime.datetime.now().isoformat()
         }
         
-        with open(os.path.join(session_dir, "meta.json"), "w") as f:
+        with open(os.path.join(session_dir, "meta.log"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
             
         self.save_history([], session_dir)
@@ -49,10 +46,10 @@ class SessionManager:
         sessions = []
         for d in sorted(os.listdir(self.log_dir)):
             s_dir = os.path.join(self.log_dir, d)
-            meta_file = os.path.join(s_dir, "meta.json")
+            meta_file = os.path.join(s_dir, "meta.log")
             if os.path.isdir(s_dir) and os.path.exists(meta_file):
                 try:
-                    with open(meta_file, "r") as f:
+                    with open(meta_file, "r", encoding="utf-8") as f:
                         meta = json.load(f)
                         sessions.append(meta)
                 except Exception:
@@ -68,14 +65,14 @@ class SessionManager:
         return True
 
     def get_current_meta(self):
-        meta_file = os.path.join(self.current_session_dir, "meta.json")
-        with open(meta_file, "r") as f:
+        meta_file = os.path.join(self.current_session_dir, "meta.log")
+        with open(meta_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def load_history(self):
         if not self.current_session_dir:
             return []
-        hist_file = os.path.join(self.current_session_dir, "history.json")
+        hist_file = os.path.join(self.current_session_dir, "history.log")
         if not os.path.exists(hist_file):
             return []
         try:
@@ -84,19 +81,21 @@ class SessionManager:
         except Exception:
             return []
 
-    def save_history(self, history, target_dir=None):
-        tdir = target_dir or self.current_session_dir
-        if not tdir:
-            return
-        hist_file = os.path.join(tdir, "history.json")
-        with open(hist_file, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-
     def _default_serializer(self, obj):
+        # Convert Pydantic/SDK blocks (like ThinkingBlock) to standard dicts
         if hasattr(obj, "model_dump"): return obj.model_dump()
         if hasattr(obj, "dict"): return obj.dict()
         if hasattr(obj, "__dict__"): return obj.__dict__
         return str(obj)
+
+    def save_history(self, history, target_dir=None):
+        tdir = target_dir or self.current_session_dir
+        if not tdir:
+            return
+        hist_file = os.path.join(tdir, "history.log")
+        with open(hist_file, "w", encoding="utf-8") as f:
+            # default=self._default_serializer to handle ThinkingBlock objects
+            json.dump(history, f, ensure_ascii=False, indent=2, default=self._default_serializer)
 
     def log_api_call(self, tag, payload):
         if not self.current_session_dir:
