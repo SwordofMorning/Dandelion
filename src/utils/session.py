@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import shutil
 
 class SessionManager:
     def __init__(self, log_dir=".log"):
@@ -117,3 +118,23 @@ class SessionManager:
         
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"{header}\n{json_str}\n\n")
+
+    def delete_session(self, session_id):
+        safe_session_id = os.path.basename(session_id.strip())
+        if not safe_session_id or safe_session_id != session_id.strip():
+            return False, f"Invalid session_id format: {session_id}"
+            
+        # Prevent deleting the currently active session
+        if safe_session_id == self.current_session_id:
+            return False, "Cannot delete the currently active branch."
+            
+        target_dir = os.path.join(self.log_dir, safe_session_id)
+        if not os.path.exists(target_dir):
+            return False, f"Session '{safe_session_id}' not found."
+            
+        try:
+            import shutil
+            shutil.rmtree(target_dir)
+            return True, f"Session '{safe_session_id}' deleted successfully."
+        except Exception as e:
+            return False, f"Failed to delete session: {e}"
