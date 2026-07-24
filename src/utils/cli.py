@@ -56,6 +56,7 @@ class InteractiveCLI:
         }
         
         return NestedCompleter.from_nested_dict(comp_dict)
+
     def _print_help(self):
         print("\n================= REGENT WORKSPACE =================")
         print(" Git-Style Session Management:")

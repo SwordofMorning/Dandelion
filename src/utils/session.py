@@ -1,3 +1,5 @@
+# src/utils/session.py
+
 import os
 import json
 import datetime
@@ -133,7 +135,6 @@ class SessionManager:
             return False, f"Session '{safe_session_id}' not found."
             
         try:
-            import shutil
             shutil.rmtree(target_dir)
             return True, f"Session '{safe_session_id}' deleted successfully."
         except Exception as e:
