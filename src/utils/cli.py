@@ -153,7 +153,12 @@ class InteractiveCLI:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(self.staged_message)
 
+            # Parse the editor command with shlex to support flags
             editor_cmd = shlex.split(editor, posix=(os.name != 'nt'))
+            # Normalize the executable token on Windows to remove surrounding quotes
+            if os.name == 'nt' and editor_cmd:
+                editor_cmd[0] = editor_cmd[0].strip('"').strip("'")
+
             editor_cmd.append(tmp_path)
             subprocess.call(editor_cmd)
 
@@ -238,6 +243,9 @@ class InteractiveCLI:
             print("[-] prompt_toolkit not found. Fallback to basic input. (pip install prompt_toolkit)")
         self._print_help()
         
+        # Track consecutive errors to prevent infinite loop of death
+        consecutive_errors = 0 
+        
         while True:
             try:
                 # 1. Background task check
@@ -264,6 +272,9 @@ class InteractiveCLI:
                     ).strip()
                 else:
                     cmd_input = input(prompt_str).strip()
+                    
+                # Reset error counter because we successfully reached the blocking input layer
+                consecutive_errors = 0
                     
                 if not cmd_input:
                     continue
@@ -302,15 +313,21 @@ class InteractiveCLI:
                     print(f"[-] Unknown command '{command}'. Type 'help' for available commands.")
                     
             except KeyboardInterrupt:
-                # Handle Ctrl+C gracefully
+                # Handle Ctrl+C
                 print()
                 continue
             except EOFError:
-                # Handle Ctrl+D gracefully
+                # Handle Ctrl+D
                 print("\n[*] Terminating Regent Shell (EOF). Goodbye.")
                 break
             except Exception as e:
-                # Catch-all handler for unexpected errors to prevent shell termination
+                consecutive_errors += 1
                 print(f"\n[-] Unexpected Error: {e}")
+                
+                # Break out if the loop is spinning wildly without user interaction
+                if consecutive_errors >= 3:
+                    print("[!] FATAL: Too many consecutive errors. Terminating shell to prevent infinite loop.")
+                    break
+                    
                 print("[*] Shell recovered. Your staged message and session are preserved.")
                 continue
