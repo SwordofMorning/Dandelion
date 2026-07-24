@@ -109,6 +109,11 @@ class SubAgent(ISubAgent):
                     error_message=str(err)
                 )
                 
+            self.logger.log_api_call(
+                f"SUBAGENT:{self.subagent_id} POST-CALL (Turn {turn+1}, depth={self.depth})",
+                resp if resp else {"error": err}
+            )
+   
             messages.append({"role": "assistant", "content": resp.content})
             
             if resp.stop_reason != "tool_use":
