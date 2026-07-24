@@ -78,8 +78,30 @@ class MyAgent:
     def _compact_context(self):
         if len(self.history) > 40:
             print("[*] Context limit reaching threshold, compacting history...")
+            head = self.history[:5]
+            
+            # Note: Find a safe breakpoint (a plain text user message) 
+            # to prevent cutting off the tool_use and tool_result combination.
+            safe_idx = len(self.history) - 10
+            while safe_idx > 5:
+                msg = self.history[safe_idx]
+                if msg["role"] == "user":
+                    content = msg.get("content", "")
+                    # If it's not a list containing tool_result, 
+                    # it indicates a safe starting point.
+                    is_tool_result = isinstance(content, list) and any(
+                        isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+                    )
+                    if not is_tool_result:
+                        break
+                safe_idx -= 1
+
+            # Backup
+            if safe_idx <= 5:
+                safe_idx = len(self.history) - 10
+
             snip_msg = {"role": "user", "content": "[snipped previous messages to save context]"}
-            self.history = self.history[:5] + [snip_msg] + self.history[-10:]
+            self.history = head + [snip_msg] + self.history[safe_idx:]
             self.session.save_history(self.history)
 
     def step(self):
@@ -98,10 +120,19 @@ class MyAgent:
                 break
                 
         if memories_content and last_user_idx != -1:
-            req_messages[last_user_idx] = {
-                **req_messages[last_user_idx],
-                "content": memories_content + "\n\n" + str(req_messages[last_user_idx]["content"])
-            }
+            # Preventing forced type casting to lists from violating API structure specifications
+            if isinstance(msg_content, str):
+                req_messages[last_user_idx] = {
+                    **req_messages[last_user_idx],
+                    "content": memories_content + "\n\n" + msg_content
+                }
+            # If it is a list (e.g., containing tool_result), insert a text block at the beginning.
+            elif isinstance(msg_content, list):
+                new_content = [{"type": "text", "text": memories_content + "\n\n"}] + msg_content
+                req_messages[last_user_idx] = {
+                    **req_messages[last_user_idx],
+                    "content": new_content
+                }
 
         # 2. Main LLM API Call
         payload = {
