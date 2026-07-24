@@ -7,7 +7,7 @@ from src.utils.safe_llm import SafeLLMClient
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
-from src.subagent.orchestrator import SubAgentOrchestrator
+from src.subagent.pool import SubAgentPool
 
 from src.tool import (
     BashTool, ReporterTool, LoadSkillTool, MarkdownTool,
@@ -73,7 +73,7 @@ class MyAgent:
             edit_tool.get_name(): edit_tool
         }
         
-        self.orchestrator = SubAgentOrchestrator(
+        self.pool = SubAgentPool(
             safe_client=self.client,
             logger=self.session,
             config=self.config,
@@ -82,7 +82,7 @@ class MyAgent:
         )
         
         decompose_task = DecomposeTaskTool(self.client, self.config)
-        spawn_subagent = SpawnSubagentTool(self.orchestrator)
+        spawn_subagent = SpawnSubagentTool(self.pool)
         
         # Added all tools to the registration list
         tool_list = [

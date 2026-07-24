@@ -1,9 +1,9 @@
 # src/subagent/jp/reporter.py
 
-from ..base_subagent import BaseSubAgent
+from ..i_subagent import ISubAgent
 from ...tool.excel.read_excel_tool import ReadExcelTool
 
-class ReporterSubAgent(BaseSubAgent):
+class ReporterSubAgent(ISubAgent):
     def __init__(self, safe_client, logger, config, workspace_dir=None):
         # Only inject the EXCEL tool for security. No shell access here.
         tools = {

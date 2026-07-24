@@ -1,4 +1,4 @@
-# src/tool/agent/subagent_registry.py
+# src/tool/agent/registry.py
 
 # Brief: The set of pre-defined tools that the management sub-agent can acquire.
 

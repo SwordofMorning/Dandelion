@@ -1,21 +1,21 @@
-# src/subagent/generic_subagent.py
+# src/subagent/subagent.py
 
-# Brief: Inherits from the original BaseSubAgent with recursive deep.
+# Brief: Inherits from the original ISubAgent with recursive deep.
 # A SubAgent which could do some jobs, like a thread.
 # When call run(), a new LLM Context (Session/Message) were created.
 
 import time
-from .base_subagent import BaseSubAgent
+from .i_subagent import ISubAgent
 from .result import SubAgentResult
 from ..tool.agent.spawn_tool import RestrictedSpawnTool
 
-class GenericSubAgent(BaseSubAgent):
+class SubAgent(ISubAgent):
     def __init__(
         self,
         safe_client,
         logger,
         config,
-        orchestrator,
+        pool,
         role_prompt,
         tools,
         depth=0,
@@ -23,7 +23,7 @@ class GenericSubAgent(BaseSubAgent):
         subagent_id=None
     ):
         super().__init__(safe_client, logger, tools, config)
-        self.orchestrator = orchestrator
+        self.pool = pool
         self.depth = depth
         self.max_depth = max_depth
         self.subagent_id = subagent_id or f"subagent-{id(self):x}"
@@ -33,7 +33,7 @@ class GenericSubAgent(BaseSubAgent):
         
         if self.depth < self.max_depth:
             self.tools["spawn_subagent"] = RestrictedSpawnTool(
-                orchestrator=orchestrator,
+                pool=pool,
                 parent_subagent=self,
                 current_depth=self.depth,
                 max_depth=self.max_depth
@@ -78,7 +78,7 @@ class GenericSubAgent(BaseSubAgent):
         tool_calls_made = 0
         max_depth_reached = self.depth
         
-        print(f"\n[*] [GenericSubAgent:{self.subagent_id}] Spawned (depth={self.depth})")
+        print(f"\n[*] [SubAgent:{self.subagent_id}] Spawned (depth={self.depth})")
         print(f"    Task: {task_description[:80]}...")
         
         messages = [{"role": "user", "content": task_description}]
@@ -137,7 +137,7 @@ class GenericSubAgent(BaseSubAgent):
             
         final_text = self._extract_final_summary(messages)
         elapsed = time.time() - start_time
-        print(f"[*] [GenericSubAgent:{self.subagent_id}] Completed in {elapsed:.1f}s "
+        print(f"[*] [SubAgent:{self.subagent_id}] Completed in {elapsed:.1f}s "
               f"({tool_calls_made} tool calls, depth={max_depth_reached})")
               
         return SubAgentResult(

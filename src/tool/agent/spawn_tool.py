@@ -3,12 +3,12 @@
 # Brief: fork() a new subagent like threads.
 
 from ..base_tool import BaseTool
-from .subagent_registry import TOOLSET_REGISTRY
+from ...subagent.registry import TOOLSET_REGISTRY
 
 class SpawnSubagentTool(BaseTool):
-    def __init__(self, orchestrator):
+    def __init__(self, pool):
         super().__init__()
-        self.orchestrator = orchestrator
+        self.pool = pool
 
     def get_name(self):
         return "spawn_subagent"
@@ -55,7 +55,7 @@ class SpawnSubagentTool(BaseTool):
             
         print(f"\n[+] [SpawnSubagentTool] Spawning SubAgent for: {task_desc[:60]}...")
         
-        result = self.orchestrator.create_and_run(
+        result = self.pool.create_and_run(
             role_prompt=role_prompt,
             toolset_name=toolset,
             task_description=task_desc,
@@ -65,9 +65,9 @@ class SpawnSubagentTool(BaseTool):
         return True, result.to_context_string()
 
 class RestrictedSpawnTool(BaseTool):
-    def __init__(self, orchestrator, parent_subagent, current_depth, max_depth):
+    def __init__(self, pool, parent_subagent, current_depth, max_depth):
         super().__init__()
-        self.orchestrator = orchestrator
+        self.pool = pool
         self.parent = parent_subagent
         self.current_depth = current_depth
         self.max_depth = max_depth
@@ -121,7 +121,7 @@ class RestrictedSpawnTool(BaseTool):
         
         print(f"\n[+] [RestrictedSpawnTool] Spawning SubSubAgent (depth {self.current_depth+1}) for: {task_desc[:60]}...")
         
-        result = self.orchestrator.create_and_run(
+        result = self.pool.create_and_run(
             role_prompt=role_prompt,
             toolset_name=toolset,
             task_description=task_desc,

@@ -1,16 +1,16 @@
-# src/subagent/orchestrator.py
+# src/subagent/pool.py
 
-# Brief: Control all generic_subagent.py
+# Brief: Control all subagent.py
 # A global singleton, held by MyAgent, used to maintaining and managing all derived SubAgents. 
 # When you need to create a new SubAgent, this scheduler assigns an ID, mounts specific toolsets,
 # and tracks their execution status.
 
 import uuid
-from .generic_subagent import GenericSubAgent
+from .subagent import SubAgent
 from .result import SubAgentResult
-from ..tool.agent.subagent_registry import resolve_toolset
+from .registry import resolve_toolset
 
-class SubAgentOrchestrator:
+class SubAgentPool:
     def __init__(self, safe_client, logger, config, all_tools, max_depth=3):
         self.safe_client = safe_client
         self.logger = logger
@@ -30,11 +30,11 @@ class SubAgentOrchestrator:
         tools = resolve_toolset(toolset_name, self.all_tools, parent_tools)
         subagent_id = f"sa-{uuid.uuid4().hex[:8]}"
         
-        subagent = GenericSubAgent(
+        subagent = SubAgent(
             safe_client=self.safe_client,
             logger=self.logger,
             config=self.config,
-            orchestrator=self,
+            pool=self,
             role_prompt=role_prompt,
             tools=tools,
             depth=depth,
