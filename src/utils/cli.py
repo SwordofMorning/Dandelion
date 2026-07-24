@@ -141,7 +141,7 @@ class InteractiveCLI:
         else:
             print(f"[-] Error: Failed to switch to '{target}'. Directory might be corrupted.")
 
-def _cmd_vim(self):
+    def _cmd_vim(self):
         editor = os.environ.get('EDITOR')
         if not editor:
             editor = 'vim' if os.name != 'nt' else 'notepad'
