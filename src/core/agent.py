@@ -7,7 +7,7 @@ from src.utils.safe_llm import SafeLLMClient
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
-from src.subagent.pool import SubAgentPool
+from src.subagent import SubAgentPool
 
 from src.tool import (
     BashTool, ReporterTool, LoadSkillTool, MarkdownTool,

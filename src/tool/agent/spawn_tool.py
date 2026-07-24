@@ -3,7 +3,7 @@
 # Brief: fork() a new subagent like threads.
 
 from ..base_tool import BaseTool
-from ...subagent.registry import TOOLSET_REGISTRY
+from src.subagent import TOOLSET_REGISTRY
 
 class SpawnSubagentTool(BaseTool):
     def __init__(self, pool):
