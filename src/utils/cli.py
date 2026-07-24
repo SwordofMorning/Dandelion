@@ -153,8 +153,9 @@ class InteractiveCLI:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(self.staged_message)
 
-            # Use subprocess.call instead of os.system for safety against spaces in paths
-            subprocess.call([editor, tmp_path])
+            editor_cmd = shlex.split(editor, posix=(os.name != 'nt'))
+            editor_cmd.append(tmp_path)
+            subprocess.call(editor_cmd)
 
             # Read back user input
             with open(tmp_path, 'r', encoding='utf-8') as f:
@@ -308,3 +309,8 @@ class InteractiveCLI:
                 # Handle Ctrl+D gracefully
                 print("\n[*] Terminating Regent Shell (EOF). Goodbye.")
                 break
+            except Exception as e:
+                # Catch-all handler for unexpected errors to prevent shell termination
+                print(f"\n[-] Unexpected Error: {e}")
+                print("[*] Shell recovered. Your staged message and session are preserved.")
+                continue
