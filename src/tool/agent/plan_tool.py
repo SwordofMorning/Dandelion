@@ -97,8 +97,9 @@ class DecomposeTaskTool(BaseTool):
         }
         
         print("\n[+] [DecomposeTaskTool] Generating TaskPlan...")
-        resp, err = self.safe_client.safe_request(payload)
-        
+
+        resp, err = self.safe_client.safe_stream_request(payload)
+
         if err:
             return False, f"Decomposition failed: {err}"
             
