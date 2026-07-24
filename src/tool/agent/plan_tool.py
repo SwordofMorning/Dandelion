@@ -1,6 +1,9 @@
 # src/tool/agent/plan_tool.py
 
 # Brief: Use LLM to split the task.
+# This tool does not perform any specific actions. 
+# It calls a separate LLM (without polluting the main thread's memory) 
+# to translate complex natural language tasks into a structured JSON task array.
 
 import json
 from ..base_tool import BaseTool

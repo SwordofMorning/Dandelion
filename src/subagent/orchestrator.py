@@ -1,6 +1,9 @@
 # src/subagent/orchestrator.py
 
-# Brief: It acts as the core controller of the SubAgent cluster.
+# Brief: Control all generic_subagent.py
+# A global singleton, held by MyAgent, used to maintaining and managing all derived SubAgents. 
+# When you need to create a new SubAgent, this scheduler assigns an ID, mounts specific toolsets,
+# and tracks their execution status.
 
 import uuid
 from .generic_subagent import GenericSubAgent

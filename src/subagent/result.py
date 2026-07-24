@@ -1,6 +1,7 @@
 # src/subagent/result.py
 
 # Breif: Define the structured results to be returned to the parent Agent.
+# Messages struct between Agents.
 
 import json
 from dataclasses import dataclass, field, asdict

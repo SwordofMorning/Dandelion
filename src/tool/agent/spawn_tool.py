@@ -1,6 +1,6 @@
 # src/tool/agent/spawn_tool.py
 
-# Brief: Provides a full version of the Main Agent and a limited version of the spawn tool for sub-agents.
+# Brief: fork() a new subagent like threads.
 
 from ..base_tool import BaseTool
 from .subagent_registry import TOOLSET_REGISTRY

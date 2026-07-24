@@ -1,7 +1,8 @@
 # src/subagent/generic_subagent.py
 
-# Brief: It inherits from the original BaseSubAgent 
-# and extends the capabilities of recursive deep tracing and restricted derivation.
+# Brief: Inherits from the original BaseSubAgent with recursive deep.
+# A SubAgent which could do some jobs, like a thread.
+# When call run(), a new LLM Context (Session/Message) were created.
 
 import time
 from .base_subagent import BaseSubAgent
