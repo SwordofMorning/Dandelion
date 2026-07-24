@@ -28,19 +28,41 @@ class PromptBuilder:
         sections.append("You are a professional coding and management agent running locally.")
         sections.append(f"Environment Info:\n{self.terminal_hint}")
         
-        # 2. Skills Catalog (Layer 1)
+        # 2. SubAgent Orchestration Guide
+        sections.append(
+            "## SubAgent Orchestration\n"
+            "You have access to a SubAgent cluster system for handling complex, multi-step tasks.\n"
+            "### When to Use SubAgents:\n"
+            "- Tasks that involve 3+ independent sub-problems\n"
+            "- Tasks that require different expertise (e.g., code analysis + data processing)\n"
+            "- Tasks that would generate excessive tool output (file contents, search results)\n"
+            "### How to Use SubAgents:\n"
+            "1. Call 'decompose_task' to break the complex task into a TaskPlan.\n"
+            "2. For each SubTask, call 'spawn_subagent' with task_description, toolset, and role_prompt.\n"
+            "3. Wait for each SubAgentResult before proceeding to dependent subtasks.\n"
+            "4. Synthesize the final answer from all SubAgentResults.\n"
+            "### Available Toolsets:\n"
+            "- 'minimal': read_file, write_file, list_directory\n"
+            "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file\n"
+            "- 'code_analysis': read_file, grep_search, list_directory, bash\n"
+            "- 'data_processing': read_weekly_report, write_file, markdown_editor\n"
+            "### Important:\n"
+            "- Prefer splitting work into SubAgents to keep your context clean and improve caching."
+        )
+        
+        # 3. Skills Catalog (Layer 1)
         catalog = self.skill.get_catalog()
         sections.append(
             f"Available Skills:\n{catalog}\n"
             "Use the 'load_skill' tool to fetch the full content of a skill when you need specific formats or rules."
         )
         
-        # 3. Memories
+        # 4. Memories
         index = self.memory.get_index_text()
         if index:
             sections.append(f"Relevant Memories:\n{index}\nRespect user preferences from memory.")
             
-        # 4. Security Rules
+        # 5. Security Rules
         sections.append("Security Rule: Do not attempt to access .env/ or escape the workspace directory.")
         
         return "\n\n".join(sections)

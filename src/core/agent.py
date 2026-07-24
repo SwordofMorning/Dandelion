@@ -1,3 +1,5 @@
+# src/core/agent.py
+
 import os
 import sys
 
@@ -5,11 +7,12 @@ from src.utils.safe_llm import SafeLLMClient
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
+from src.subagent.orchestrator import SubAgentOrchestrator
 
-# Using the simplified imports from __init__.py
 from src.tool import (
     BashTool, ReporterTool, LoadSkillTool, MarkdownTool,
-    GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool
+    GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
+    EditFileTool, DecomposeTaskTool, SpawnSubagentTool
 )
 
 class MyAgent:
@@ -55,11 +58,37 @@ class MyAgent:
         write_tool = WriteFileTool(workspace_dir=self.workspace_dir)
         read_tool = ReadFileTool(workspace_dir=self.workspace_dir)
         list_tool = ListDirectoryTool(workspace_dir=self.workspace_dir)
+        edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
+        
+        # Create full tools mapping for Orchestrator
+        all_tools = {
+            bash.get_name(): bash,
+            reporter.get_name(): reporter,
+            skill_loader.get_name(): skill_loader,
+            md_editor.get_name(): md_editor,
+            grep_tool.get_name(): grep_tool,
+            write_tool.get_name(): write_tool,
+            read_tool.get_name(): read_tool,
+            list_tool.get_name(): list_tool,
+            edit_tool.get_name(): edit_tool
+        }
+        
+        self.orchestrator = SubAgentOrchestrator(
+            safe_client=self.client,
+            logger=self.session,
+            config=self.config,
+            all_tools=all_tools,
+            max_depth=int(self.config.get("MAX_SUBAGENT_DEPTH", 3))
+        )
+        
+        decompose_task = DecomposeTaskTool(self.client, self.config)
+        spawn_subagent = SpawnSubagentTool(self.orchestrator)
         
         # Added all tools to the registration list
         tool_list = [
             bash, reporter, skill_loader, md_editor, 
-            grep_tool, write_tool, read_tool, list_tool
+            grep_tool, write_tool, read_tool, list_tool,
+            edit_tool, decompose_task, spawn_subagent
         ]
         
         for t in tool_list:
@@ -140,7 +169,7 @@ class MyAgent:
         payload = {
             "tools": self.tool_schemas,
             "messages": req_messages,
-            "max_tokens": self.config["MAX_TOKENS"],
+            "max_tokens": int(self.config["MAX_TOKENS"]),
             "system": system_prompt
         }
         
