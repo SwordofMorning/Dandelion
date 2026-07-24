@@ -22,7 +22,7 @@ class SessionManager:
             self.switch_session(sessions[-1]["id"])
 
     def create_session(self, name=None):
-        session_id = "sess_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_id = "sess_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         if not name:
             name = session_id
             
@@ -53,14 +53,22 @@ class SessionManager:
                         meta = json.load(f)
                         sessions.append(meta)
                 except Exception:
-                    pass
+                    print(f"[-] Warning: Failed to parse session meta at {meta_file}: {e}")
         return sessions
 
     def switch_session(self, session_id):
-        target_dir = os.path.join(self.log_dir, session_id)
-        if not os.path.exists(target_dir):
+        safe_session_id = os.path.basename(session_id.strip())
+        if not safe_session_id or safe_session_id != session_id.strip():
+            print(f"[-] Warning: Invalid session_id format: {session_id}")
             return False
-        self.current_session_id = session_id
+
+        target_dir = os.path.join(self.log_dir, safe_session_id)
+        meta_file = os.path.join(target_dir, "meta.log")
+
+        if not os.path.isdir(target_dir) or not os.path.exists(meta_file):
+            return False
+
+        self.current_session_id = safe_session_id
         self.current_session_dir = target_dir
         return True
 
@@ -79,6 +87,7 @@ class SessionManager:
             with open(hist_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
+            print(f"[-] Warning: Failed to load history from {hist_file}: {e}")
             return []
 
     def _default_serializer(self, obj):
