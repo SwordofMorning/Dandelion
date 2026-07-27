@@ -62,9 +62,9 @@ MODEL_LIST = [
     {
         "model_id": "gemini-2.5-flash",
         "conditions": ["simple", "tool_heavy", "default"],
-        "max_token": 8192,
-        "TPM": 0,
-        "RPM": 15,
-        "RPD": 1000
+        "max_token": 819200,
+        "TPM": 250000,
+        "RPM": 5,
+        "RPD": 20
     }
     ]
