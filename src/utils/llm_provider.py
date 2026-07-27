@@ -135,26 +135,22 @@ class GeminiProvider(LLMProvider):
                         if btype == "text":
                             parts.append(self.types.Part.from_text(text=block.get("text", "")))
                         elif btype == "tool_result":
-                            # Gemini requires tool name in the response part
+                            # Convert historical tool results to text to bypass strict Gemini schema validation
                             tool_name = self._find_tool_name_by_id(messages, block.get("tool_use_id"))
                             result_val = block.get("content", "")
-                            # Format strictly as dict for FunctionResponse
-                            resp_dict = {"result": result_val} if isinstance(result_val, str) else result_val
-                            parts.append(self.types.Part.from_function_response(
-                                name=tool_name,
-                                response=resp_dict
-                            ))
-                    # Object blocks (usually from assistant generated SDK objects)
+                            transcript = f"\n[System: Tool '{tool_name}' returned successfully]\nOutput:\n{result_val}\n"
+                            parts.append(self.types.Part.from_text(text=transcript))
                     else:
                         btype = getattr(block, "type", None)
                         if btype == "text":
                             parts.append(self.types.Part.from_text(text=getattr(block, "text", "")))
                         elif btype == "tool_use":
+                            # Convert historical tool uses to text to bypass strict Gemini schema validation
                             args_dict = dict(getattr(block, "input", {}))
-                            parts.append(self.types.Part.from_function_call(
-                                name=getattr(block, "name", ""),
-                                args=args_dict
-                            ))
+                            tool_name = getattr(block, "name", "")
+                            args_str = json.dumps(args_dict, ensure_ascii=False)
+                            transcript = f"\n[System: Assistant requested tool '{tool_name}' with args: {args_str}]\n"
+                            parts.append(self.types.Part.from_text(text=transcript))
                             
             if parts:
                 contents.append(self.types.Content(role=role, parts=parts))

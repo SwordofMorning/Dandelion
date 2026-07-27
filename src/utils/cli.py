@@ -253,8 +253,20 @@ class InteractiveCLI:
                     content = self.agent.history[-1]["content"]
                     if isinstance(content, list) and len(content) > 0 and content[0].get("type") == "tool_result":
                         print("\n[*] Processing pending tool returns in background...")
+                        
+                        initial_history_len = len(self.agent.history)
+                        
                         while self.agent.step():
                             pass
+                            
+                        # Safeguard: If step() failed due to an API Error, the history size remains unchanged.
+                        # We must pop the stuck tool_result to break the infinite 429 retry loop.
+                        if len(self.agent.history) == initial_history_len:
+                            print("\n[-] FATAL: Background execution blocked by an API Error.")
+                            print("[-] Dropping the pending tool result to prevent infinite API retry loop.")
+                            self.agent.history.pop() 
+                            self.session.save_history(self.agent.history)
+                            
                         continue
 
                 # 2. UI Prompt Render
