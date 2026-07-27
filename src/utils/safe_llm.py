@@ -1,5 +1,5 @@
 # src/utils/safe_llm.py
-from .llm_provider import AnthropicProvider, GeminiProvider
+from .llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
 
 class SafeLLMClient:
     """Facade for LLM calls, delegates to specific providers based on SDK_TYPE."""
@@ -10,6 +10,8 @@ class SafeLLMClient:
         
         if self.sdk_type in ["ai studio", "gemini"]:
             self.provider = GeminiProvider(api_key, base_url, model_id)
+        elif self.sdk_type in ["openai", "nvidia"]:
+            self.provider = OpenAIProvider(api_key, base_url, model_id)
         else:
             # Default fallback to Anthropic (Supports Anthropic, OpenRouter, DeepSeek, etc.)
             self.provider = AnthropicProvider(api_key, base_url, model_id)

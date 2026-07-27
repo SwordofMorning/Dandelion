@@ -68,3 +68,29 @@ MODEL_LIST = [
         "RPD": 500
     }
     ]
+
+[Main]
+MAIN_AGENT=meta/llama-3.1-70b-instruct
+
+[Nvidia]
+SDK_TYPE="OpenAI"
+BASE_URL=https://integrate.api.nvidia.com/v1
+API_KEY=nvapi-api-key
+MODEL_LIST = [
+    {
+        "model_id": "nvidia/nemotron-3-ultra-550b-a55b",
+        "conditions": ["complex"],
+        "max_token": 819200,
+        "TPM": 1000000,
+        "RPM": 40,
+        "RPD": 0
+    },
+        {
+        "model_id": "z-ai/glm-5.2",
+        "conditions": ["complex"],
+        "max_token": 819200,
+        "TPM": 1000000,
+        "RPM": 40,
+        "RPD": 0
+    }
+    ]
