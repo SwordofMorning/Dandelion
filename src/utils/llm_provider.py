@@ -160,27 +160,37 @@ class GeminiProvider(LLMProvider):
                 contents.append(self.types.Content(role=role, parts=parts))
         return contents
 
-    def _build_unified_response(self, text, raw_resp):
-        """Construct a mock object that acts exactly like an Anthropic response object."""
+    def _build_unified_response(self, raw_resp):
+        """Parse the full non-stream response object safely without touching .text shortcut."""
         from types import SimpleNamespace
         import uuid
         
+        full_text = ""
         tool_calls = []
-        if raw_resp.candidates and raw_resp.candidates[0].content.parts:
+        
+        if raw_resp and raw_resp.candidates and raw_resp.candidates[0].content.parts:
             for part in raw_resp.candidates[0].content.parts:
-                if part.function_call:
-                    # Gemini might not provide a unique ID, we generate one to satisfy Anthropic logic
+                if getattr(part, "text", None):
+                    full_text += part.text
+                elif getattr(part, "function_call", None):
                     call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    args_dict = part.function_call.args if part.function_call.args else {}
+                    if not isinstance(args_dict, dict):
+                        try:
+                            args_dict = dict(args_dict)
+                        except:
+                            args_dict = {}
+                            
                     tool_calls.append(SimpleNamespace(
                         type="tool_use",
                         id=call_id,
                         name=part.function_call.name,
-                        input=dict(part.function_call.args)
+                        input=args_dict
                     ))
                     
         content = []
-        if text:
-            content.append(SimpleNamespace(type="text", text=text))
+        if full_text:
+            content.append(SimpleNamespace(type="text", text=full_text))
         content.extend(tool_calls)
         
         stop_reason = "tool_use" if tool_calls else "end_turn"
@@ -208,7 +218,8 @@ class GeminiProvider(LLMProvider):
                 contents=gemini_msgs,
                 config=config
             )
-            return self._build_unified_response(resp.text, resp), None
+            # Directly parse the full response safely
+            return self._build_unified_response(resp), None
         except Exception as e:
             return None, str(e)
 
@@ -227,21 +238,53 @@ class GeminiProvider(LLMProvider):
         try:
             print("\n[Agent] ", end="", flush=True)
             full_text = ""
-            resp_obj = None
+            tool_calls = []
+            
+            import uuid
+            from types import SimpleNamespace
             
             for chunk in self.client.models.generate_content_stream(
                 model=self.model_id,
                 contents=gemini_msgs,
                 config=config
             ):
-                # Keep reference to the last chunk for function call parsing
-                resp_obj = chunk 
-                if chunk.text:
-                    print(chunk.text, end="", flush=True)
-                    full_text += chunk.text
-                    
+                # Safely iterate through parts in every chunk to catch both text and tools
+                if chunk.candidates and chunk.candidates[0].content.parts:
+                    for part in chunk.candidates[0].content.parts:
+                        if getattr(part, "text", None):
+                            print(part.text, end="", flush=True)
+                            full_text += part.text
+                        elif getattr(part, "function_call", None):
+                            call_id = f"call_{uuid.uuid4().hex[:8]}"
+                            args_dict = part.function_call.args if part.function_call.args else {}
+                            if not isinstance(args_dict, dict):
+                                try:
+                                    args_dict = dict(args_dict)
+                                except:
+                                    args_dict = {}
+                                    
+                            tool_calls.append(SimpleNamespace(
+                                type="tool_use",
+                                id=call_id,
+                                name=part.function_call.name,
+                                input=args_dict
+                            ))
+                            
             print()
-            return self._build_unified_response(full_text, resp_obj), None
+            
+            content = []
+            if full_text:
+                content.append(SimpleNamespace(type="text", text=full_text))
+            content.extend(tool_calls)
+            
+            stop_reason = "tool_use" if tool_calls else "end_turn"
+            
+            final_message = SimpleNamespace(
+                content=content,
+                stop_reason=stop_reason
+            )
+            return final_message, None
+            
         except Exception as e:
             print()
             return None, str(e)
