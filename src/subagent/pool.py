@@ -27,8 +27,24 @@ class SubAgentPool:
         depth: int = 0,
         parent_tools: set = None
     ) -> SubAgentResult:
-        tools = resolve_toolset(toolset_name, self.all_tools, parent_tools)
         subagent_id = f"sa-{uuid.uuid4().hex[:8]}"
+        
+        # Tool Error
+        try:
+            tools = resolve_toolset(toolset_name, self.all_tools, parent_tools)
+        except ValueError as e:
+            err_msg = str(e)
+            self.logger.log_api_call(f"SUBAGENT:{subagent_id} INIT ERROR", {"error": err_msg})
+            result = SubAgentResult(
+                subagent_id=subagent_id,
+                task_description=task_description,
+                status="failed",
+                summary="Failed to initialize SubAgent. Invalid toolset.",
+                depth_reached=depth,
+                error_message=err_msg
+            )
+            self.completed_results.append(result)
+            return result
         
         subagent = SubAgent(
             safe_client=self.safe_client,
@@ -42,9 +58,22 @@ class SubAgentPool:
             subagent_id=subagent_id
         )
         
-        result = subagent.run(task_description)
+        # Runtime Error (like HTTP)
+        try:
+            result = subagent.run(task_description)
+        except Exception as e:
+            err_msg = f"Unexpected error during execution: {str(e)}"
+            self.logger.log_api_call(f"SUBAGENT:{subagent_id} EXEC ERROR", {"error": err_msg})
+            result = SubAgentResult(
+                subagent_id=subagent_id,
+                task_description=task_description,
+                status="failed",
+                summary="SubAgent execution crashed.",
+                depth_reached=depth,
+                error_message=err_msg
+            )
+            
         self.completed_results.append(result)
-        
         return result
         
     def get_summary(self) -> str:
