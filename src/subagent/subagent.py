@@ -76,76 +76,96 @@ class SubAgent(ISubAgent):
     def run(self, task_description) -> SubAgentResult:
         start_time = time.time()
         tool_calls_made = 0
+        max_depth_reached = self.depth
         
         print(f"\n[*] [SubAgent:{self.subagent_id}] Spawned (depth={self.depth})")
         print(f"    Task: {task_description[:80]}...")
         
         messages = [{"role": "user", "content": task_description}]
         
-        for turn in range(30):
-            payload = {
-                "tools": self.tool_schemas,
-                "messages": messages,
-                "max_tokens": int(self.config.get("MAX_TOKENS", 8000)),
-                "system": self.system_prompt
-            }
-            
-            self.logger.log_api_call(
-                f"SUBAGENT:{self.subagent_id} PRE-CALL (Turn {turn+1}, depth={self.depth})",
-                payload
-            )
-            
-            resp, err = self.client.safe_stream_request(payload)
-            
-            if err:
-                max_depth = max([self.depth] + [r.depth_reached for r in self.sub_results]) if self.sub_results else self.depth
-                return SubAgentResult(
-                    subagent_id=self.subagent_id,
-                    task_description=task_description,
-                    status="failed",
-                    summary="",
-                    tool_calls_made=tool_calls_made,
-                    depth_reached=max_depth,
-                    error_message=str(err),
-                    sub_results=self.sub_results
+        try:
+            for turn in range(30):
+                payload = {
+                    "tools": self.tool_schemas,
+                    "messages": messages,
+                    "max_tokens": int(self.config.get("MAX_TOKENS", 8000)),
+                    "system": self.system_prompt
+                }
+                
+                self.logger.log_api_call(
+                    f"SUBAGENT:{self.subagent_id} PRE-CALL (Turn {turn+1}, depth={self.depth})",
+                    payload
                 )
                 
-            self.logger.log_api_call(
-                f"SUBAGENT:{self.subagent_id} POST-CALL (Turn {turn+1}, depth={self.depth})",
-                resp if resp else {"error": err}
-            )
-   
-            messages.append({"role": "assistant", "content": resp.content})
-            
-            if resp.stop_reason != "tool_use":
-                break
+                resp, err = self.client.safe_stream_request(payload)
                 
-            results = []
-            for block in resp.content:
-                if block.type == "tool_use":
-                    tool_calls_made += 1
-                    handler = self.tools.get(block.name)
-                    if handler:
-                        success, output = handler.execute(**block.input)
-                    else:
-                        success, output = False, f"Unknown tool: {block.name}"
-                        
-                    print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
-                    results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": output
-                    })
+                if err:
+                    if self.sub_results:
+                        max_depth_reached = max([self.depth] + [r.depth_reached for r in self.sub_results])
+                    return SubAgentResult(
+                        subagent_id=self.subagent_id,
+                        task_description=task_description,
+                        status="failed",
+                        summary="",
+                        tool_calls_made=tool_calls_made,
+                        depth_reached=max_depth_reached,
+                        error_message=f"{err!s}",
+                        sub_results=self.sub_results
+                    )
                     
-            messages.append({"role": "user", "content": results})
+                self.logger.log_api_call(
+                    f"SUBAGENT:{self.subagent_id} POST-CALL (Turn {turn+1}, depth={self.depth})",
+                    resp if resp else {"error": err}
+                )
+       
+                messages.append({"role": "assistant", "content": resp.content})
+                
+                if resp.stop_reason != "tool_use":
+                    break
+                    
+                results = []
+                for block in resp.content:
+                    if block.type == "tool_use":
+                        tool_calls_made += 1
+                        handler = self.tools.get(block.name)
+                        if handler:
+                            success, output = handler.execute(**block.input)
+                            if block.name == "spawn_subagent" and success:
+                                max_depth_reached = max(max_depth_reached, self.depth + 1)
+                        else:
+                            success, output = False, f"Unknown tool: {block.name}"
+                            
+                        print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
+                        results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": output
+                        })
+                        
+                messages.append({"role": "user", "content": results})
+                
+        except Exception as e:
+            err_msg = f"Crash during internal loop: {e!s}"
+            print(f"[-] [SubAgent:{self.subagent_id}] {err_msg}")
+            if self.sub_results:
+                max_depth_reached = max([self.depth] + [r.depth_reached for r in self.sub_results])
+            return SubAgentResult(
+                subagent_id=self.subagent_id,
+                task_description=task_description,
+                status="failed",
+                summary="Execution crashed before completion.",
+                tool_calls_made=tool_calls_made,
+                depth_reached=max_depth_reached,
+                error_message=err_msg,
+                sub_results=self.sub_results
+            )
             
         final_text = self._extract_final_summary(messages)
         elapsed = time.time() - start_time
-        
+
         # Calculation of the true maximum depth of sub-agents
-        max_depth_reached = self.depth
         if self.sub_results:
-            max_depth_reached = max([self.depth] + [r.depth_reached for r in self.sub_results])
+            max_depth_reached = max([max_depth_reached] + [r.depth_reached for r in self.sub_results])
             
         print(f"[*] [SubAgent:{self.subagent_id}] Completed in {elapsed:.1f}s "
               f"({tool_calls_made} tool calls, depth={max_depth_reached})")

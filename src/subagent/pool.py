@@ -33,7 +33,7 @@ class SubAgentPool:
         try:
             tools = resolve_toolset(toolset_name, self.all_tools, parent_tools)
         except ValueError as e:
-            err_msg = str(e)
+            err_msg = f"{e!s}"
             self.logger.log_api_call(f"SUBAGENT:{subagent_id} INIT ERROR", {"error": err_msg})
             result = SubAgentResult(
                 subagent_id=subagent_id,
@@ -58,19 +58,27 @@ class SubAgentPool:
             subagent_id=subagent_id
         )
         
-        # Runtime Error (like HTTP)
+        # Runtime Error (Fallback)
         try:
             result = subagent.run(task_description)
         except Exception as e:
-            err_msg = f"Unexpected error during execution: {str(e)}"
+            err_msg = f"Unexpected error during execution: {e!s}"
             self.logger.log_api_call(f"SUBAGENT:{subagent_id} EXEC ERROR", {"error": err_msg})
+            
+            # Extract state from crashed subagent if available
+            sub_res = getattr(subagent, 'sub_results', [])
+            max_depth_reached = depth
+            if sub_res:
+                max_depth_reached = max([depth] + [r.depth_reached for r in sub_res])
+                
             result = SubAgentResult(
                 subagent_id=subagent_id,
                 task_description=task_description,
                 status="failed",
-                summary="SubAgent execution crashed.",
-                depth_reached=depth,
-                error_message=err_msg
+                summary="SubAgent execution crashed heavily.",
+                depth_reached=max_depth_reached,
+                error_message=err_msg,
+                sub_results=sub_res
             )
             
         self.completed_results.append(result)

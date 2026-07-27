@@ -18,7 +18,7 @@ Rules:
 4. Identify which subtasks can run in parallel.
 5. Output a valid JSON TaskPlan and NOTHING ELSE.
 
-Available toolsets and their tools:
+Available toolsets:
 - minimal: read_file, write_file, list_directory
 - filesystem: read_file, write_file, list_directory, grep_search, markdown_editor, edit_file
 - code_analysis: read_file, grep_search, list_directory, bash
@@ -32,8 +32,8 @@ Output strictly the following JSON structure:
       "id": "task-1",
       "description": "...",
       "depends_on": [],
-      "required_tools": ["tool_a", "tool_b"],
-      "role_hint": "code_reviewer",
+      "toolset": "minimal|filesystem|code_analysis|data_processing|full",
+      "role_prompt": "You are a specialized agent... (write a complete and detailed system prompt defining the subagent's role here)",
       "expected_output": "...",
       "priority": 5
     }
