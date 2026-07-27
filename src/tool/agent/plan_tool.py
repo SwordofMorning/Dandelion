@@ -8,7 +8,7 @@
 import json
 from ..base_tool import BaseTool
 
-DECOMPOSE_SYSTEM_PROMPT = """\
+PLAN_SYSTEM_PROMPT = """\
 You are a Task Decomposition Expert. Your job is to analyze a complex task and break it into subtasks.
 
 Rules:
@@ -43,14 +43,14 @@ Output strictly the following JSON structure:
 }
 """
 
-class DecomposeTaskTool(BaseTool):
+class PlanTool(BaseTool):
     def __init__(self, safe_client, config):
         super().__init__()
         self.safe_client = safe_client
         self.config = config
     
     def get_name(self):
-        return "decompose_task"
+        return "plan_tool"
     
     def get_description(self):
         return (
@@ -96,10 +96,10 @@ class DecomposeTaskTool(BaseTool):
         payload = {
             "messages": messages,
             "max_tokens": int(self.config.get("MAX_TOKENS", 4000)),
-            "system": DECOMPOSE_SYSTEM_PROMPT
+            "system": PLAN_SYSTEM_PROMPT
         }
         
-        print("\n[+] [DecomposeTaskTool] Generating TaskPlan...")
+        print("\n[+] [PlanTool] Generating TaskPlan...")
 
         resp, err = self.safe_client.safe_stream_request(payload)
 

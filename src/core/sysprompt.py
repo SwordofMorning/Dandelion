@@ -37,7 +37,7 @@ class PromptBuilder:
             "- Tasks that require different expertise (e.g., code analysis + data processing)\n"
             "- Tasks that would generate excessive tool output (file contents, search results)\n"
             "### How to Use SubAgents:\n"
-            "1. Call 'decompose_task' to break the complex task into a TaskPlan.\n"
+            "1. Call 'plan_tool' to break the complex task into a TaskPlan.\n"
             "2. For each SubTask, call 'spawn_subagent' with task_description, toolset, and role_prompt.\n"
             "3. Wait for each SubAgentResult before proceeding to dependent subtasks.\n"
             "4. Synthesize the final answer from all SubAgentResults.\n"

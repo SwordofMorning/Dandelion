@@ -12,7 +12,7 @@ from src.subagent import SubAgentPool
 from src.tool import (
     BashTool, ReporterTool, LoadSkillTool, MarkdownTool,
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
-    EditFileTool, DecomposeTaskTool, SpawnSubagentTool
+    EditFileTool, PlanTool, SpawnSubagentTool
 )
 
 class MyAgent:
@@ -81,14 +81,14 @@ class MyAgent:
             max_depth=int(self.config.get("MAX_SUBAGENT_DEPTH", 3))
         )
         
-        decompose_task = DecomposeTaskTool(self.client, self.config)
+        plan_tool = PlanTool(self.client, self.config)
         spawn_subagent = SpawnSubagentTool(self.pool)
         
         # Added all tools to the registration list
         tool_list = [
             bash, reporter, skill_loader, md_editor, 
             grep_tool, write_tool, read_tool, list_tool,
-            edit_tool, decompose_task, spawn_subagent
+            edit_tool, plan_tool, spawn_subagent
         ]
         
         for t in tool_list:
