@@ -128,10 +128,15 @@ class SubAgent(ISubAgent):
                     if block.type == "tool_use":
                         tool_calls_made += 1
                         handler = self.tools.get(block.name)
+                # Error Handle 1 : Tools Internal Error
                         if handler:
-                            success, output = handler.execute(**block.input)
-                            if block.name == "spawn_subagent" and success:
-                                max_depth_reached = max(max_depth_reached, self.depth + 1)
+                            try:
+                                success, output = handler.execute(**block.input)
+                                if block.name == "spawn_subagent" and success:
+                                    max_depth_reached = max(max_depth_reached, self.depth + 1)
+                            except Exception as e:
+                                success = False
+                                output = f"Tool execution crashed internally: {e!s}"
                         else:
                             success, output = False, f"Unknown tool: {block.name}"
                             
@@ -142,7 +147,14 @@ class SubAgent(ISubAgent):
                             "content": output
                         })
                         
-                messages.append({"role": "user", "content": results})
+                # Error Handle 2 : Block Empty User Message
+                if results:
+                    messages.append({"role": "user", "content": results})
+                else:
+                    messages.append({
+                        "role": "user", 
+                        "content": "You indicated a tool use but provided no valid tool calls. Please continue or provide final answer."
+                    })
                 
         except Exception as e:
             err_msg = f"Crash during internal loop: {e!s}"
