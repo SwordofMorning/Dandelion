@@ -11,9 +11,14 @@ TOOLSET_REGISTRY = {
 }
 
 def resolve_toolset(toolset_name: str, all_tools: dict, parent_tools: set = None) -> dict:
-    tool_names = TOOLSET_REGISTRY.get(toolset_name)
-    if tool_names is None:
-        tool_names = TOOLSET_REGISTRY.get("minimal", [])
+    # Let' LLM know which tool are really exited.
+    if toolset_name not in TOOLSET_REGISTRY:
+        raise ValueError(
+            f"Unknown toolset: '{toolset_name}'. "
+            f"Available toolsets are: {list(TOOLSET_REGISTRY.keys())}"
+        )
+        
+    tool_names = TOOLSET_REGISTRY[toolset_name]
     
     if parent_tools is not None:
         tool_names = [n for n in tool_names if n in parent_tools]
