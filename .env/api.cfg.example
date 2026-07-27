@@ -1,16 +1,70 @@
-[API]
-# Change this to DeepSeek or OpenRouter to switch providers globally
-API_ENABLE=OpenRouter
+; ============================================================
+; Part 1: Main Agent Configuration
+; ============================================================
+[Main]
+; Specify the actual model_id to be used by the main agent
+MAIN_AGENT=deepseek-v4-pro
 
+; ============================================================
+; Part 2: Provider Profiles & Model Registries
+; ============================================================
 [DeepSeek]
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_API_KEY=sk-your-deepseek-key
-MODEL_ID=deepseek-v4-pro
-MAX_TOKENS=81920
+SDK_TYPE="Anthropic"
+BASE_URL=https://api.deepseek.com/anthropic
+API_KEY=sk-your-deepseek-key
+MODEL_LIST = [
+    {
+        "model_id": "deepseek-v4-pro",
+        "conditions": ["reasoning", "tool_heavy", "long_context"],
+        "max_token": 819200,
+        "TPM": 0,
+        "RPM": 10,
+        "RPD": 500
+    },
+    {
+        "model_id": "deepseek-v4-flash",
+        "conditions": ["tool_heavy", "simple"],
+        "max_token": 8192,
+        "TPM": 1000000,
+        "RPM": 10,
+        "RPD": 500
+    }
+    ]
 
 [OpenRouter]
-# Standard OpenRouter endpoint for Anthropic/OpenAI SDK
-ANTHROPIC_BASE_URL=https://openrouter.ai/api
-ANTHROPIC_API_KEY=sk-or-v1-your-openrouter-key
-MODEL_ID=nvidia/nemotron-3-ultra-550b-a55b:free
-MAX_TOKENS=81920
+SDK_TYPE="Anthropic"
+BASE_URL=https://openrouter.ai/api
+API_KEY=sk-or-v1-your-openrouter-key
+MODEL_LIST = [
+    {
+        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free", 
+        "conditions": ["long_context", "tool_heavy", "complex"],
+        "max_token": 8192,
+        "TPM": 1000000,
+        "RPM": 10,
+        "RPD": 500
+    }
+    ]
+
+[AIStudio]
+SDK_TYPE="AI Studio"
+BASE_URL=https://generativelanguage.googleapis.com
+API_KEY=AIzaSy-your-gemini-key
+MODEL_LIST = [
+    {
+        "model_id": "gemini-2.5-pro",
+        "conditions": ["reasoning", "tool_heavy", "long_context", "complex"],
+        "max_token": 8192,
+        "TPM": 0,
+        "RPM": 15,
+        "RPD": 1000
+    },
+    {
+        "model_id": "gemini-2.5-flash",
+        "conditions": ["simple", "tool_heavy", "default"],
+        "max_token": 8192,
+        "TPM": 0,
+        "RPM": 15,
+        "RPD": 1000
+    }
+    ]
