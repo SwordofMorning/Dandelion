@@ -49,9 +49,13 @@ class SpawnSubagentTool(BaseTool):
         task_desc = kwargs.get("task_description", "")
         toolset = kwargs.get("toolset", "minimal")
         role_prompt = kwargs.get("role_prompt", "")
+        expected_format = kwargs.get("expected_output_format", "")
         
         if not task_desc or not role_prompt:
             return False, "Error: task_description and role_prompt are required."
+            
+        if expected_format:
+            task_desc += f"\n\nExpected Output Format:\n{expected_format}"
             
         print(f"\n[+] [SpawnSubagentTool] Spawning SubAgent for: {task_desc[:60]}...")
         
@@ -98,6 +102,10 @@ class RestrictedSpawnTool(BaseTool):
                 "role_prompt": {
                     "type": "string",
                     "description": "Custom system prompt defining the subagent's role and behavior."
+                },
+                "expected_output_format": {
+                    "type": "string",
+                    "description": "Optional hint about the expected output format."
                 }
             },
             "required": ["task_description", "toolset", "role_prompt"]
@@ -113,9 +121,13 @@ class RestrictedSpawnTool(BaseTool):
         task_desc = kwargs.get("task_description", "")
         toolset = kwargs.get("toolset", "minimal")
         role_prompt = kwargs.get("role_prompt", "")
+        expected_format = kwargs.get("expected_output_format", "")
         
         if not task_desc or not role_prompt:
             return False, "Error: task_description and role_prompt are required."
+            
+        if expected_format:
+            task_desc += f"\n\nExpected Output Format:\n{expected_format}"
             
         parent_tools = set(self.parent.tools.keys())
         
