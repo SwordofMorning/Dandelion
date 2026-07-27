@@ -1,6 +1,6 @@
-# src/subagent/base_subagent.py
+# src/subagent/i_subagent.py
 
-class BaseSubAgent:
+class ISubAgent:
     def __init__(self, safe_client, logger, tools, config):
         self.client = safe_client
         self.logger = logger
