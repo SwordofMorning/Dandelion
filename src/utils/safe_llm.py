@@ -3,7 +3,14 @@ from anthropic import Anthropic
 
 class SafeLLMClient:
     def __init__(self, api_key, base_url, model_id):
-        self.client = Anthropic(api_key=api_key, base_url=base_url)
+        self.client = Anthropic(
+            api_key=api_key, 
+            base_url=base_url,
+            default_headers={
+                "HTTP-Referer": "https://github.com/SwordofMorning/Regent",
+                "X-Title": "Regent"
+            }
+        )
         self.model_id = model_id
 
     def safe_request(self, payload):

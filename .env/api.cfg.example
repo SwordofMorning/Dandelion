@@ -1,5 +1,16 @@
 [API]
+# Change this to DeepSeek or OpenRouter to switch providers globally
+API_ENABLE=OpenRouter
+
+[DeepSeek]
 ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_API_KEY=sk-input-your-API-Key-here
+ANTHROPIC_API_KEY=sk-your-deepseek-key
 MODEL_ID=deepseek-v4-pro
+MAX_TOKENS=81920
+
+[OpenRouter]
+# Standard OpenRouter endpoint for Anthropic/OpenAI SDK
+ANTHROPIC_BASE_URL=https://openrouter.ai/api
+ANTHROPIC_API_KEY=sk-or-v1-your-openrouter-key
+MODEL_ID=nvidia/nemotron-3-ultra-550b-a55b:free
 MAX_TOKENS=81920

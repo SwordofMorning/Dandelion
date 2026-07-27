@@ -261,7 +261,12 @@ class InteractiveCLI:
                 meta = self.session.get_current_meta()
                 branch_name = meta.get("name", "unknown")
                 dirty_flag = "*" if self.staged_message.strip() else ""
-                prompt_str = f"regent({branch_name}{dirty_flag})> "
+                
+                # Fetch model name and format it to be clean (e.g. "nvidia/nemotron" -> "nemotron")
+                full_model_name = self.agent.config.get("MODEL_ID", "regent")
+                short_model_name = full_model_name.split("/")[-1] if "/" in full_model_name else full_model_name
+                
+                prompt_str = f"{short_model_name}({branch_name}{dirty_flag})> "
                 
                 # 3. Read user input with prompt_toolkit
                 if HAS_PTK:
