@@ -1,4 +1,5 @@
 # src/utils/config.py
+
 import os
 import configparser
 import json
@@ -21,6 +22,9 @@ def load_api_config(file_path):
     raw_sub_list = config.get("Main", "SUB_LIST", fallback="[]")
     try:
         sub_list = json.loads(raw_sub_list)
+        # Verify it is a list and all elements are strings
+        if not isinstance(sub_list, list) or not all(isinstance(item, str) for item in sub_list):
+            sub_list = []
     except json.JSONDecodeError:
         sub_list = []
 

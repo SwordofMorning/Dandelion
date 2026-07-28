@@ -1,4 +1,6 @@
 # src/utils/safe_llm.py
+
+import threading
 from .llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
 
 class SafeLLMClient:
@@ -11,6 +13,7 @@ class SafeLLMClient:
         
         # Setup Router Components for SubAgents
         self._provider_cache = {}
+        self._cache_lock = threading.Lock()
         self._registry = None
         self._policy = None
         self._rate_limiter = None
@@ -53,19 +56,24 @@ class SafeLLMClient:
         return self.provider.extract_text(content)
 
     def _get_cached_provider(self, alias):
-        if alias not in self._provider_cache:
-            spec = self._registry.get_spec(alias)
-            self._provider_cache[alias] = self._create_provider(
-                spec.provider, spec.api_key, spec.base_url, spec.model_id
-            )
-        return self._provider_cache[alias]
+        with self._cache_lock:
+            if alias not in self._provider_cache:
+                spec = self._registry.get_spec(alias)
+                self._provider_cache[alias] = self._create_provider(
+                    spec.provider, spec.api_key, spec.base_url, spec.model_id
+                )
+            return self._provider_cache[alias]
 
     def route_request(self, payload, task_description="", toolset_name="minimal", depth=0, stream=True, estimated_tokens=2000):
         if not self._policy or not self._policy.specs:
             # Fallback to main agent model if SUB_LIST is empty
             return self.safe_stream_request(payload) if stream else self.safe_request(payload)
 
-        alias = self._policy.select_model(task_description, toolset_name, depth, estimated_tokens)
+        try:
+            alias = self._policy.select_model(task_description, toolset_name, depth, estimated_tokens)
+        except RuntimeError as e:
+            return None, str(e)
+
         spec = self._registry.get_spec(alias)
         inferred = self._policy.infer_conditions(task_description, toolset_name, depth)
         
@@ -103,6 +111,6 @@ class SafeLLMClient:
                         
                     print(f"[Router] Fallback '{fallback_alias}' also failed: {err}")
                     
-                return None, f"All models exhausted. Last error: {err}"
+                return None, f"All SubAgent models exhausted. Last error: {err}"
 
         return None, "Unexpected fallback exit"

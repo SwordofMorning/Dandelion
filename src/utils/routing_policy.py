@@ -98,10 +98,7 @@ class RoutingPolicy:
 
     def get_fallback_chain(self, exclude_alias: str) -> list:
         chain = []
-        found = False
         for spec in self.specs:
-            if found and spec.alias != exclude_alias:
+            if spec.alias != exclude_alias:
                 chain.append(spec.alias)
-            if spec.alias == exclude_alias:
-                found = True
         return chain
