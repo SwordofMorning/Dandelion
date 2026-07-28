@@ -4,20 +4,28 @@ import os
 import shlex
 import tempfile
 import subprocess
+import builtins
 
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import NestedCompleter, PathCompleter
     from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.formatted_text import ANSI
     HAS_PTK = True
 except ImportError:
     HAS_PTK = False
 
+from src.utils.cli_printer import CLIPrinter
+
+
 class InteractiveCLI:
+    """Interactive CLI for Regent workspace management."""
+    
     def __init__(self, agent_instance, session_manager):
         self.agent = agent_instance
         self.session = session_manager
         self.staged_message = ""
+        self.cli = CLIPrinter()
         
         # Initialize prompt_toolkit session with in-memory history
         if HAS_PTK:
@@ -58,21 +66,24 @@ class InteractiveCLI:
         return NestedCompleter.from_nested_dict(comp_dict)
 
     def _print_help(self):
-        print("\n================= REGENT WORKSPACE =================")
-        print(" Git-Style Session Management:")
-        print("   branch -a             : List all available sessions.")
-        print("   branch -d <name/id>   : Delete one session.")
-        print("   checkout <name/id>    : Switch to an existing session.")
-        print("   checkout -b <name>    : Create and switch to a new session.")
-        print("\n Vim-Style Editing:")
-        print("   vim                   : Open system editor (Vim/Notepad) to draft prompt.")
-        print("   load <filepath>       : Load a local file into the prompt buffer.")
-        print("\n Core Operations:")
-        print("   status                : View current session and staged buffer.")
-        print("   commit                : Send the staged buffer to LLM.")
-        print("   clear                 : Clear the staged buffer.")
-        print("   help / quit / exit    : System commands.")
-        print("====================================================\n")
+        help_text = (
+            f"{self.cli.C_CYAN}\n================= REGENT WORKSPACE ================={self.cli.C_RESET}\n"
+            " Git-Style Session Management:\n"
+            "   branch -a             : List all available sessions.\n"
+            "   branch -d <name/id>   : Delete one session.\n"
+            "   checkout <name/id>    : Switch to an existing session.\n"
+            "   checkout -b <name>    : Create and switch to a new session.\n\n"
+            " Vim-Style Editing:\n"
+            "   vim                   : Open system editor (Vim/Notepad) to draft prompt.\n"
+            "   load <filepath>       : Load a local file into the prompt buffer.\n\n"
+            " Core Operations:\n"
+            "   status                : View current session and staged buffer.\n"
+            "   commit                : Send the staged buffer to LLM.\n"
+            "   clear                 : Clear the staged buffer.\n"
+            "   help / quit / exit    : System commands.\n"
+            f"{self.cli.C_CYAN}===================================================={self.cli.C_RESET}\n"
+        )
+        self.cli.raw(help_text)
 
     def _resolve_session_id(self, target):
         """Map user-friendly session names to exact session IDs"""
@@ -85,62 +96,62 @@ class InteractiveCLI:
     def _cmd_branch(self, args):
         if not args or args[0] == '-a':
             sessions = self.session.list_sessions()
-            print("\n[+] Available Sessions (Branches):")
+            self.cli.success("\nAvailable Sessions (Branches):")
             for s in sessions:
                 mark = "*" if s["id"] == self.session.current_session_id else " "
-                print(f" {mark} {s['name']:<20} | {s['id']}")
-            print()
+                self.cli.raw(f" {mark} {s['name']:<20} | {s['id']}")
+            self.cli.raw("")
             
         elif args[0] == '-d':
             if len(args) < 2:
-                print("[-] Usage: branch -d <name/id>")
+                self.cli.error("Usage: branch -d <name/id>")
                 return
             target = args[1]
             session_id = self._resolve_session_id(target)
             
             if not session_id:
-                print(f"[-] Error: Session '{target}' not found.")
+                self.cli.error(f"Error: Session '{target}' not found.")
                 return
                 
-            ans = input(f"[!] Are you sure you want to delete branch '{target}'? [y/N]: ").strip().lower()
+            ans = input(f"{self.cli.C_YELLOW}[!]{self.cli.C_RESET} Are you sure you want to delete branch '{target}'? [y/N]: ").strip().lower()
             if ans in ['y', 'yes']:
                 success, msg = self.session.delete_session(session_id)
                 if success:
-                    print(f"[+] {msg}")
+                    self.cli.success(msg)
                 else:
-                    print(f"[-] {msg}")
+                    self.cli.error(msg)
             else:
-                print("[-] Deletion aborted.")
+                self.cli.error("Deletion aborted.")
         else:
-            print(f"[-] Unknown branch argument: {args[0]}. Try 'branch -a' or 'branch -d'.")
+            self.cli.error(f"Unknown branch argument: {args[0]}. Try 'branch -a' or 'branch -d'.")
 
     def _cmd_checkout(self, args):
         if not args:
-            print("[-] Usage: checkout <name> OR checkout -b <new_name>")
+            self.cli.error("Usage: checkout <name> OR checkout -b <new_name>")
             return
 
         if args[0] == '-b':
             if len(args) < 2:
-                print("[-] Error: Please provide a name for the new session.")
+                self.cli.error("Error: Please provide a name for the new session.")
                 return
             new_name = args[1]
             new_id = self.session.create_session(new_name)
             self.agent.reload_history()
-            print(f"[+] Switched to a new session branch: '{new_name}'")
+            self.cli.success(f"Switched to a new session branch: '{new_name}'")
             return
 
         target = args[0]
         session_id = self._resolve_session_id(target)
         
         if not session_id:
-            print(f"[-] Error: Session '{target}' not found.")
+            self.cli.error(f"Error: Session '{target}' not found.")
             return
             
         if self.session.switch_session(session_id):
             self.agent.reload_history()
-            print(f"[+] Switched to session branch: '{target}'")
+            self.cli.success(f"Switched to session branch: '{target}'")
         else:
-            print(f"[-] Error: Failed to switch to '{target}'. Directory might be corrupted.")
+            self.cli.error(f"Error: Failed to switch to '{target}'. Directory might be corrupted.")
 
     def _cmd_vim(self):
         editor = os.environ.get('EDITOR')
@@ -168,79 +179,79 @@ class InteractiveCLI:
                 
             if new_content != self.staged_message:
                 self.staged_message = new_content
-                print("[+] Buffer successfully updated via editor.")
+                self.cli.success("Buffer successfully updated via editor.")
             else:
-                print("[*] Buffer unchanged.")
+                self.cli.info("Buffer unchanged.")
         finally:
             os.remove(tmp_path)
 
     def _cmd_load(self, args):
         if not args:
-            print("[-] Usage: load <filepath>")
+            self.cli.error("Usage: load <filepath>")
             return
             
         filepath = args[0]
         if not os.path.exists(filepath):
-            print(f"[-] Error: File not found -> {filepath}")
+            self.cli.error(f"Error: File not found -> {filepath}")
             return
             
         if self.staged_message.strip():
-            ans = input("[!] Warning: The buffer is not empty. Overwrite? [y/N]: ").strip().lower()
+            ans = input(f"{self.cli.C_YELLOW}[!]{self.cli.C_RESET} Warning: The buffer is not empty. Overwrite? [y/N]: ").strip().lower()
             if ans not in ['y', 'yes']:
-                print("[-] Load aborted.")
+                self.cli.error("Load aborted.")
                 return
                 
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.staged_message = f.read().strip()
-            print(f"[+] Successfully loaded {os.path.getsize(filepath)} bytes into buffer.")
+            self.cli.success(f"Successfully loaded {os.path.getsize(filepath)} bytes into buffer.")
         except Exception as e:
-            print(f"[-] Error loading file: {e}")
+            self.cli.error(f"Error loading file: {e}")
 
     def _cmd_status(self):
         meta = self.session.get_current_meta()
-        print(f"\n[*] Current Branch : {meta.get('name', 'Unknown')}")
-        print(f"[*] History Turns  : {len(self.agent.history)}")
+        self.cli.info(f"\nCurrent Branch : {meta.get('name', 'Unknown')}")
+        self.cli.info(f"History Turns  : {len(self.agent.history)}")
         
         if not self.staged_message:
-            print("[*] Staged Buffer  : (Empty)\n")
+            self.cli.info("Staged Buffer  : (Empty)\n")
             return
             
-        print("[*] Staged Buffer Preview:")
-        print("--------------------------------------------------")
+        self.cli.info("Staged Buffer Preview:")
+        self.cli.raw("-" * 50)
         preview = self.staged_message[:300]
-        print(preview)
+        self.cli.raw(preview)
         if len(self.staged_message) > 300:
-            print("\n... [Truncated]")
-        print("--------------------------------------------------")
-        print(f"    (Total: {len(self.staged_message)} chars)\n")
+            self.cli.raw("\n... [Truncated]")
+        self.cli.raw("-" * 50)
+        self.cli.raw(f"    (Total: {len(self.staged_message)} chars)\n")
 
     def _cmd_commit(self):
         if not self.staged_message.strip():
-            print("[-] Error: Buffer is empty. Draft a message using 'vim' or 'load' first.")
+            self.cli.error("Error: Buffer is empty. Draft a message using 'vim' or 'load' first.")
             return
             
-        print("\n================ COMMIT PREVIEW ================")
+        self.cli.raw(f"\n{self.cli.C_CYAN}================ COMMIT PREVIEW ================{self.cli.C_RESET}")
         preview = self.staged_message[:500]
-        print(preview + ("\n... [Truncated]" if len(self.staged_message) > 500 else ""))
-        print("================================================")
+        self.cli.raw(preview + ("\n... [Truncated]" if len(self.staged_message) > 500 else ""))
+        self.cli.raw(f"{self.cli.C_CYAN}================================================{self.cli.C_RESET}")
         
-        ans = input("Proceed to send to LLM? [y/N]: ").strip().lower()
+        ans = input(f"{self.cli.C_CYAN}[?]{self.cli.C_RESET} Proceed to send to LLM? [y/N]: ").strip().lower()
         if ans in ['y', 'yes']:
             self.agent.inject_user_message(self.staged_message)
             self.staged_message = ""
-            print("[*] Inference Engine Started...\n")
+            self.cli.info("Inference Engine Started...\n")
             while self.agent.step():
                 pass
         else:
-            print("[-] Send cancelled.")
+            self.cli.error("Send cancelled.")
 
     def run(self):
-        print("\n================ REGENT SHELL READY ================")
+        self.cli.raw(f"\n{self.cli.C_CYAN}================ REGENT SHELL READY ================{self.cli.C_RESET}")
         if HAS_PTK:
-            print("[+] Bash-style Tab completion enabled (Powered by prompt_toolkit).")
+            self.cli.success("Bash-style Tab completion enabled (Powered by prompt_toolkit).")
         else:
-            print("[-] prompt_toolkit not found. Fallback to basic input. (pip install prompt_toolkit)")
+            self.cli.error("prompt_toolkit not found. Fallback to basic input. (pip install prompt_toolkit)")
         self._print_help()
         
         # Track consecutive errors to prevent infinite loop of death
@@ -252,7 +263,7 @@ class InteractiveCLI:
                 if self.agent.history and self.agent.history[-1]["role"] == "user":
                     content = self.agent.history[-1]["content"]
                     if isinstance(content, list) and len(content) > 0 and content[0].get("type") == "tool_result":
-                        print("\n[*] Processing pending tool returns in background...")
+                        self.cli.info("\nProcessing pending tool returns in background...")
                         
                         initial_history_len = len(self.agent.history)
                         
@@ -262,8 +273,8 @@ class InteractiveCLI:
                         # Safeguard: If step() failed due to an API Error, the history size remains unchanged.
                         # We must pop the stuck tool_result to break the infinite 429 retry loop.
                         if len(self.agent.history) == initial_history_len:
-                            print("\n[-] FATAL: Background execution blocked by an API Error.")
-                            print("[-] Dropping the pending tool result to prevent infinite API retry loop.")
+                            self.cli.error("\nFATAL: Background execution blocked by an API Error.")
+                            self.cli.error("Dropping the pending tool result to prevent infinite API retry loop.")
                             self.agent.history.pop() 
                             self.session.save_history(self.agent.history)
                             
@@ -278,17 +289,24 @@ class InteractiveCLI:
                 full_model_name = self.agent.config.get("MODEL_ID", "regent")
                 short_model_name = full_model_name.split("/")[-1] if "/" in full_model_name else full_model_name
                 
-                prompt_str = f"{short_model_name}({branch_name}{dirty_flag})> "
+                # Linux-Style Colored Prompt Formatting
+                prompt_str_ansi = (
+                    f"{self.cli.C_GREEN}{short_model_name}{self.cli.C_RESET}:"
+                    f"{self.cli.C_BLUE}({branch_name}"
+                    f"{self.cli.C_YELLOW}{dirty_flag}"
+                    f"{self.cli.C_BLUE}){self.cli.C_RESET}"
+                    f"{self.cli.C_GRAY}>{self.cli.C_RESET} "
+                )
                 
-                # 3. Read user input with prompt_toolkit
+                # 3. Read user input
                 if HAS_PTK:
                     cmd_input = self.prompt_session.prompt(
-                        prompt_str,
+                        ANSI(prompt_str_ansi),
                         completer=self._build_completer(),
                         complete_while_typing=False
                     ).strip()
                 else:
-                    cmd_input = input(prompt_str).strip()
+                    cmd_input = input(prompt_str_ansi).strip()
                     
                 # Reset error counter because we successfully reached the blocking input layer
                 consecutive_errors = 0
@@ -300,7 +318,7 @@ class InteractiveCLI:
                 try:
                     parts = shlex.split(cmd_input)
                 except ValueError as e:
-                    print(f"[-] Shell syntax error: {e}")
+                    self.cli.error(f"Shell syntax error: {e}")
                     continue
                     
                 command = parts[0].lower()
@@ -309,7 +327,7 @@ class InteractiveCLI:
                 if command in ['help', '-h']:
                     self._print_help()
                 elif command in ['quit', 'exit', '-q']:
-                    print("[*] Terminating Regent Shell. Goodbye.")
+                    self.cli.info("Terminating Regent Shell. Goodbye.")
                     break
                 elif command == 'branch':
                     self._cmd_branch(args)
@@ -325,26 +343,24 @@ class InteractiveCLI:
                     self._cmd_commit()
                 elif command == 'clear':
                     self.staged_message = ""
-                    print("[+] Buffer cleared.")
+                    self.cli.success("Buffer cleared.")
                 else:
-                    print(f"[-] Unknown command '{command}'. Type 'help' for available commands.")
+                    self.cli.error(f"Unknown command '{command}'. Type 'help' for available commands.")
                     
             except KeyboardInterrupt:
-                # Handle Ctrl+C
-                print()
+                self.cli.raw("")
                 continue
             except EOFError:
-                # Handle Ctrl+D
-                print("\n[*] Terminating Regent Shell (EOF). Goodbye.")
+                self.cli.info("\nTerminating Regent Shell (EOF). Goodbye.")
                 break
             except Exception as e:
                 consecutive_errors += 1
-                print(f"\n[-] Unexpected Error: {e}")
+                self.cli.error(f"\nUnexpected Error: {e}")
                 
                 # Break out if the loop is spinning wildly without user interaction
                 if consecutive_errors >= 3:
-                    print("[!] FATAL: Too many consecutive errors. Terminating shell to prevent infinite loop.")
+                    self.cli.warning("FATAL: Too many consecutive errors. Terminating shell to prevent infinite loop.")
                     break
                     
-                print("[*] Shell recovered. Your staged message and session are preserved.")
+                self.cli.info("Shell recovered. Your staged message and session are preserved.")
                 continue

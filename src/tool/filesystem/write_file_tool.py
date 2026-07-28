@@ -17,9 +17,8 @@ class WriteFileTool(BaseTool):
         return (
             "Write content to a file. Creates the file if it does not exist, "
             "overwrites it if it does. Parent directories are created automatically. "
-            "Use this to generate source code, configuration files, or any text output. "
-            "WARNING: This tool will overwrite existing files without confirmation. "
-            "Use read_file first if you need to preserve existing content."
+            "WARNING: To prevent API timeouts, do NOT write massive files (> 200 lines) in a single call. "
+            "For large files, write the initial chunk first, then use 'edit_file' or alternative chunked methods."
         )
 
     def get_schema(self):

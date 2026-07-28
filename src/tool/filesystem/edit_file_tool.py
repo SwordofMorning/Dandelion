@@ -15,7 +15,7 @@ class EditFileTool(BaseTool):
             "Edit an existing file by replacing a specific exact text block with new text. "
             "This is much safer and faster than rewriting the entire file using write_file. "
             "You MUST provide the EXACT old text (including correct indentation and line breaks) "
-            "as it currently appears in the file. It will only replace the FIRST occurrence."
+            "as it currently appears in the file. It will replace ALL occurrences of the old text."
         )
 
     def get_schema(self):
@@ -78,15 +78,14 @@ class EditFileTool(BaseTool):
                     f"Consider using read_file to check the exact content."
                 )
 
-            # Replace only the first occurrence to avoid unintended overwrites
-            new_content = content.replace(old_text, new_text, 1)
+            new_content = content.replace(old_text, new_text)
 
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-            return True, f"Successfully edited file '{file_path}' (replaced {len(old_text)} chars with {len(new_text)} chars)."
+            return True, f"Successfully edited file '{file_path}'."
 
         except UnicodeDecodeError:
-            return False, f"Error: '{file_path}' could not be decoded as UTF-8. It may be a binary file."
+            return False, f"Error: '{file_path}' could not be decoded as UTF-8."
         except Exception as e:
             return False, f"Error editing file: {e}"

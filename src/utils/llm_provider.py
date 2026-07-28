@@ -25,7 +25,6 @@ class LLMProvider(ABC):
         """Extract plain text from response blocks."""
         pass
 
-
 class AnthropicProvider(LLMProvider):
     def __init__(self, api_key, base_url, model_id):
         from anthropic import Anthropic
@@ -52,8 +51,14 @@ class AnthropicProvider(LLMProvider):
         try:
             print("\n[Agent] ", end="", flush=True)
             with self.client.messages.stream(**payload) as stream:
-                for text in stream.text_stream:
-                    print(text, end="", flush=True)
+                for event in stream:
+                    if event.type == "content_block_delta":
+                        if event.delta.type == "text_delta":
+                            # Print normal text
+                            print(event.delta.text, end="", flush=True)
+                        elif event.delta.type == "input_json_delta":
+                            # Print tool arguments in dark gray to show streaming progress
+                            print(f"\033[90m{event.delta.partial_json}\033[0m", end="", flush=True)
             print() 
             final_message = stream.get_final_message()
             return final_message, None
@@ -66,7 +71,6 @@ class AnthropicProvider(LLMProvider):
             return str(content)
         return "\n".join(getattr(b, "text", "") for b in content if getattr(b, "type", None) == "text")
 
-
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key, base_url, model_id):
         try:
@@ -75,26 +79,47 @@ class GeminiProvider(LLMProvider):
             # For Gemini, base_url is usually implicit, but supported if needed.
             self.client = genai.Client(api_key=api_key)
         except ImportError:
-            raise RuntimeError("google-genai package is required for AI Studio. Please 'pip install google-genai'")
+            raise RuntimeError("google-genai package is required. Please 'pip install google-genai'")
         self.model_id = model_id
 
     def _convert_schema(self, anthropic_schema):
         """Convert Anthropic JSON schema to Gemini FunctionDeclaration format."""
         if not anthropic_schema:
             return None
-        return self.types.Schema(
-            type=self.types.Type.OBJECT,
-            properties={
-                k: self.types.Schema(type=self.types.Type.STRING, description=v.get("description", ""))
-                for k, v in anthropic_schema.get("properties", {}).items()
-            },
-            required=anthropic_schema.get("required", [])
-        )
+            
+        def map_type(t_str):
+            mapping = {
+                "string": self.types.Type.STRING,
+                "integer": self.types.Type.INTEGER,
+                "number": self.types.Type.NUMBER,
+                "boolean": self.types.Type.BOOLEAN,
+                "array": self.types.Type.ARRAY,
+                "object": self.types.Type.OBJECT
+            }
+            return mapping.get(t_str.lower(), self.types.Type.STRING)
+
+        def build_schema(schema_dict):
+            t = map_type(schema_dict.get("type", "string"))
+            props = None
+            items = None
+            if t == self.types.Type.OBJECT and "properties" in schema_dict:
+                props = {k: build_schema(v) for k, v in schema_dict.get("properties", {}).items()}
+            if t == self.types.Type.ARRAY and "items" in schema_dict:
+                items = build_schema(schema_dict.get("items", {}))
+                
+            return self.types.Schema(
+                type=t,
+                description=schema_dict.get("description", ""),
+                properties=props,
+                items=items,
+                required=schema_dict.get("required", [])
+            )
+            
+        return build_schema(anthropic_schema)
 
     def _convert_tools(self, anthropic_tools):
         if not anthropic_tools:
             return None
-        
         declarations = []
         for t in anthropic_tools:
             declarations.append(self.types.FunctionDeclaration(
@@ -191,10 +216,7 @@ class GeminiProvider(LLMProvider):
         
         stop_reason = "tool_use" if tool_calls else "end_turn"
         
-        return SimpleNamespace(
-            content=content,
-            stop_reason=stop_reason
-        )
+        return SimpleNamespace(content=content, stop_reason=stop_reason)
 
     def safe_request(self, payload):
         gemini_tools = self._convert_tools(payload.get("tools"))
@@ -210,11 +232,8 @@ class GeminiProvider(LLMProvider):
         
         try:
             resp = self.client.models.generate_content(
-                model=self.model_id,
-                contents=gemini_msgs,
-                config=config
+                model=self.model_id, contents=gemini_msgs, config=config
             )
-            # Directly parse the full response safely
             return self._build_unified_response(resp), None
         except Exception as e:
             return None, str(e)
@@ -240,9 +259,7 @@ class GeminiProvider(LLMProvider):
             from types import SimpleNamespace
             
             for chunk in self.client.models.generate_content_stream(
-                model=self.model_id,
-                contents=gemini_msgs,
-                config=config
+                model=self.model_id, contents=gemini_msgs, config=config
             ):
                 # Safely iterate through parts in every chunk to catch both text and tools
                 if chunk.candidates and chunk.candidates[0].content.parts:
@@ -251,6 +268,8 @@ class GeminiProvider(LLMProvider):
                             print(part.text, end="", flush=True)
                             full_text += part.text
                         elif getattr(part, "function_call", None):
+                            # Gemini SDK streams function calls awkwardly, we print an indicator
+                            print("\033[90m[Generating Tool Parameters...]\033[0m", end="", flush=True)
                             call_id = f"call_{uuid.uuid4().hex[:8]}"
                             args_dict = part.function_call.args if part.function_call.args else {}
                             if not isinstance(args_dict, dict):
@@ -274,11 +293,7 @@ class GeminiProvider(LLMProvider):
             content.extend(tool_calls)
             
             stop_reason = "tool_use" if tool_calls else "end_turn"
-            
-            final_message = SimpleNamespace(
-                content=content,
-                stop_reason=stop_reason
-            )
+            final_message = SimpleNamespace(content=content, stop_reason=stop_reason)
             return final_message, None
             
         except Exception as e:
@@ -296,7 +311,6 @@ class GeminiProvider(LLMProvider):
             return "\n".join(texts)
         return str(content)
 
-
 class OpenAIProvider(LLMProvider):
     def __init__(self, api_key, base_url, model_id):
         try:
@@ -307,7 +321,7 @@ class OpenAIProvider(LLMProvider):
                 base_url=base_url if base_url else None
             )
         except ImportError:
-            raise RuntimeError("openai package is required for OpenAI API. Please 'pip install openai'")
+            raise RuntimeError("openai package is required. Please 'pip install openai'")
         self.model_id = model_id
 
     def _convert_tools(self, anthropic_tools):
@@ -412,10 +426,7 @@ class OpenAIProvider(LLMProvider):
         content.extend(tool_calls)
         stop_reason = "tool_use" if tool_calls else "end_turn"
         
-        return SimpleNamespace(
-            content=content,
-            stop_reason=stop_reason
-        )
+        return SimpleNamespace(content=content, stop_reason=stop_reason)
 
     def safe_request(self, payload):
         tools = self._convert_tools(payload.get("tools"))
@@ -488,6 +499,8 @@ class OpenAIProvider(LLMProvider):
                                     "arguments": ""
                                 }
                             if tc.function.arguments:
+                                # Print tool arguments in dark gray to show streaming progress
+                                print(f"\033[90m{tc.function.arguments}\033[0m", end="", flush=True)
                                 tool_calls_dict[idx]["arguments"] += tc.function.arguments
                                 
             print()
