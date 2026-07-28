@@ -1,15 +1,13 @@
 # src/core/sysprompt.py
-
 import platform
 import shutil
-import json
 
 class PromptBuilder:
-    def __init__(self, memory_manager, skill_manager):
+    def __init__(self, memory_manager, skill_manager, config):
         self.memory = memory_manager
         self.skill = skill_manager
+        self.config = config
         
-        # Detect Environment
         self.os_name = platform.system()
         self.has_pwsh = shutil.which("powershell") is not None
         self.has_bash = shutil.which("bash") is not None
@@ -28,27 +26,27 @@ class PromptBuilder:
         sections.append("You are a professional coding and management agent running locally.")
         sections.append(f"Environment Info:\n{self.terminal_hint}")
         
-        # 2. SubAgent Orchestration Guide
-        sections.append(
-            "## SubAgent Orchestration\n"
-            "You have access to a SubAgent cluster system for handling complex, multi-step tasks.\n"
-            "### When to Use SubAgents:\n"
-            "- Tasks that involve 3+ independent sub-problems\n"
-            "- Tasks that require different expertise (e.g., code analysis + data processing)\n"
-            "- Tasks that would generate excessive tool output (file contents, search results)\n"
-            "### How to Use SubAgents:\n"
-            "1. Call 'plan_tool' to break the complex task into a TaskPlan.\n"
-            "2. For each SubTask, call 'spawn_subagent' with task_description, toolset, and role_prompt.\n"
-            "3. Wait for each SubAgentResult before proceeding to dependent subtasks.\n"
-            "4. Synthesize the final answer from all SubAgentResults.\n"
-            "### Available Toolsets:\n"
-            "- 'minimal': read_file, write_file, list_directory\n"
-            "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file\n"
-            "- 'code_analysis': read_file, grep_search, list_directory, bash\n"
-            "- 'data_processing': read_weekly_report, write_file, markdown_editor\n"
-            "### Important:\n"
-            "- Prefer splitting work into SubAgents to keep your context clean and improve caching."
-        )
+        # 2. SubAgent, if enable SUB_LIST, must palnt first
+        sub_list = self.config.get("SUB_LIST", [])
+        if sub_list:
+            sections.append(
+                "## SubAgent Orchestration (MANDATORY FOR COMPLEX TASKS)\n"
+                "You have access to a SubAgent cluster system for handling complex, multi-step tasks.\n"
+                "### When to Use SubAgents:\n"
+                "- Tasks that involve 3+ independent sub-problems\n"
+                "- Tasks that require different expertise\n"
+                "### How to Use SubAgents:\n"
+                "1. You MUST call 'plan_tool' first to break the complex task into a TaskPlan.\n"
+                "2. For each SubTask, call 'spawn_subagent' with task_description, toolset, and role_prompt.\n"
+                "3. Wait for each SubAgentResult before proceeding to dependent subtasks.\n"
+                "4. Synthesize the final answer from all SubAgentResults.\n"
+                "### Available Toolsets:\n"
+                "- 'minimal': read_file, write_file, list_directory\n"
+                "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file\n"
+                "- 'code_analysis': read_file, grep_search, list_directory, bash\n"
+                "- 'data_processing': read_weekly_report, write_file, markdown_editor\n"
+                "- 'full': bash, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file"
+            )
         
         # 3. Skills Catalog (Layer 1)
         catalog = self.skill.get_catalog()

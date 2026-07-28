@@ -46,6 +46,7 @@ class SubAgentPool:
             self.completed_results.append(result)
             return result
         
+        # [核心修复处] 确保 subagent 变量被正确声明和赋值
         subagent = SubAgent(
             safe_client=self.safe_client,
             logger=self.logger,
@@ -55,7 +56,12 @@ class SubAgentPool:
             tools=tools,
             depth=depth,
             max_depth=self.max_depth,
-            subagent_id=subagent_id
+            subagent_id=subagent_id,
+            routing_context={
+                "task_description": task_description,
+                "toolset_name": toolset_name,
+                "depth": depth,
+            }
         )
         
         # Runtime Error (Fallback)
@@ -65,8 +71,9 @@ class SubAgentPool:
             err_msg = f"Unexpected error during execution: {e!s}"
             self.logger.log_api_call(f"SUBAGENT:{subagent_id} EXEC ERROR", {"error": err_msg})
             
-            # Extract state from crashed subagent if available
-            sub_res = getattr(subagent, 'sub_results', [])
+            subagent_instance = locals().get('subagent')
+            sub_res = getattr(subagent_instance, 'sub_results', []) if subagent_instance else []
+            
             max_depth_reached = depth
             if sub_res:
                 max_depth_reached = max([depth] + [r.depth_reached for r in sub_res])

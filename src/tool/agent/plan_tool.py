@@ -101,7 +101,13 @@ class PlanTool(BaseTool):
         
         print("\n[+] [PlanTool] Generating TaskPlan...")
 
-        resp, err = self.safe_client.safe_stream_request(payload)
+        resp, err = self.safe_client.route_request(
+            payload=payload,
+            task_description=complex_task,
+            toolset_name="planning",
+            depth=0,
+            stream=True
+        )
 
         if err:
             return False, f"Decomposition failed: {err}"

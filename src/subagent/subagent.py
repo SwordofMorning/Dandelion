@@ -7,7 +7,6 @@
 import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
-from ..tool.agent.spawn_tool import RestrictedSpawnTool
 
 class SubAgent(ISubAgent):
     def __init__(
@@ -20,7 +19,8 @@ class SubAgent(ISubAgent):
         tools,
         depth=0,
         max_depth=3,
-        subagent_id=None
+        subagent_id=None,
+        routing_context=None
     ):
         super().__init__(safe_client, logger, tools, config)
         self.pool = pool
@@ -28,10 +28,13 @@ class SubAgent(ISubAgent):
         self.max_depth = max_depth
         self.subagent_id = subagent_id or f"subagent-{id(self):x}"
         self.sub_results = []
+        self.routing_context = routing_context or {}
         
         self.system_prompt = self._build_system_prompt(role_prompt)
         
         if self.depth < self.max_depth:
+            # Lazy import to prevent circular dependency
+            from ..tool.agent.spawn_tool import RestrictedSpawnTool
             self.tools["spawn_subagent"] = RestrictedSpawnTool(
                 pool=pool,
                 parent_subagent=self,
@@ -97,7 +100,14 @@ class SubAgent(ISubAgent):
                     payload
                 )
                 
-                resp, err = self.client.safe_stream_request(payload)
+                # Use dynamic route_request based on routing_context
+                resp, err = self.client.route_request(
+                    payload=payload,
+                    task_description=self.routing_context.get("task_description", task_description),
+                    toolset_name=self.routing_context.get("toolset_name", "minimal"),
+                    depth=self.routing_context.get("depth", self.depth),
+                    stream=True
+                )
                 
                 if err:
                     if self.sub_results:
