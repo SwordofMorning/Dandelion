@@ -1,3 +1,5 @@
+# src/utils/cli_printer.py
+
 """
 CLIPrinter - Standalone CLI printing and formatting utility.
 
