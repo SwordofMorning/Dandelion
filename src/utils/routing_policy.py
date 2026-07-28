@@ -4,25 +4,29 @@ class RoutingPolicy:
     CONDITION_KEYWORDS = {
         "simple": [
             "read", "list", "summary", "format", "convert",
-            "extract", "simple", "read_file", "write_file"
+            "extract", "simple", "basic", "document", "documentation",
+            "write a", "create a", "hello world", "boilerplate", 
+            "skeleton", "print", "straightforward", "routine"
         ],
         "complex": [
             "design", "architecture", "refactor", "implement",
-            "develop", "create", "complex", "build", "generate",
-            "plan"
+            "develop", "system", "framework", "integrate", "migrate",
+            "optimize", "rewrite", "complex", "advanced"
         ],
         "reasoning": [
             "reason", "analyze", "prove", "derive", "math",
-            "logic", "think", "reasoning", "debug", "troubleshoot"
+            "logic", "think", "debug", "troubleshoot", "fix", 
+            "resolve", "plan", "decompose", "break down", "evaluate",
+            "investigate"
         ],
         "tool_heavy": [
             "batch", "iterate", "all files", "recursive",
-            "large scale", "tool_heavy", "grep", "bash",
-            "search", "edit", "refactor"
+            "large scale", "grep", "search", "replace all", "find all",
+            "tool_heavy"
         ],
         "long_context": [
-            "long context", "whole file", "complete",
-            "large file", "long_context", "full codebase"
+            "entire codebase", "full context", "large file", "huge", 
+            "comprehensive", "read all", "scan project", "long_context"
         ],
     }
 
@@ -41,19 +45,33 @@ class RoutingPolicy:
         conditions = set()
         text = (task_description + " " + toolset_name).lower()
 
+        # 1. Extract From Prompt
         for cond, keywords in self.CONDITION_KEYWORDS.items():
             if any(kw.lower() in text for kw in keywords):
                 conditions.add(cond)
 
+        # 2. Runtime
         if depth >= 2:
             conditions.add("complex")
-        if toolset_name in ["code_analysis", "full"]:
+            
+        if toolset_name == "planning":
+            conditions.add("reasoning")
+            conditions.add("complex")
+        elif toolset_name == "full":
             conditions.add("tool_heavy")
-        if toolset_name in ["filesystem", "full"]:
             conditions.add("long_context")
+        elif toolset_name == "code_analysis":
+            conditions.add("tool_heavy")
+            conditions.add("reasoning")
 
+        # 3. Conflict Resolution
+        if "simple" in conditions and ("complex" in conditions or "reasoning" in conditions):
+            conditions.remove("simple")
+
+        # 4. Fallback to simple
         if not conditions:
-            conditions.add("default")
+            conditions.add("simple")
+
         return conditions
 
     def select_model(self, task_description: str, toolset_name: str, depth: int, estimated_tokens: int = 2000) -> str:
@@ -64,12 +82,13 @@ class RoutingPolicy:
 
         # 1. Condition Match & Quota Check
         for spec in self.specs:
-            if task_conditions & set(spec.conditions) or "default" in spec.conditions:
+            spec_conditions = set(spec.conditions)
+            if task_conditions & spec_conditions or "default" in spec_conditions:
                 if self.rate_limiter.acquire(spec.alias, estimated_tokens):
                     return spec.alias
                 print(f"[Router] Model '{spec.alias}' rate limited, trying next...")
 
-        # 2. Fallback: Any available model
+        # 2. Fallback
         for spec in self.specs:
             if self.rate_limiter.acquire(spec.alias, estimated_tokens):
                 print(f"[Router] Fallback to '{spec.alias}' (ignoring conditions)")
