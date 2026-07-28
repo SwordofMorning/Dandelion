@@ -81,7 +81,7 @@ MODEL_LIST = [
     {
         "model_id": "z-ai/glm-5.2",
         "conditions": ["complex"],
-        "max_token": 819200
+        "max_token": 819200,
         "TPM": 1000000,
         "RPM": 40,
         "RPD": 0
