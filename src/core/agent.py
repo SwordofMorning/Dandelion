@@ -1,10 +1,10 @@
-# src/core/agent.py
+# refactor/core/agent.py
 
 import os
 import sys
 
 from src.utils.safe_llm import SafeLLMClient
-from src.utils.cli import InteractiveCLI
+from src.utils.cli_printer import CLIPrinter
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
@@ -15,6 +15,9 @@ from src.tool import (
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
     EditFileTool, PlanTool, SpawnSubagentTool
 )
+
+# Create a module-level CLIPrinter instance for convenience
+cli = CLIPrinter()
 
 class MyAgent:
     def __init__(self, config, session_manager, workspace_dir):
@@ -201,7 +204,7 @@ class MyAgent:
             if block.type != "tool_use": 
                 continue
                 
-            InteractiveCLI.CLI_Print(f"\nTool requested: {block.name}", level="info")
+            cli.print(f"\nTool requested: {block.name}", level="info")
             handler = self.tools.get(block.name)
             
             if handler:
@@ -209,7 +212,7 @@ class MyAgent:
             else:
                 success, output = False, f"Unknown tool: {block.name}"
                 
-            InteractiveCLI.CLI_Print(f"    Result length: {len(str(output))} chars", level="debug")
+            cli.print(f"    Result length: {len(str(output))} chars", level="debug")
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
 
         if results:
