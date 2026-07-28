@@ -29,7 +29,8 @@ class MyAgent:
         self.client = SafeLLMClient(
             api_key=self.config["ANTHROPIC_API_KEY"],
             base_url=self.config["ANTHROPIC_BASE_URL"],
-            model_id=self.config["MODEL_ID"]
+            model_id=self.config["MODEL_ID"],
+            sdk_type=self.config.get("SDK_TYPE", "Anthropic")
         )
         
         # In passing session_manager as logger to maintain compatibility with legacy code
