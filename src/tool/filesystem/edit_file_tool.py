@@ -15,7 +15,7 @@ class EditFileTool(BaseTool):
             "Edit an existing file by replacing a specific exact text block with new text. "
             "This is much safer and faster than rewriting the entire file using write_file. "
             "You MUST provide the EXACT old text (including correct indentation and line breaks) "
-            "as it currently appears in the file. It will only replace the FIRST occurrence."
+            "as it currently appears in the file. It will replace ALL occurrences of the old text."
         )
 
     def get_schema(self):
