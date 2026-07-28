@@ -49,7 +49,7 @@ class SkillManager:
             self.registry[name] = {
                 "name": name,
                 "description": desc,
-                "content": raw
+                "content": body
             }
 
     def get_catalog(self):

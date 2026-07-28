@@ -14,7 +14,9 @@ class MarkdownTool(BaseTool):
         return (
             "Read, write, or append to a Markdown (.md) file. "
             "IMPORTANT: Before you write or append, you MUST call load_skill('markdown_style') "
-            "if you haven't already, to ensure you comply with the project's strict format rules."
+            "if you haven't already. "
+            "WARNING: To avoid API timeouts, if generating large content (> 200 lines), "
+            "use 'write' for the first chunk and 'append' for subsequent chunks iteratively."
         )
 
     def get_schema(self):

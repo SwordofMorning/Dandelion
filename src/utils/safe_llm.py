@@ -85,10 +85,11 @@ class SafeLLMClient:
         for attempt in range(max_retries + 1):
             provider = self._get_cached_provider(current_alias)
             
-            # Temporary replace model_id inside provider for API Call
-            payload["model"] = spec.model_id
+            # Use a copy to prevent payload mutation during retries
+            req_payload = payload.copy()
+            req_payload["model"] = spec.model_id
             
-            resp, err = provider.safe_stream_request(payload) if stream else provider.safe_request(payload)
+            resp, err = provider.safe_stream_request(req_payload) if stream else provider.safe_request(req_payload)
             
             if err is None:
                 return resp, None
@@ -103,9 +104,11 @@ class SafeLLMClient:
                     print(f"[Router] Falling back to '{fallback_alias}'...")
                     fb_provider = self._get_cached_provider(fallback_alias)
                     fb_spec = self._registry.get_spec(fallback_alias)
-                    payload["model"] = fb_spec.model_id
                     
-                    resp, err = fb_provider.safe_stream_request(payload) if stream else fb_provider.safe_request(payload)
+                    fb_payload = payload.copy()
+                    fb_payload["model"] = fb_spec.model_id
+                    
+                    resp, err = fb_provider.safe_stream_request(fb_payload) if stream else fb_provider.safe_request(fb_payload)
                     if err is None:
                         return resp, None
                         
