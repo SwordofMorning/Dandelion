@@ -4,6 +4,10 @@
 [Main]
 ; Specify the actual model_id to be used by the main agent
 MAIN_AGENT=deepseek-v4-pro
+SUB_LIST=[
+    "deepseek-v4-pro",
+    "deepseek-v4-flash"
+    ]
 
 ; ============================================================
 ; Part 2: Provider Profiles & Model Registries

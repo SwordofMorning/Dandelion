@@ -17,6 +17,13 @@ def load_api_config(file_path):
     if not main_agent_id:
         return None
 
+    # Parse SUB_LIST
+    raw_sub_list = config.get("Main", "SUB_LIST", fallback="[]")
+    try:
+        sub_list = json.loads(raw_sub_list)
+    except json.JSONDecodeError:
+        sub_list = []
+
     all_models = []
     active_profile = None
 
@@ -66,11 +73,12 @@ def load_api_config(file_path):
     return {
         "ACTIVE_PROFILE": active_profile["provider_name"],
         "SDK_TYPE": active_profile["sdk_type"],
-        "ANTHROPIC_BASE_URL": active_profile["base_url"], # Legacy key name support
-        "ANTHROPIC_API_KEY": active_profile["api_key"],   # Legacy key name support
+        # Legacy key name support
+        "ANTHROPIC_BASE_URL": active_profile["base_url"],
+        # Legacy key name support
+        "ANTHROPIC_API_KEY": active_profile["api_key"],
         "MODEL_ID": active_profile["model_id"],
         "MAX_TOKENS": active_profile.get("max_token", 8192),
-        
-        # Future-proofing: Data for Model Router
+        "SUB_LIST": sub_list,
         "ALL_MODELS": all_models
     }

@@ -30,7 +30,9 @@ class MyAgent:
             api_key=self.config["ANTHROPIC_API_KEY"],
             base_url=self.config["ANTHROPIC_BASE_URL"],
             model_id=self.config["MODEL_ID"],
-            sdk_type=self.config.get("SDK_TYPE", "Anthropic")
+            sdk_type=self.config.get("SDK_TYPE", "Anthropic"),
+            all_models=self.config.get("ALL_MODELS", []),
+            sub_list=self.config.get("SUB_LIST", [])
         )
         
         # In passing session_manager as logger to maintain compatibility with legacy code
@@ -42,7 +44,7 @@ class MyAgent:
         self.skill = SkillManager(
             skill_dir=os.path.join(self.workspace_dir, "llm", "skill")
         )
-        self.prompt_builder = PromptBuilder(self.memory, self.skill)
+        self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config)
         
         # 3. Load Tools
         self._init_tools()
