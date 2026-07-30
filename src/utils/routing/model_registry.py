@@ -1,4 +1,4 @@
-# src/utils/model_registry.py
+# src/utils/routing/model_registry.py
 
 from dataclasses import dataclass, field
 

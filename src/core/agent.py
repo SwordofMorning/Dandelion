@@ -3,8 +3,8 @@
 import os
 import sys
 
-from src.utils.safe_llm import SafeLLMClient
-from src.utils.cli_printer import CLIPrinter
+from src.utils import SafeLLMClient
+from src.utils import CLIPrinter
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder

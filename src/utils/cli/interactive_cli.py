@@ -1,4 +1,4 @@
-# src/utils/cli.py
+# src/utils/cli/interactive_cli.py
 
 import os
 import shlex
@@ -15,18 +15,18 @@ try:
 except ImportError:
     HAS_PTK = False
 
-from src.utils.cli_printer import CLIPrinter
+from .cli_printer import CLIPrinter
 
 
 class InteractiveCLI:
     """Interactive CLI for Regent workspace management."""
-    
+
     def __init__(self, agent_instance, session_manager):
         self.agent = agent_instance
         self.session = session_manager
         self.staged_message = ""
         self.cli = CLIPrinter()
-        
+
         # Initialize prompt_toolkit session with in-memory history
         if HAS_PTK:
             self.prompt_session = PromptSession(history=InMemoryHistory())
@@ -62,7 +62,7 @@ class InteractiveCLI:
             'quit': None,
             'exit': None
         }
-        
+
         return NestedCompleter.from_nested_dict(comp_dict)
 
     def _print_help(self):
@@ -101,18 +101,18 @@ class InteractiveCLI:
                 mark = "*" if s["id"] == self.session.current_session_id else " "
                 self.cli.raw(f" {mark} {s['name']:<20} | {s['id']}")
             self.cli.raw("")
-            
+
         elif args[0] == '-d':
             if len(args) < 2:
                 self.cli.error("Usage: branch -d <name/id>")
                 return
             target = args[1]
             session_id = self._resolve_session_id(target)
-            
+
             if not session_id:
                 self.cli.error(f"Error: Session '{target}' not found.")
                 return
-                
+
             ans = input(f"{self.cli.C_YELLOW}[!]{self.cli.C_RESET} Are you sure you want to delete branch '{target}'? [y/N]: ").strip().lower()
             if ans in ['y', 'yes']:
                 success, msg = self.session.delete_session(session_id)
@@ -142,11 +142,11 @@ class InteractiveCLI:
 
         target = args[0]
         session_id = self._resolve_session_id(target)
-        
+
         if not session_id:
             self.cli.error(f"Error: Session '{target}' not found.")
             return
-            
+
         if self.session.switch_session(session_id):
             self.agent.reload_history()
             self.cli.success(f"Switched to session branch: '{target}'")
@@ -157,7 +157,7 @@ class InteractiveCLI:
         editor = os.environ.get('EDITOR')
         if not editor:
             editor = 'vim' if os.name != 'nt' else 'notepad'
-            
+
         # Create temporary file for drafting
         fd, tmp_path = tempfile.mkstemp(suffix=".md", prefix="regent_draft_", text=True)
         try:
@@ -176,7 +176,7 @@ class InteractiveCLI:
             # Read back user input
             with open(tmp_path, 'r', encoding='utf-8') as f:
                 new_content = f.read().strip()
-                
+
             if new_content != self.staged_message:
                 self.staged_message = new_content
                 self.cli.success("Buffer successfully updated via editor.")
@@ -189,18 +189,18 @@ class InteractiveCLI:
         if not args:
             self.cli.error("Usage: load <filepath>")
             return
-            
+
         filepath = args[0]
         if not os.path.exists(filepath):
             self.cli.error(f"Error: File not found -> {filepath}")
             return
-            
+
         if self.staged_message.strip():
             ans = input(f"{self.cli.C_YELLOW}[!]{self.cli.C_RESET} Warning: The buffer is not empty. Overwrite? [y/N]: ").strip().lower()
             if ans not in ['y', 'yes']:
                 self.cli.error("Load aborted.")
                 return
-                
+
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.staged_message = f.read().strip()
@@ -212,11 +212,11 @@ class InteractiveCLI:
         meta = self.session.get_current_meta()
         self.cli.info(f"\nCurrent Branch : {meta.get('name', 'Unknown')}")
         self.cli.info(f"History Turns  : {len(self.agent.history)}")
-        
+
         if not self.staged_message:
             self.cli.info("Staged Buffer  : (Empty)\n")
             return
-            
+
         self.cli.info("Staged Buffer Preview:")
         self.cli.raw("-" * 50)
         preview = self.staged_message[:300]
@@ -230,12 +230,12 @@ class InteractiveCLI:
         if not self.staged_message.strip():
             self.cli.error("Error: Buffer is empty. Draft a message using 'vim' or 'load' first.")
             return
-            
+
         self.cli.raw(f"\n{self.cli.C_CYAN}================ COMMIT PREVIEW ================{self.cli.C_RESET}")
         preview = self.staged_message[:500]
         self.cli.raw(preview + ("\n... [Truncated]" if len(self.staged_message) > 500 else ""))
         self.cli.raw(f"{self.cli.C_CYAN}================================================{self.cli.C_RESET}")
-        
+
         ans = input(f"{self.cli.C_CYAN}[?]{self.cli.C_RESET} Proceed to send to LLM? [y/N]: ").strip().lower()
         if ans in ['y', 'yes']:
             self.agent.inject_user_message(self.staged_message)
@@ -253,10 +253,10 @@ class InteractiveCLI:
         else:
             self.cli.error("prompt_toolkit not found. Fallback to basic input. (pip install prompt_toolkit)")
         self._print_help()
-        
+
         # Track consecutive errors to prevent infinite loop of death
-        consecutive_errors = 0 
-        
+        consecutive_errors = 0
+
         while True:
             try:
                 # 1. Background task check
@@ -264,31 +264,31 @@ class InteractiveCLI:
                     content = self.agent.history[-1]["content"]
                     if isinstance(content, list) and len(content) > 0 and content[0].get("type") == "tool_result":
                         self.cli.info("\nProcessing pending tool returns in background...")
-                        
+
                         initial_history_len = len(self.agent.history)
-                        
+
                         while self.agent.step():
                             pass
-                            
+
                         # Safeguard: If step() failed due to an API Error, the history size remains unchanged.
                         # We must pop the stuck tool_result to break the infinite 429 retry loop.
                         if len(self.agent.history) == initial_history_len:
                             self.cli.error("\nFATAL: Background execution blocked by an API Error.")
                             self.cli.error("Dropping the pending tool result to prevent infinite API retry loop.")
-                            self.agent.history.pop() 
+                            self.agent.history.pop()
                             self.session.save_history(self.agent.history)
-                            
+
                         continue
 
                 # 2. UI Prompt Render
                 meta = self.session.get_current_meta()
                 branch_name = meta.get("name", "unknown")
                 dirty_flag = "*" if self.staged_message.strip() else ""
-                
+
                 # Fetch model name and format it to be clean (e.g. "nvidia/nemotron" -> "nemotron")
                 full_model_name = self.agent.config.get("MODEL_ID", "regent")
                 short_model_name = full_model_name.split("/")[-1] if "/" in full_model_name else full_model_name
-                
+
                 # Linux-Style Colored Prompt Formatting
                 prompt_str_ansi = (
                     f"{self.cli.C_GREEN}{short_model_name}{self.cli.C_RESET}:"
@@ -297,7 +297,7 @@ class InteractiveCLI:
                     f"{self.cli.C_BLUE}){self.cli.C_RESET}"
                     f"{self.cli.C_GRAY}>{self.cli.C_RESET} "
                 )
-                
+
                 # 3. Read user input
                 if HAS_PTK:
                     cmd_input = self.prompt_session.prompt(
@@ -307,23 +307,23 @@ class InteractiveCLI:
                     ).strip()
                 else:
                     cmd_input = input(prompt_str_ansi).strip()
-                    
+
                 # Reset error counter because we successfully reached the blocking input layer
                 consecutive_errors = 0
-                    
+
                 if not cmd_input:
                     continue
-                    
+
                 # 4. Parse and Dispatch
                 try:
                     parts = shlex.split(cmd_input)
                 except ValueError as e:
                     self.cli.error(f"Shell syntax error: {e}")
                     continue
-                    
+
                 command = parts[0].lower()
                 args = parts[1:]
-                
+
                 if command in ['help', '-h']:
                     self._print_help()
                 elif command in ['quit', 'exit', '-q']:
@@ -346,7 +346,7 @@ class InteractiveCLI:
                     self.cli.success("Buffer cleared.")
                 else:
                     self.cli.error(f"Unknown command '{command}'. Type 'help' for available commands.")
-                    
+
             except KeyboardInterrupt:
                 self.cli.raw("")
                 continue
@@ -356,11 +356,11 @@ class InteractiveCLI:
             except Exception as e:
                 consecutive_errors += 1
                 self.cli.error(f"\nUnexpected Error: {e}")
-                
+
                 # Break out if the loop is spinning wildly without user interaction
                 if consecutive_errors >= 3:
                     self.cli.warning("FATAL: Too many consecutive errors. Terminating shell to prevent infinite loop.")
                     break
-                    
+
                 self.cli.info("Shell recovered. Your staged message and session are preserved.")
                 continue
