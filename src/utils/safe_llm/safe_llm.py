@@ -1,28 +1,27 @@
-# src/utils/safe_llm.py
+# src/utils/safe_llm/safe_llm.py
 
 import threading
-from .llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
+from ..llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
+
 
 class SafeLLMClient:
     def __init__(self, api_key, base_url, model_id, sdk_type="Anthropic", all_models=None, sub_list=None):
         self.model_id = model_id
         self.sdk_type = sdk_type.lower()
-        
+
         # Setup Default Provider for Main Agent
         self.provider = self._create_provider(self.sdk_type, api_key, base_url, model_id)
-        
+
         # Setup Router Components for SubAgents
         self._provider_cache = {}
         self._cache_lock = threading.Lock()
         self._registry = None
         self._policy = None
         self._rate_limiter = None
-        
+
         if all_models and sub_list:
-            from .model_registry import ModelRegistry
-            from .routing_policy import RoutingPolicy
-            from .rate_limiter import RateLimiter
-            
+            from ..routing import ModelRegistry, RoutingPolicy, RateLimiter
+
             self._rate_limiter = RateLimiter()
             self._registry = ModelRegistry(all_models, sub_list)
             self._policy = RoutingPolicy(self._registry, self._rate_limiter)
@@ -44,13 +43,13 @@ class SafeLLMClient:
         """
         Wraps the SDK stream call for real-time console output.
         Automatically accumulates tool calls and text into a final message.
-        
+
         Returns:
             (response_object, None) on success.
             (None, error_string) on failure.
         """
         return self.provider.safe_stream_request(payload)
-            
+
     def extract_text(self, content):
         """Extract text wrapper."""
         return self.provider.extract_text(content)
@@ -76,7 +75,7 @@ class SafeLLMClient:
 
         spec = self._registry.get_spec(alias)
         inferred = self._policy.infer_conditions(task_description, toolset_name, depth)
-        
+
         print(f"\n[Router] Task -> '{alias}' | Conditions: {sorted(list(inferred))}")
 
         max_retries = 2
@@ -84,36 +83,36 @@ class SafeLLMClient:
 
         for attempt in range(max_retries + 1):
             provider = self._get_cached_provider(current_alias)
-            
+
             # Use a copy to prevent payload mutation during retries
             req_payload = payload.copy()
             req_payload["model"] = spec.model_id
-            
+
             resp, err = provider.safe_stream_request(req_payload) if stream else provider.safe_request(req_payload)
-            
+
             if err is None:
                 return resp, None
-                
+
             print(f"[Router] Model '{current_alias}' attempt {attempt+1} failed: {err}")
 
             if attempt == max_retries:
                 for fallback_alias in self._policy.get_fallback_chain(current_alias):
                     if not self._rate_limiter.acquire(fallback_alias, estimated_tokens):
                         continue
-                    
+
                     print(f"[Router] Falling back to '{fallback_alias}'...")
                     fb_provider = self._get_cached_provider(fallback_alias)
                     fb_spec = self._registry.get_spec(fallback_alias)
-                    
+
                     fb_payload = payload.copy()
                     fb_payload["model"] = fb_spec.model_id
-                    
+
                     resp, err = fb_provider.safe_stream_request(fb_payload) if stream else fb_provider.safe_request(fb_payload)
                     if err is None:
                         return resp, None
-                        
+
                     print(f"[Router] Fallback '{fallback_alias}' also failed: {err}")
-                    
+
                 return None, f"All SubAgent models exhausted. Last error: {err}"
 
         return None, "Unexpected fallback exit"

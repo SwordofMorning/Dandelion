@@ -1,4 +1,4 @@
-# src/utils/session.py
+# src/utils/logging/session.py
 
 import os
 import json

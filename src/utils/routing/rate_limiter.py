@@ -1,4 +1,4 @@
-# src/utils/rate_limiter.py
+# src/utils/routing/rate_limiter.py
 
 import time
 import threading
