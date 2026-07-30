@@ -13,7 +13,7 @@ from src.subagent import SubAgentPool
 from src.tool import (
     BashTool, ReporterTool, LoadSkillTool, MarkdownTool,
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
-    EditFileTool, PlanTool, SpawnSubagentTool
+    EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool
 )
 
 # Create a module-level CLIPrinter instance for convenience
@@ -66,6 +66,7 @@ class MyAgent:
         read_tool = ReadFileTool(workspace_dir=self.workspace_dir)
         list_tool = ListDirectoryTool(workspace_dir=self.workspace_dir)
         edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
+        web_search_tool = WebSearchTool()
         
         # Create full tools mapping for Orchestrator
         all_tools = {
@@ -77,7 +78,8 @@ class MyAgent:
             write_tool.get_name(): write_tool,
             read_tool.get_name(): read_tool,
             list_tool.get_name(): list_tool,
-            edit_tool.get_name(): edit_tool
+            edit_tool.get_name(): edit_tool,
+            web_search_tool.get_name(): web_search_tool
         }
         
         self.pool = SubAgentPool(
@@ -95,7 +97,7 @@ class MyAgent:
         tool_list = [
             bash, reporter, skill_loader, md_editor, 
             grep_tool, write_tool, read_tool, list_tool,
-            edit_tool, plan_tool, spawn_subagent
+            edit_tool, plan_tool, spawn_subagent, web_search_tool
         ]
         
         for t in tool_list:
