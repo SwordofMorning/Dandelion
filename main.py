@@ -3,9 +3,9 @@
 import os
 import sys
 
-from src.utils.config import load_api_config
-from src.utils.session import SessionManager
-from src.utils.cli import InteractiveCLI
+from src.utils import load_api_config
+from src.utils import SessionManager
+from src.utils import InteractiveCLI
 from src.core.agent import MyAgent
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
