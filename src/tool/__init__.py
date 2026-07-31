@@ -12,3 +12,4 @@ from .filesystem.read_file_tool import ReadFileTool
 from .filesystem.list_directory_tool import ListDirectoryTool
 from .filesystem.edit_file_tool import EditFileTool
 from .excel.read_excel_tool import ReadExcelTool
+from .web.web_search_tool import WebSearchTool

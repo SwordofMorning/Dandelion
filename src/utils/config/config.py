@@ -28,6 +28,9 @@ def load_api_config(file_path):
     except json.JSONDecodeError:
         sub_list = []
 
+    # Read Search API Key
+    tavily_api_key = config.get("Main", "TAVILY_API_KEY", fallback="")
+
     all_models = []
     active_profile = None
 
@@ -84,5 +87,7 @@ def load_api_config(file_path):
         "MODEL_ID": active_profile["model_id"],
         "MAX_TOKENS": active_profile.get("max_token", 8192),
         "SUB_LIST": sub_list,
-        "ALL_MODELS": all_models
+        "ALL_MODELS": all_models,
+        # Search api key
+        "TAVILY_API_KEY": tavily_api_key
     }
