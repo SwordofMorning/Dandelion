@@ -6,12 +6,12 @@ TOOLSET_REGISTRY = {
     "minimal": ["read_file", "write_file", "list_directory"],
     "filesystem": ["read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file"],
     "code_analysis": ["read_file", "grep_search", "list_directory", "bash"],
-    "data_processing": ["read_weekly_report", "write_file", "markdown_editor"],
-    "full": ["bash", "read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file"]
+    "data_processing": ["read_excel", "write_excel", "write_file", "markdown_editor"],
+    "full": ["bash", "read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file", "read_excel", "write_excel"]
 }
 
 def resolve_toolset(toolset_name: str, all_tools: dict, parent_tools: set = None) -> dict:
-    # Let' LLM know which tool are really exited.
+    # Let LLM know which tool are really existed.
     if toolset_name not in TOOLSET_REGISTRY:
         raise ValueError(
             f"Unknown toolset: '{toolset_name}'. "

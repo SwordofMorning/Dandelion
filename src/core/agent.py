@@ -58,21 +58,23 @@ class MyAgent:
         # Pass BASE_DIR to all file-system related tools
         # Bash maintains its own command checking
         bash = BashTool(workspace_dir=self.workspace_dir)
-        reporter = ReporterTool(self.client, self.session, self.config, workspace_dir=self.workspace_dir)
         skill_loader = LoadSkillTool(self.skill)
+        # Editor
         md_editor = MarkdownTool(workspace_dir=self.workspace_dir)
+        read_excel_tool = ReadExcelTool(workspace_dir=self.workspace_dir)
+        write_excel_tool = WriteExcelTool(workspace_dir=self.workspace_dir)
+        # FS
         grep_tool = GrepSearchTool(workspace_dir=self.workspace_dir)
         write_tool = WriteFileTool(workspace_dir=self.workspace_dir)
         read_tool = ReadFileTool(workspace_dir=self.workspace_dir)
         list_tool = ListDirectoryTool(workspace_dir=self.workspace_dir)
         edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
-        # NOTE: Pass self.config to WebSearchTool so it can access API keys
+        # Others
         web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
         
         # Create full tools mapping for Orchestrator
         all_tools = {
             bash.get_name(): bash,
-            reporter.get_name(): reporter,
             skill_loader.get_name(): skill_loader,
             md_editor.get_name(): md_editor,
             grep_tool.get_name(): grep_tool,
@@ -80,7 +82,9 @@ class MyAgent:
             read_tool.get_name(): read_tool,
             list_tool.get_name(): list_tool,
             edit_tool.get_name(): edit_tool,
-            web_search_tool.get_name(): web_search_tool
+            web_search_tool.get_name(): web_search_tool,
+            read_excel_tool.get_name(): read_excel_tool,
+            write_excel_tool.get_name(): write_excel_tool
         }
         
         self.pool = SubAgentPool(
@@ -96,9 +100,10 @@ class MyAgent:
         
         # Added all tools to the registration list
         tool_list = [
-            bash, reporter, skill_loader, md_editor, 
+            bash, skill_loader, md_editor, 
             grep_tool, write_tool, read_tool, list_tool,
-            edit_tool, plan_tool, spawn_subagent, web_search_tool
+            edit_tool, plan_tool, spawn_subagent, web_search_tool,
+            read_excel_tool, write_excel_tool
         ]
         
         for t in tool_list:
