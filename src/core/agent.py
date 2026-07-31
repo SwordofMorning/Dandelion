@@ -11,9 +11,10 @@ from src.core.sysprompt import PromptBuilder
 from src.subagent import SubAgentPool
 
 from src.tool import (
-    BashTool, ReporterTool, LoadSkillTool, MarkdownTool,
+    BashTool, LoadSkillTool, MarkdownTool,
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
-    EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool
+    EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
+    ReadExcelTool, WriteExcelTool
 )
 
 # Create a module-level CLIPrinter instance for convenience
