@@ -66,7 +66,8 @@ class MyAgent:
         read_tool = ReadFileTool(workspace_dir=self.workspace_dir)
         list_tool = ListDirectoryTool(workspace_dir=self.workspace_dir)
         edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
-        web_search_tool = WebSearchTool()
+        # NOTE: Pass self.config to WebSearchTool so it can access API keys
+        web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
         
         # Create full tools mapping for Orchestrator
         all_tools = {

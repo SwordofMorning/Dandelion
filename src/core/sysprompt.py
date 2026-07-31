@@ -1,6 +1,7 @@
 # src/core/sysprompt.py
 import platform
 import shutil
+import datetime
 
 class PromptBuilder:
     def __init__(self, memory_manager, skill_manager, config):
@@ -22,8 +23,17 @@ class PromptBuilder:
     def build(self):
         sections = []
         
+        # 0. Generate current human-readable time to ground the LLM's knowledge
+        now = datetime.datetime.now()
+        # Formats to something like "Friday, July 31, 2026 at 09:35 AM"
+        time_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
+        # Add local timezone offset info if needed. We assume local timezone is UTC+8 based on user context.
+        # Alternatively, we could fetch timezone info dynamically, but a static indication often suffices.
+        time_str += " (Local Time)"
+
         # 1. Identity & Environment
         sections.append("You are a professional coding and management agent running locally.")
+        sections.append(f"Current System Time: {time_str}. Please base any time-sensitive reasoning on this date.")
         sections.append(f"Environment Info:\n{self.terminal_hint}")
         
         # 2. SubAgent, if enable SUB_LIST, must palnt first

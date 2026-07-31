@@ -8,6 +8,8 @@ SUB_LIST=[
     "deepseek-v4-pro",
     "deepseek-v4-flash"
     ]
+; Search Tool
+TAVILY_API_KEY=
 
 ; ============================================================
 ; Part 2: Provider Profiles & Model Registries
