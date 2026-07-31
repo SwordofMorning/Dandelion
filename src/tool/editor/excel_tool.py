@@ -3,13 +3,6 @@
 import os
 from ..base_tool import BaseTool
 
-try:
-    import pandas as pd
-    from tabulate import tabulate
-    HAS_EXCEL_LIBS = True
-except ImportError:
-    HAS_EXCEL_LIBS = False
-
 class ReadExcelTool(BaseTool):
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
@@ -39,8 +32,20 @@ class ReadExcelTool(BaseTool):
         }
 
     def execute(self, **kwargs):
-        if not HAS_EXCEL_LIBS:
-            return False, "Error: Missing libraries. Run: pip install pandas openpyxl tabulate"
+        # Dynamic Import
+        try:
+            import pandas as pd
+            import openpyxl
+            from tabulate import tabulate
+        except ImportError as e:
+            try:
+                import importlib
+                importlib.invalidate_caches()
+                import pandas as pd
+                import openpyxl
+                from tabulate import tabulate
+            except ImportError as ex:
+                return False, f"Error: Missing libraries ({str(ex)}). Run: pip install pandas openpyxl tabulate"
 
         file_path = kwargs.get("file_path", "")
         if not file_path:
@@ -120,8 +125,18 @@ class WriteExcelTool(BaseTool):
         }
 
     def execute(self, **kwargs):
-        if not HAS_EXCEL_LIBS:
-            return False, "Error: Missing libraries. Run: pip install pandas openpyxl"
+        # Dynamic Import
+        try:
+            import pandas as pd
+            import openpyxl
+        except ImportError as e:
+            try:
+                import importlib
+                importlib.invalidate_caches()
+                import pandas as pd
+                import openpyxl
+            except ImportError as ex:
+                return False, f"Error: Missing libraries ({str(ex)}). Run: pip install pandas openpyxl"
 
         file_path = kwargs.get("file_path", "")
         md_table = kwargs.get("markdown_table", "")
@@ -150,7 +165,8 @@ class WriteExcelTool(BaseTool):
         except Exception as e:
             return False, f"Error writing Excel: {str(e)}"
 
-    def _parse_markdown_table(self, md: str) -> "pd.DataFrame":
+    def _parse_markdown_table(self, md: str):
+        import pandas as pd
         import re
         lines = [line.strip() for line in md.strip().split("\n") if line.strip()]
         data_lines = [line for line in lines if not re.match(r"^\|[\s\-\|:]+\|$", line)]
