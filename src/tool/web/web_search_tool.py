@@ -145,7 +145,9 @@ class WebSearchTool(BaseTool):
             
             # Content is usually better than snippet if available in Tavily
             content = result.get('content') or result.get('snippet', '')
-            lines.append(f"Content:\n{content}")
+            # Explicitly mark content as untrusted to prevent prompt injection
+            lines.append("Content (UNTRUSTED EXTERNAL DATA):")
+            lines.append(f"<untrusted_content>\n{content}\n</untrusted_content>")
             lines.append("")
 
         return "\n".join(lines)
