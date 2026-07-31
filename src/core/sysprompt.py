@@ -23,13 +23,11 @@ class PromptBuilder:
     def build(self):
         sections = []
         
-        # 0. Generate current human-readable time to ground the LLM's knowledge
-        now = datetime.datetime.now()
-        # Formats to something like "Friday, July 31, 2026 at 09:35 AM"
-        time_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
-        # Add local timezone offset info if needed. We assume local timezone is UTC+8 based on user context.
-        # Alternatively, we could fetch timezone info dynamically, but a static indication often suffices.
-        time_str += " (Local Time)"
+        # 0. Generate timezone-aware current time to ground the LLM's knowledge
+        # Get aware datetime using UTC then convert to local timezone
+        now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+        # Format example: "Friday, July 31, 2026 at 09:35 AM SGT (UTC+0800)"
+        time_str = now.strftime("%A, %B %d, %Y at %I:%M %p %Z (UTC%z)")
 
         # 1. Identity & Environment
         sections.append("You are a professional coding and management agent running locally.")
