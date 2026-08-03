@@ -12,7 +12,6 @@ EFFORT_TO_BUDGET_TOKENS = {
 }
 DEFAULT_EFFORT = "medium"
 
-
 class AnthropicProvider(LLMProvider):
     def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
         """
@@ -36,15 +35,32 @@ class AnthropicProvider(LLMProvider):
         self.thinking = thinking
         self.effort = effort
 
+        # Detect DeepSeek by base_url or model_id (case-insensitive)
+        self._is_deepseek = (
+            "deepseek" in (base_url or "").lower()
+            or "deepseek" in model_id.lower()
+        )
+
     def _inject_thinking(self, payload):
-        """Inject Anthropic-compatible thinking configuration into payload when enabled."""
+        """Inject thinking configuration into payload when enabled.
+
+        Two formats are supported:
+        - Standard Anthropic:  {"thinking": {"type": "enabled", "budget_tokens": N}}
+        - DeepSeek (Anthropic-compatible):
+            {"output_config": {"effort": "low"|"medium"|"high"|"max"}}
+          DeepSeek ignores budget_tokens; effort is the primary knob.
+        """
         if self.thinking == "enabled":
-            budget = EFFORT_TO_BUDGET_TOKENS.get(self.effort, EFFORT_TO_BUDGET_TOKENS["medium"])
-            payload["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": budget
-            }
-        # If thinking is "disabled", we intentionally do NOT add a thinking field
+            if self._is_deepseek:
+                # DeepSeek uses output_config.effort (like OpenAI's reasoning_effort)
+                payload["output_config"] = {"effort": self.effort}
+            else:
+                budget = EFFORT_TO_BUDGET_TOKENS.get(self.effort, EFFORT_TO_BUDGET_TOKENS["medium"])
+                payload["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": budget
+                }
+        # If thinking is "disabled", we intentionally do NOT add a thinking/output_config field
 
     def safe_request(self, payload, logger=None, log_tag=""):
         payload["model"] = self.model_id
