@@ -63,9 +63,21 @@ class MemoryManager:
             if msg.get("role") == "user":
                 content = msg.get("content", "")
                 if isinstance(content, list):
-                    content = " ".join(str(getattr(b, "text", "")) for b in content if getattr(b, "type", None) == "text")
-                if isinstance(content, str): recent_texts.append(content)
-                if len(recent_texts) >= 3: break
+                    # content blocks can be dicts (loaded from history.log) or
+                    # SDK objects (in-memory); extract text from both.
+                    texts = []
+                    for b in content:
+                        if isinstance(b, dict):
+                            if b.get("type") == "text":
+                                texts.append(str(b.get("text", "")))
+                        else:
+                            if getattr(b, "type", None) == "text":
+                                texts.append(str(getattr(b, "text", "")))
+                    content = " ".join(texts)
+                if isinstance(content, str):
+                    recent_texts.append(content)
+                if len(recent_texts) >= 3:
+                    break
                 
         recent = " ".join(reversed(recent_texts))[:2000]
         if not recent.strip(): return []

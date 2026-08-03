@@ -1,7 +1,9 @@
 # src/core/agent.py
 
 import os
+import re
 import sys
+import json
 
 from src.utils import SafeLLMClient
 from src.utils import CLIPrinter
@@ -55,7 +57,12 @@ class MyAgent:
         self.skill = SkillManager(
             skill_dir=os.path.join(self.workspace_dir, "llm", "skill")
         )
-        self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config)
+        self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config, self.workspace_dir)
+
+        # Memories cache: refresh only when the last plain-text user message changes,
+        # so the tail of system_prompt stays stable during tool loops (cache-friendly).
+        self._memories_key = None
+        self._memories_cache = ""
 
         # 3. Load Tools
         self._init_tools()
@@ -128,47 +135,88 @@ class MyAgent:
             } for t in self.tools.values()
         ]
 
-    # Implementation of size estimation and basic compaction
-    # For C-Style safety, we just slice the history if it's too long
+    # ------------------------------------------------------------------
+    # Context compaction: token-aware, LLM-summarized, pair-safe
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_plain_user_msg(msg):
+        """A user message that is plain text (not a tool_result payload)."""
+        if msg.get("role") != "user":
+            return False
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            return not any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+            )
+        return True
+
+    def _estimate_tokens(self, history=None):
+        """Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token."""
+        history = history if history is not None else self.history
+        ascii_chars = 0
+        non_ascii_chars = 0
+        for m in history:
+            content = m.get("content", "")
+            if isinstance(content, list):
+                content = str(content)
+            for ch in str(content):
+                if ord(ch) < 128:
+                    ascii_chars += 1
+                else:
+                    non_ascii_chars += 1
+        return ascii_chars / 4.0 + non_ascii_chars / 1.5
+
     def _compact_context(self):
-        # Token estimation based on chars (approx 3.5 chars/token for mixed content)
-        total_chars = sum(len(str(m.get("content", ""))) for m in self.history)
-        est_tokens = total_chars / 3.5
-        
-        # Soft limit for compression (e.g., 128k tokens for a 1M model)
+        est_tokens = self._estimate_tokens()
         soft_limit = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
-        
+
         if est_tokens < soft_limit or len(self.history) < 20:
             return
 
         print(f"[*] Context limit reached (~{int(est_tokens)} tokens), compacting history via LLM...")
-        
-        # 1. Full archive backup
+
+        # 1. Full archive backup (append-only, restorable)
         archive_dir = os.path.join(self.session.current_session_dir, "archives")
         os.makedirs(archive_dir, exist_ok=True)
         archive_path = os.path.join(archive_dir, f"history_{len(self.history)}.json")
         with open(archive_path, "w", encoding="utf-8") as f:
-            json.dump(self.history, f, ensure_ascii=False, indent=2, default=self.session._default_serializer)
+            json.dump(self.history, f, ensure_ascii=False, indent=2,
+                      default=self.session._default_serializer)
 
         head_size = 5
         recent_size = 15
-        
+
         head = self.history[:head_size]
-        recent = self.history[-recent_size:]
-        
-        # Ensure recent starts cleanly with a user message to prevent breaking tool_result pairs
-        while recent and (recent[0]["role"] != "user" or isinstance(recent[0].get("content"), list)):
-            recent.pop(0)
-            if len(recent) <= 5: 
+
+        # 2. Find a safe start for the recent window: the latest plain-text user
+        #    message within the look-back limit. Starting at a plain-text user
+        #    message guarantees tool_use/tool_result pairs are never split.
+        max_lookback = min(len(self.history) - head_size, recent_size * 2)
+        start_idx = None
+        for i in range(len(self.history) - 1, len(self.history) - 1 - max_lookback, -1):
+            if self._is_plain_user_msg(self.history[i]):
+                start_idx = i
                 break
 
-        middle = self.history[head_size : len(self.history) - len(recent)]
-        middle_text = json.dumps(middle, ensure_ascii=False, indent=2, default=self.session._default_serializer)
-        
-        if len(middle_text) > 200000:
-            middle_text = middle_text[-200000:]
+        if start_idx is None:
+            # Fallback: no plain-text user message in the look-back window;
+            # keep only head + summary to avoid dangling tool_result blocks.
+            print("[-] No safe compaction breakpoint found; keeping head + summary only.")
+            start_idx = len(self.history)
 
-        # 2. Ask LLM to generate a structured summary
+        recent = self.history[start_idx:]
+        middle = self.history[head_size:start_idx]
+
+        # 3. Summarize head + middle (early goals are the most drift-prone part).
+        summary_src = head + middle
+        summary_text = json.dumps(summary_src, ensure_ascii=False, indent=2,
+                                  default=self.session._default_serializer)
+        if len(summary_text) > 200000:
+            # Keep the head (goals/decisions) and the tail; drop the middle body.
+            summary_text = (summary_text[:50000]
+                            + "\n...[middle omitted from summarization input]...\n"
+                            + summary_text[-150000:])
+
         summary_prompt = (
             "Please summarize the following conversation history.\n"
             "Focus on:\n"
@@ -181,11 +229,11 @@ class MyAgent:
         )
 
         summary_payload = {
-            "messages": [{"role": "user", "content": summary_prompt + "\n\nHistory:\n" + middle_text}],
+            "messages": [{"role": "user", "content": summary_prompt + "\n\nHistory:\n" + summary_text}],
             "max_tokens": 2000,
             "system": "You are a concise memory summarization AI."
         }
-        
+
         resp, err = self.client.safe_request(summary_payload, log_tag="COMPRESSION SUMMARY")
         if err:
             print(f"[-] Compression failed: {err}. Falling back to basic snip.")
@@ -195,16 +243,38 @@ class MyAgent:
 
         summary_msg = {
             "role": "user",
-            "content": f"[System: Context compacted at {archive_path}]\n\n<conversation_summary>\n{summary_content}\n</conversation_summary>"
+            "content": (f"[System: Context compacted at {archive_path}]\n\n"
+                        f"<conversation_summary>\n{summary_content}\n</conversation_summary>")
         }
-        
+
         self.history = head + [summary_msg] + recent
         self.session.save_history(self.history)
+
+        # Invalidate memories cache: history changed (plain-text user messages may shift).
+        self._memories_key = None
         print("[+] Context compacted successfully.")
 
+    def _get_memories(self):
+        """Load relevant memories, cached until the last plain-text user message changes."""
+        key = None
+        for i in range(len(self.history) - 1, -1, -1):
+            msg = self.history[i]
+            if self._is_plain_user_msg(msg):
+                key = (i, hash(str(msg.get("content", ""))[:2000]))
+                break
+        if key is not None and key == self._memories_key:
+            return self._memories_cache
+        self._memories_key = key
+        self._memories_cache = self.memory.load_memories_string(self.history)
+        return self._memories_cache
+
     def step(self):
+        # 0. Check context budget every turn (not only on user messages).
+        self._compact_context()
+
         # 1. Inject Memory & Build System Prompt
-        memories_content = self.memory.load_memories_string(self.history)
+        # Memories are cached during tool loops so the system tail stays stable.
+        memories_content = self._get_memories()
         # Dynamic System Prompt injection
         system_prompt = self.prompt_builder.build()
 
@@ -265,11 +335,15 @@ class MyAgent:
             
             # --- Large Output Offload ---
             # Prevents context explosion and delays the need for compression.
-            MAX_INLINE_CHARS = 80000 # 80K
+            # Threshold is intentionally low (8K chars ~ 2-4K tokens): outputs
+            # beyond this are archived to disk and replaced with a truncated
+            # pointer so the model can read_file the missing parts on demand.
+            MAX_INLINE_CHARS = 8000
             if len(output_str) > MAX_INLINE_CHARS:
                 artifact_dir = os.path.join(self.session.current_session_dir, "artifacts")
                 os.makedirs(artifact_dir, exist_ok=True)
-                artifact_path = os.path.join(artifact_dir, f"{block.id}.txt")
+                safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(block.id))
+                artifact_path = os.path.join(artifact_dir, f"{safe_id}.txt")
 
                 with open(artifact_path, "w", encoding="utf-8") as f:
                     f.write(output_str)

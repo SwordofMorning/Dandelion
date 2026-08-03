@@ -26,6 +26,8 @@ class StateTool(BaseTool):
         )
 
     def get_schema(self):
+        # All fields optional: execute() merges into existing state, so the
+        # model can update a single field without rewriting the whole state.
         return {
             "type": "object",
             "properties": {
@@ -40,16 +42,31 @@ class StateTool(BaseTool):
                     "items": {"type": "string"},
                     "description": "List of completed sub-tasks."
                 }
-            },
-            "required": ["target", "todos", "completed"]
+            }
         }
 
+    def _load(self):
+        state = {"target": "No specific target set.", "todos": [], "completed": []}
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+            except Exception:
+                pass
+        return state
+
     def execute(self, **kwargs):
-        state = {
-            "target": kwargs.get("target", ""),
-            "todos": kwargs.get("todos", []),
-            "completed": kwargs.get("completed", [])
-        }
+        # Merge semantics: only provided fields are updated, so partial
+        # updates never wipe out the rest of the task state.
+        state = self._load()
+
+        if "target" in kwargs and kwargs.get("target") is not None:
+            state["target"] = kwargs.get("target")
+        if "todos" in kwargs and kwargs.get("todos") is not None:
+            state["todos"] = kwargs.get("todos")
+        if "completed" in kwargs and kwargs.get("completed") is not None:
+            state["completed"] = kwargs.get("completed")
+
         with open(self.state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
         return True, "Task state updated successfully. It will be reflected in your next turn."
