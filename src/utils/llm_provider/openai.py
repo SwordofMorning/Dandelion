@@ -23,7 +23,7 @@ class OpenAIProvider(LLMProvider):
             api_key: API key for the provider
             base_url: Custom base URL (optional)
             model_id: Model identifier
-            thinking: "enabled" or "disabled" — whether to enable extended thinking
+            thinking: "enabled" or "disabled" - whether to enable extended thinking
             effort: Reasoning effort level: "low", "medium", "high", or "max"
         """
         try:
@@ -39,9 +39,21 @@ class OpenAIProvider(LLMProvider):
         self.thinking = thinking
         self.effort = effort
 
+        # Detect endpoints that do not support the reasoning_effort parameter.
+        # NVIDIA's OpenAI-compatible endpoint hosts models (e.g. z-ai, glm-5.2)
+        # that reject reasoning_effort with a 400 unsupported-parameter error.
+        self._supports_reasoning_effort = not (
+            "nvidia" in (base_url or "").lower()
+            or any(k in model_id.lower() for k in ("z-ai", "glm-5.2"))
+        )
+
     def _inject_reasoning_effort(self, req_kwargs):
-        """Inject OpenAI reasoning_effort into request kwargs when thinking is enabled."""
-        if self.thinking == "enabled":
+        """Inject OpenAI reasoning_effort into request kwargs when thinking is enabled.
+
+        Only injected for endpoints that explicitly support the parameter;
+        NVIDIA-hosted models (z-ai, glm-5.2) reject it with a 400 error.
+        """
+        if self.thinking == "enabled" and self._supports_reasoning_effort:
             reasoning_level = EFFORT_TO_REASONING_EFFORT.get(
                 self.effort, EFFORT_TO_REASONING_EFFORT["medium"]
             )

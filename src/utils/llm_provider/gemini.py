@@ -3,13 +3,16 @@
 import json
 from .base import LLMProvider
 
-# Mapping from abstract effort level to Gemini thinking_budget (in tokens)
-# Used when thinking=enabled to configure Gemini's built-in thinking feature
-EFFORT_TO_THINKING_BUDGET = {
-    "low": 1024,
-    "medium": 4096,
-    "high": 8192,
-    "max": 16384,
+# Mapping from abstract effort level to Gemini thinking_level
+# Used to configure Gemini's built-in thinking feature.
+# Note: the ThinkingLevel enum has no MAX, so "max" maps to HIGH.
+# Note: "disabled" maps to MINIMAL to suppress Gemini's default dynamic thinking.
+EFFORT_TO_THINKING_LEVEL = {
+    "disabled": "MINIMAL",
+    "low": "LOW",
+    "medium": "MEDIUM",
+    "high": "HIGH",
+    "max": "HIGH",
 }
 DEFAULT_EFFORT = "medium"
 
@@ -21,7 +24,7 @@ class GeminiProvider(LLMProvider):
             api_key: API key for the provider
             base_url: Custom base URL (optional, Gemini usually doesn't need it)
             model_id: Model identifier
-            thinking: "enabled" or "disabled" — whether to enable extended thinking
+            thinking: "enabled" or "disabled" - whether to enable extended thinking
             effort: Reasoning effort level: "low", "medium", "high", or "max"
         """
         try:
@@ -36,18 +39,17 @@ class GeminiProvider(LLMProvider):
         self.effort = effort
 
     def _build_thinking_config(self):
-        """Build Gemini thinking_config dict when thinking is enabled.
-        
+        """Build Gemini thinking_config dict for GenerateContentConfig.
+
+        Uses thinking_level only; thinking_budget and thinking_level are
+        mutually exclusive in the Gemini API, so never send both fields.
+
         Returns:
-            dict with "thinking_budget" and "include_thoughts" keys, or None if disabled.
+            dict with "thinking_level" key.
         """
-        if self.thinking == "enabled":
-            budget = EFFORT_TO_THINKING_BUDGET.get(self.effort, EFFORT_TO_THINKING_BUDGET["medium"])
-            return {
-                "thinking_budget": budget,
-                "include_thoughts": True
-            }
-        return None
+        key = "disabled" if self.thinking == "disabled" else self.effort
+        level = EFFORT_TO_THINKING_LEVEL.get(key, EFFORT_TO_THINKING_LEVEL["medium"])
+        return {"thinking_level": level}
 
     def _convert_schema(self, anthropic_schema):
         """Convert Anthropic JSON schema to Gemini FunctionDeclaration format."""
@@ -185,10 +187,10 @@ class GeminiProvider(LLMProvider):
 
         return SimpleNamespace(content=content, stop_reason=stop_reason)
 
-    def _log_if_needed(self, logger, log_tag, config_kwargs):
-        """Log the final config after thinking injection if logger is provided."""
+    def _log_if_needed(self, logger, log_tag, request_data):
+        """Log the final request payload (model, contents, config) if logger is provided."""
         if logger and log_tag:
-            logger.log_api_call(log_tag, config_kwargs)
+            logger.log_api_call(log_tag, request_data)
 
     def safe_request(self, payload, logger=None, log_tag=""):
         gemini_tools = self._convert_tools(payload.get("tools"))
@@ -206,9 +208,11 @@ class GeminiProvider(LLMProvider):
         if thinking_config:
             config_kwargs["thinking_config"] = thinking_config
 
-        self._log_if_needed(logger, log_tag, config_kwargs)
-
         config = self.types.GenerateContentConfig(**config_kwargs)
+        self._log_if_needed(
+            logger, log_tag,
+            {"model": self.model_id, "contents": gemini_msgs, "config": config}
+        )
 
         try:
             resp = self.client.models.generate_content(
@@ -234,9 +238,11 @@ class GeminiProvider(LLMProvider):
         if thinking_config:
             config_kwargs["thinking_config"] = thinking_config
 
-        self._log_if_needed(logger, log_tag, config_kwargs)
-
         config = self.types.GenerateContentConfig(**config_kwargs)
+        self._log_if_needed(
+            logger, log_tag,
+            {"model": self.model_id, "contents": gemini_msgs, "config": config}
+        )
 
         try:
             print("\n[Agent] ", end="", flush=True)

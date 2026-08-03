@@ -13,7 +13,7 @@ class LLMProvider(ABC):
             api_key: API key for the provider.
             base_url: Custom base URL (optional).
             model_id: Model identifier.
-            thinking: "enabled" or "disabled" — whether to enable extended thinking.
+            thinking: "enabled" or "disabled" - whether to enable extended thinking.
             effort: Reasoning effort level: "low", "medium", "high", or "max".
         """
         pass
