@@ -131,33 +131,76 @@ class MyAgent:
     # Implementation of size estimation and basic compaction
     # For C-Style safety, we just slice the history if it's too long
     def _compact_context(self):
-        if len(self.history) > 40:
-            print("[*] Context limit reaching threshold, compacting history...")
-            head = self.history[:5]
+        # Token estimation based on chars (approx 3.5 chars/token for mixed content)
+        total_chars = sum(len(str(m.get("content", ""))) for m in self.history)
+        est_tokens = total_chars / 3.5
+        
+        # Soft limit for compression (e.g., 128k tokens for a 1M model)
+        soft_limit = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
+        
+        if est_tokens < soft_limit or len(self.history) < 20:
+            return
 
-            # Note: Find a safe breakpoint (a plain text user message)
-            # to prevent cutting off the tool_use and tool_result combination.
-            safe_idx = len(self.history) - 10
-            while safe_idx > 5:
-                msg = self.history[safe_idx]
-                if msg["role"] == "user":
-                    content = msg.get("content", "")
-                    # If it's not a list containing tool_result,
-                    # it indicates a safe starting point.
-                    is_tool_result = isinstance(content, list) and any(
-                        isinstance(b, dict) and b.get("type") == "tool_result" for b in content
-                    )
-                    if not is_tool_result:
-                        break
-                safe_idx -= 1
+        print(f"[*] Context limit reached (~{int(est_tokens)} tokens), compacting history via LLM...")
+        
+        # 1. Full archive backup
+        archive_dir = os.path.join(self.session.current_session_dir, "archives")
+        os.makedirs(archive_dir, exist_ok=True)
+        archive_path = os.path.join(archive_dir, f"history_{len(self.history)}.json")
+        with open(archive_path, "w", encoding="utf-8") as f:
+            json.dump(self.history, f, ensure_ascii=False, indent=2, default=self.session._default_serializer)
 
-            # Backup
-            if safe_idx <= 5:
-                safe_idx = len(self.history) - 10
+        head_size = 5
+        recent_size = 15
+        
+        head = self.history[:head_size]
+        recent = self.history[-recent_size:]
+        
+        # Ensure recent starts cleanly with a user message to prevent breaking tool_result pairs
+        while recent and (recent[0]["role"] != "user" or isinstance(recent[0].get("content"), list)):
+            recent.pop(0)
+            if len(recent) <= 5: 
+                break
 
-            snip_msg = {"role": "user", "content": "[snipped previous messages to save context]"}
-            self.history = head + [snip_msg] + self.history[safe_idx:]
-            self.session.save_history(self.history)
+        middle = self.history[head_size : len(self.history) - len(recent)]
+        middle_text = json.dumps(middle, ensure_ascii=False, indent=2, default=self.session._default_serializer)
+        
+        if len(middle_text) > 200000:
+            middle_text = middle_text[-200000:]
+
+        # 2. Ask LLM to generate a structured summary
+        summary_prompt = (
+            "Please summarize the following conversation history.\n"
+            "Focus on:\n"
+            "1. <goals>: Current tasks and acceptance criteria.\n"
+            "2. <completed>: What has been done so far.\n"
+            "3. <decisions>: Key technical decisions and reasons.\n"
+            "4. <artifacts>: Key file paths, variable names, or error codes.\n"
+            "5. <pending>: What still needs to be done.\n\n"
+            "Output strictly in XML format using the tags above."
+        )
+
+        summary_payload = {
+            "messages": [{"role": "user", "content": summary_prompt + "\n\nHistory:\n" + middle_text}],
+            "max_tokens": 2000,
+            "system": "You are a concise memory summarization AI."
+        }
+        
+        resp, err = self.client.safe_request(summary_payload, log_tag="COMPRESSION SUMMARY")
+        if err:
+            print(f"[-] Compression failed: {err}. Falling back to basic snip.")
+            summary_content = "[Compression Failed. History snipped.]"
+        else:
+            summary_content = self.client.extract_text(resp.content)
+
+        summary_msg = {
+            "role": "user",
+            "content": f"[System: Context compacted at {archive_path}]\n\n<conversation_summary>\n{summary_content}\n</conversation_summary>"
+        }
+        
+        self.history = head + [summary_msg] + recent
+        self.session.save_history(self.history)
+        print("[+] Context compacted successfully.")
 
     def step(self):
         # 1. Inject Memory & Build System Prompt
