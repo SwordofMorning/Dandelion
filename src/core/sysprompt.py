@@ -76,14 +76,29 @@ class PromptBuilder:
             "Always prioritize your original user request and constraints."
         )
 
-        # 5. Memories (index). Kept AFTER static sections on purpose:
+        # 5. Language Policy (static, cache-friendly)
+        # User-facing output may be in the user's language; internal storage
+        # must stay ASCII-only so keyword retrieval (space-split) keeps working.
+        sections.append(
+            "Language Policy:\n"
+            "1. User-facing replies and final deliverables (documents, reports) MAY use the user's language (e.g., Chinese).\n"
+            "2. INTERNAL ARTIFACTS MUST BE ENGLISH/ASCII ONLY, including: tool inputs for 'remember' and 'update_state' "
+            "(name, description, tags, content, target, todos, completed), memory files under llm/memory/, the MEMORY.md index, "
+            "task_state.json, artifact filenames, and any intermediate storage.\n"
+            "3. Rationale: internal keyword retrieval splits on ASCII whitespace; non-ASCII (Chinese) text breaks matching. "
+            "If the user speaks Chinese, translate internal state/memory content into English before storing.\n"
+            "4. Tools enforce this strictly: if 'remember' or 'update_state' returns an ASCII-only error, "
+            "translate the offending values to English and re-submit."
+        )
+
+        # 6. Memories (index). Kept AFTER static sections on purpose:
         #    memory index changes when 'remember' is called, so it must stay in
         #    the tail region of the system prompt to preserve prefix caching.
         index = self.memory.get_index_text()
         if index:
             sections.append(f"Relevant Memories:\n{index}\nRespect user preferences from memory.")
 
-        # 6. Target/Task State and Attention Management
+        # 7. Target/Task State and Attention Management
         state_file = os.path.join(self.workspace_dir, "llm/task", "task_state.json")
         if os.path.exists(state_file):
             try:

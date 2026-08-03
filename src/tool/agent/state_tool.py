@@ -55,10 +55,28 @@ class StateTool(BaseTool):
                 pass
         return state
 
+    @staticmethod
+    def _has_non_ascii(value):
+        """True if the value (str or list of str) contains non-ASCII chars."""
+        if isinstance(value, list):
+            return any(ord(ch) > 127 for v in value for ch in str(v or ""))
+        return any(ord(ch) > 127 for ch in str(value or ""))
+
     def execute(self, **kwargs):
         # Merge semantics: only provided fields are updated, so partial
         # updates never wipe out the rest of the task state.
         state = self._load()
+
+        # ASCII-only enforcement (Language Policy): task_state.json is injected
+        # into the system prompt and internal tooling splits on ASCII spaces,
+        # so non-ASCII (e.g. Chinese) values are rejected with a hint to translate.
+        for key in ("target", "todos", "completed"):
+            if key in kwargs and kwargs.get(key) is not None and self._has_non_ascii(kwargs.get(key)):
+                return False, (
+                    f"Error: 'update_state' stores ASCII-only content for '{key}' "
+                    "(non-ASCII text breaks internal handling). Please translate "
+                    f"'{kwargs.get(key)}' to English and re-submit."
+                )
 
         if "target" in kwargs and kwargs.get("target") is not None:
             state["target"] = kwargs.get("target")

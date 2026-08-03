@@ -33,10 +33,24 @@ class MemoryTool(BaseTool):
         description = kwargs.get("description", "")
         tags = kwargs.get("tags", "general")
         content = kwargs.get("content", "")
-        
+
         if not name or not content:
             return False, "Error: name and content are required."
-            
+
+        # ASCII-only enforcement (Language Policy): internal storage must stay
+        # ASCII so keyword retrieval (space-split) keeps working. Chinese or
+        # other non-ASCII values are rejected with a clear hint to translate.
+        non_ascii = [
+            v for v in (name, description, tags, content)
+            if any(ord(ch) > 127 for ch in str(v or ""))
+        ]
+        if non_ascii:
+            return False, (
+                "Error: 'remember' stores ASCII-only content (non-ASCII text breaks "
+                "keyword retrieval). Please translate the following values to English "
+                f"and re-submit: {non_ascii}"
+            )
+
         success = self.memory.write_memory(name, description, tags, content)
         if success:
             return True, f"Successfully saved memory topic '{name}'."
