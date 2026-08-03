@@ -1,4 +1,5 @@
 # src/core/memory.py
+
 import os
 import json
 import re
@@ -89,3 +90,45 @@ class MemoryManager:
             parts.append(f"--- Memory: {mem['name']} ---\n{mem['body']}")
         parts.append("</relevant_memories>")
         return "\n\n".join(parts)
+
+    def write_memory(self, name, description, tags, content):
+        import datetime
+        safe_name = name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+        filename = f"{safe_name}.md"
+        filepath = os.path.join(self.memory_dir, filename)
+        
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        frontmatter = (
+            "---\n"
+            f"name: {name}\n"
+            f"description: {description}\n"
+            f"tags: [{tags}]\n"
+            f"updated_at: {now}\n"
+            "---\n"
+        )
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(frontmatter + content)
+            
+        self._update_index(name, description, tags, now)
+        return True
+        
+    def _update_index(self, name, description, tags, updated_at):
+        index_lines = []
+        if os.path.exists(self.index_file):
+            with open(self.index_file, "r", encoding="utf-8") as f:
+                index_lines = f.readlines()
+                
+        # Remove old entry if it exists to avoid duplicates
+        index_lines = [l for l in index_lines if not l.startswith(f"- [{name}]")]
+        
+        # Add new entry
+        index_lines.append(f"- [{name}] {description} (tags: {tags}) [updated: {updated_at}]\n")
+        
+        # Keep under 200 lines to prevent MEMORY.md from blowing up System Prompt
+        if len(index_lines) > 200:
+            index_lines = index_lines[-200:]
+            
+        with open(self.index_file, "w", encoding="utf-8") as f:
+            f.writelines(index_lines)

@@ -14,7 +14,8 @@ from src.tool import (
     BashTool, LoadSkillTool, MarkdownTool,
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
-    ReadExcelTool, WriteExcelTool
+    ReadExcelTool, WriteExcelTool,
+    StateTool, MemoryTool
 )
 
 # Create a module-level CLIPrinter instance for convenience
@@ -77,6 +78,9 @@ class MyAgent:
         edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
         # Others
         web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
+        # Memory
+        state_tool = StateTool(workspace_dir=self.workspace_dir)
+        memory_tool = MemoryTool(self.memory)
 
         # Create full tools mapping for Orchestrator
         all_tools = {
@@ -109,7 +113,8 @@ class MyAgent:
             bash, skill_loader, md_editor,
             grep_tool, write_tool, read_tool, list_tool,
             edit_tool, plan_tool, spawn_subagent, web_search_tool,
-            read_excel_tool, write_excel_tool
+            read_excel_tool, write_excel_tool,
+            state_tool, memory_tool
         ]
 
         for t in tool_list:
@@ -160,31 +165,15 @@ class MyAgent:
         # Dynamic System Prompt injection
         system_prompt = self.prompt_builder.build()
 
+        # --- Memory ---
+        # Append dynamic memories to system_prompt instead of mutating req_messages.
+        # Since 'system' is the last field in the payload, this preserves the 
+        # entire prefix cache of 'tools' + 'messages'.
+        if memories_content:
+            system_prompt += f"\n\n{memories_content}"
+
+        # Pure append-only copy, ZERO mutations.
         req_messages = self.history.copy()
-
-        # Find last user message to inject memory
-        last_user_idx = -1
-        for i in range(len(req_messages) - 1, -1, -1):
-            if req_messages[i].get("role") == "user":
-                last_user_idx = i
-                break
-
-        if memories_content and last_user_idx != -1:
-            msg_content = req_messages[last_user_idx].get("content", "")
-
-            # Preventing forced type casting to lists from violating API structure specifications
-            if isinstance(msg_content, str):
-                req_messages[last_user_idx] = {
-                    **req_messages[last_user_idx],
-                    "content": memories_content + "\n\n" + msg_content
-                }
-            # If it is a list (e.g., containing tool_result), insert a text block at the beginning.
-            elif isinstance(msg_content, list):
-                new_content = [{"type": "text", "text": memories_content + "\n\n"}] + msg_content
-                req_messages[last_user_idx] = {
-                    **req_messages[last_user_idx],
-                    "content": new_content
-                }
 
         # 2. Main LLM API Call
         payload = {
@@ -200,6 +189,7 @@ class MyAgent:
         # Streaming
         resp, err = self.client.safe_stream_request(payload)
 
+        # POST-call logging
         self.session.log_api_call("POST LLM CALL - MAIN", resp if resp else {"error": err})
 
         if err is not None:
@@ -227,8 +217,28 @@ class MyAgent:
             else:
                 success, output = False, f"Unknown tool: {block.name}"
 
-            cli.print(f"    Result length: {len(str(output))} chars", level="debug")
-            results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
+            output_str = str(output)
+            cli.print(f"    Result length: {len(output_str)} chars", level="debug")
+            
+            # --- Large Output Offload ---
+            # Prevents context explosion and delays the need for compression.
+            MAX_INLINE_CHARS = 80000 # 80K
+            if len(output_str) > MAX_INLINE_CHARS:
+                artifact_dir = os.path.join(self.session.current_session_dir, "artifacts")
+                os.makedirs(artifact_dir, exist_ok=True)
+                artifact_path = os.path.join(artifact_dir, f"{block.id}.txt")
+
+                with open(artifact_path, "w", encoding="utf-8") as f:
+                    f.write(output_str)
+
+                trunc_output = output_str[:MAX_INLINE_CHARS]
+                trunc_output += (
+                    f"\n\n... [OUTPUT TRUNCATED. Full {len(output_str)} chars output "
+                    f"saved to {artifact_path}. Use read_file to read specific missing parts.]"
+                )
+                output_str = trunc_output
+
+            results.append({"type": "tool_result", "tool_use_id": block.id, "content": output_str})
 
         if results:
             self.history.append({"role": "user", "content": results})
@@ -236,12 +246,4 @@ class MyAgent:
             self.history.append({"role": "user", "content": "You indicated a tool use but provided no valid tool calls."})
 
         self.session.save_history(self.history)
-        return True # Continue loop to process tool results
-
-    def inject_user_message(self, text):
-        self.history.append({"role": "user", "content": text})
-        self.session.save_history(self.history)
-        self._compact_context()
-
-    def reload_history(self):
-        self.history = self.session.load_history()
+        return True
