@@ -14,6 +14,7 @@ TAVILY_API_KEY=
 ; ============================================================
 ; Part 2: Provider Profiles & Model Registries
 ; ============================================================
+
 [DeepSeek]
 SDK_TYPE="Anthropic"
 BASE_URL=https://api.deepseek.com/anthropic
@@ -25,15 +26,19 @@ MODEL_LIST = [
         "max_token": 819200,
         "TPM": 0,
         "RPM": 10,
-        "RPD": 500
+        "RPD": 500,
+        "thinking": "enabled",
+        "effort": "max"
     },
     {
         "model_id": "deepseek-v4-flash",
-        "conditions": ["tool_heavy","long_context", "simple"],
+        "conditions": ["tool_heavy", "long_context", "simple"],
         "max_token": 819200,
         "TPM": 1000000,
         "RPM": 10,
-        "RPD": 500
+        "RPD": 500,
+        "thinking": "enabled",
+        "effort": "max"
     }
     ]
 
@@ -43,12 +48,14 @@ BASE_URL=https://openrouter.ai/api
 API_KEY=
 MODEL_LIST = [
     {
-        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free", 
+        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "conditions": ["long_context", "tool_heavy", "complex"],
         "max_token": 819200,
         "TPM": 1000000,
         "RPM": 10,
-        "RPD": 500
+        "RPD": 500,
+        "thinking": "disabled",
+        "effort": "medium"
     }
     ]
 
@@ -71,7 +78,9 @@ MODEL_LIST = [
         "max_token": 81920,
         "TPM": 250000,
         "RPM": 15,
-        "RPD": 500
+        "RPD": 500,
+        "thinking": "enabled",
+        "effort": "low"
     }
     ]
 
@@ -86,6 +95,8 @@ MODEL_LIST = [
         "max_token": 819200,
         "TPM": 1000000,
         "RPM": 40,
-        "RPD": 0
+        "RPD": 0,
+        "thinking": "enabled",
+        "effort": "medium"
     }
     ]

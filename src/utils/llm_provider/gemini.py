@@ -3,9 +3,27 @@
 import json
 from .base import LLMProvider
 
+# Mapping from abstract effort level to Gemini thinking_budget (in tokens)
+# Used when thinking=enabled to configure Gemini's built-in thinking feature
+EFFORT_TO_THINKING_BUDGET = {
+    "low": 1024,
+    "medium": 4096,
+    "high": 8192,
+    "max": 16384,
+}
+DEFAULT_EFFORT = "medium"
+
 
 class GeminiProvider(LLMProvider):
-    def __init__(self, api_key, base_url, model_id):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
+        """
+        Args:
+            api_key: API key for the provider
+            base_url: Custom base URL (optional, Gemini usually doesn't need it)
+            model_id: Model identifier
+            thinking: "enabled" or "disabled" — whether to enable extended thinking
+            effort: Reasoning effort level: "low", "medium", "high", or "max"
+        """
         try:
             from google import genai
             self.types = genai.types
@@ -14,6 +32,22 @@ class GeminiProvider(LLMProvider):
         except ImportError:
             raise RuntimeError("google-genai package is required. Please 'pip install google-genai'")
         self.model_id = model_id
+        self.thinking = thinking
+        self.effort = effort
+
+    def _build_thinking_config(self):
+        """Build Gemini thinking_config dict when thinking is enabled.
+        
+        Returns:
+            dict with "thinking_budget" and "include_thoughts" keys, or None if disabled.
+        """
+        if self.thinking == "enabled":
+            budget = EFFORT_TO_THINKING_BUDGET.get(self.effort, EFFORT_TO_THINKING_BUDGET["medium"])
+            return {
+                "thinking_budget": budget,
+                "include_thoughts": True
+            }
+        return None
 
     def _convert_schema(self, anthropic_schema):
         """Convert Anthropic JSON schema to Gemini FunctionDeclaration format."""
@@ -156,12 +190,18 @@ class GeminiProvider(LLMProvider):
         gemini_msgs = self._convert_messages(payload.get("messages", []))
         sys_prompt = payload.get("system", "")
 
-        config = self.types.GenerateContentConfig(
-            system_instruction=sys_prompt,
-            tools=gemini_tools,
-            temperature=0.7,
-            max_output_tokens=payload.get("max_tokens", 8192)
-        )
+        # Build GenerateContentConfig with optional thinking_config
+        config_kwargs = {
+            "system_instruction": sys_prompt,
+            "tools": gemini_tools,
+            "temperature": 0.7,
+            "max_output_tokens": payload.get("max_tokens", 8192)
+        }
+        thinking_config = self._build_thinking_config()
+        if thinking_config:
+            config_kwargs["thinking_config"] = thinking_config
+
+        config = self.types.GenerateContentConfig(**config_kwargs)
 
         try:
             resp = self.client.models.generate_content(
@@ -176,12 +216,18 @@ class GeminiProvider(LLMProvider):
         gemini_msgs = self._convert_messages(payload.get("messages", []))
         sys_prompt = payload.get("system", "")
 
-        config = self.types.GenerateContentConfig(
-            system_instruction=sys_prompt,
-            tools=gemini_tools,
-            temperature=0.7,
-            max_output_tokens=payload.get("max_tokens", 8192)
-        )
+        # Build GenerateContentConfig with optional thinking_config
+        config_kwargs = {
+            "system_instruction": sys_prompt,
+            "tools": gemini_tools,
+            "temperature": 0.7,
+            "max_output_tokens": payload.get("max_tokens", 8192)
+        }
+        thinking_config = self._build_thinking_config()
+        if thinking_config:
+            config_kwargs["thinking_config"] = thinking_config
+
+        config = self.types.GenerateContentConfig(**config_kwargs)
 
         try:
             print("\n[Agent] ", end="", flush=True)

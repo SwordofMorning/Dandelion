@@ -2,9 +2,27 @@
 
 from .base import LLMProvider
 
+# Mapping from abstract effort level to Anthropic-compatible budget_tokens
+# Used when thinking=enabled to control reasoning token budget
+EFFORT_TO_BUDGET_TOKENS = {
+    "low": 1024,
+    "medium": 4096,
+    "high": 8192,
+    "max": 16384,
+}
+DEFAULT_EFFORT = "medium"
+
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self, api_key, base_url, model_id):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
+        """
+        Args:
+            api_key: API key for the provider
+            base_url: Custom base URL (optional)
+            model_id: Model identifier
+            thinking: "enabled" or "disabled" — whether to enable extended thinking
+            effort: Reasoning effort level: "low", "medium", "high", or "max"
+        """
         from anthropic import Anthropic
         self.client = Anthropic(
             api_key=api_key,
@@ -15,9 +33,22 @@ class AnthropicProvider(LLMProvider):
             }
         )
         self.model_id = model_id
+        self.thinking = thinking
+        self.effort = effort
+
+    def _inject_thinking(self, payload):
+        """Inject Anthropic-compatible thinking configuration into payload when enabled."""
+        if self.thinking == "enabled":
+            budget = EFFORT_TO_BUDGET_TOKENS.get(self.effort, EFFORT_TO_BUDGET_TOKENS["medium"])
+            payload["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": budget
+            }
+        # If thinking is "disabled", we intentionally do NOT add a thinking field
 
     def safe_request(self, payload):
         payload["model"] = self.model_id
+        self._inject_thinking(payload)
         try:
             resp = self.client.messages.create(**payload)
             return resp, None
@@ -26,6 +57,7 @@ class AnthropicProvider(LLMProvider):
 
     def safe_stream_request(self, payload):
         payload["model"] = self.model_id
+        self._inject_thinking(payload)
         try:
             print("\n[Agent] ", end="", flush=True)
             with self.client.messages.stream(**payload) as stream:

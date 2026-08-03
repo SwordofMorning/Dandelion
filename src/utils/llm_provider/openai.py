@@ -3,9 +3,29 @@
 import json
 from .base import LLMProvider
 
+# Mapping from abstract effort level to OpenAI reasoning_effort string
+# Only applied when thinking=enabled. Standard GPT models will ignore this parameter.
+# Note: "max" maps to "high" because OpenAI doesn't support "xhigh" broadly
+# (only o3/o4 series models support "xhigh", so we stay safe with "high")
+EFFORT_TO_REASONING_EFFORT = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "max": "high",
+}
+DEFAULT_EFFORT = "medium"
+
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, api_key, base_url, model_id):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
+        """
+        Args:
+            api_key: API key for the provider
+            base_url: Custom base URL (optional)
+            model_id: Model identifier
+            thinking: "enabled" or "disabled" — whether to enable extended thinking
+            effort: Reasoning effort level: "low", "medium", "high", or "max"
+        """
         try:
             import openai
             # Custom base_url
@@ -16,6 +36,17 @@ class OpenAIProvider(LLMProvider):
         except ImportError:
             raise RuntimeError("openai package is required. Please 'pip install openai'")
         self.model_id = model_id
+        self.thinking = thinking
+        self.effort = effort
+
+    def _inject_reasoning_effort(self, req_kwargs):
+        """Inject OpenAI reasoning_effort into request kwargs when thinking is enabled."""
+        if self.thinking == "enabled":
+            reasoning_level = EFFORT_TO_REASONING_EFFORT.get(
+                self.effort, EFFORT_TO_REASONING_EFFORT["medium"]
+            )
+            req_kwargs["reasoning_effort"] = reasoning_level
+        # If thinking is "disabled", we simply don't add the parameter
 
     def _convert_tools(self, anthropic_tools):
         if not anthropic_tools:
@@ -135,6 +166,9 @@ class OpenAIProvider(LLMProvider):
         if tools:
             req_kwargs["tools"] = tools
 
+        # Inject reasoning_effort when thinking is enabled
+        self._inject_reasoning_effort(req_kwargs)
+
         try:
             resp = self.client.chat.completions.create(**req_kwargs)
             choice = resp.choices[0]
@@ -167,6 +201,9 @@ class OpenAIProvider(LLMProvider):
         }
         if tools:
             req_kwargs["tools"] = tools
+
+        # Inject reasoning_effort when thinking is enabled
+        self._inject_reasoning_effort(req_kwargs)
 
         try:
             print("\n[Agent] ", end="", flush=True)
