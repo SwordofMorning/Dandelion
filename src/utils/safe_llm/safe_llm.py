@@ -3,14 +3,33 @@
 import threading
 from ..llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
 
-
 class SafeLLMClient:
-    def __init__(self, api_key, base_url, model_id, sdk_type="Anthropic", all_models=None, sub_list=None):
+    def __init__(self, api_key, base_url, model_id, sdk_type="Anthropic",
+                 all_models=None, sub_list=None,
+                 thinking="disabled", effort="medium",
+                 logger=None):
+        """
+        Args:
+            api_key: API key for the main agent.
+            base_url: Base URL for the main agent.
+            model_id: Model identifier for the main agent.
+            sdk_type: SDK type ("Anthropic", "OpenAI", "Gemini", "AI Studio", "NVIDIA").
+            all_models: Full model list for sub-agent routing.
+            sub_list: Sub-agent model ID list.
+            thinking: "enabled" or "disabled" — extended thinking toggle for the main agent.
+            effort: Reasoning effort: "low", "medium", "high", or "max".
+            logger: Optional SessionManager for logging final API payloads (post-injection).
+        """
         self.model_id = model_id
         self.sdk_type = sdk_type.lower()
+        self.thinking = thinking
+        self.effort = effort
+        self.logger = logger
 
         # Setup Default Provider for Main Agent
-        self.provider = self._create_provider(self.sdk_type, api_key, base_url, model_id)
+        self.provider = self._create_provider(
+            self.sdk_type, api_key, base_url, model_id, thinking, effort
+        )
 
         # Setup Router Components for SubAgents
         self._provider_cache = {}
@@ -26,44 +45,69 @@ class SafeLLMClient:
             self._registry = ModelRegistry(all_models, sub_list)
             self._policy = RoutingPolicy(self._registry, self._rate_limiter)
 
-    def _create_provider(self, sdk_type, api_key, base_url, model_id):
+    # ------------------------------------------------------------------
+    # Provider factory (now passes thinking & effort)
+    # ------------------------------------------------------------------
+
+    def _create_provider(self, sdk_type, api_key, base_url, model_id,
+                         thinking="disabled", effort="medium"):
         sdk = sdk_type.lower()
         if sdk in ["ai studio", "gemini"]:
-            return GeminiProvider(api_key, base_url, model_id)
+            return GeminiProvider(api_key, base_url, model_id,
+                                  thinking=thinking, effort=effort)
         elif sdk in ["openai", "nvidia"]:
-            return OpenAIProvider(api_key, base_url, model_id)
+            return OpenAIProvider(api_key, base_url, model_id,
+                                  thinking=thinking, effort=effort)
         else:
-            return AnthropicProvider(api_key, base_url, model_id)
+            return AnthropicProvider(api_key, base_url, model_id,
+                                     thinking=thinking, effort=effort)
 
-    def safe_request(self, payload):
-        """Non-streaming request wrapper."""
-        return self.provider.safe_request(payload)
+    # ------------------------------------------------------------------
+    # Public request wrappers
+    # ------------------------------------------------------------------
 
-    def safe_stream_request(self, payload):
+    def safe_request(self, payload, log_tag="PRE LLM CALL - MAIN"):
+        """Non-streaming request wrapper. Logs final payload after thinking injection."""
+        return self.provider.safe_request(payload, logger=self.logger, log_tag=log_tag)
+
+    def safe_stream_request(self, payload, log_tag="PRE LLM CALL - MAIN"):
         """
         Wraps the SDK stream call for real-time console output.
         Automatically accumulates tool calls and text into a final message.
+        Logs the final payload (with thinking injected) if logger is configured.
 
         Returns:
             (response_object, None) on success.
             (None, error_string) on failure.
         """
-        return self.provider.safe_stream_request(payload)
+        return self.provider.safe_stream_request(payload, logger=self.logger, log_tag=log_tag)
 
     def extract_text(self, content):
         """Extract text wrapper."""
         return self.provider.extract_text(content)
 
+    # ------------------------------------------------------------------
+    # Sub-agent routing
+    # ------------------------------------------------------------------
+
     def _get_cached_provider(self, alias):
+        """Get or create a cached provider for the given sub-agent alias.
+
+        Reads thinking & effort from RegistryModelSpec so each sub-agent
+        model receives its own thinking configuration.
+        """
         with self._cache_lock:
             if alias not in self._provider_cache:
                 spec = self._registry.get_spec(alias)
                 self._provider_cache[alias] = self._create_provider(
-                    spec.provider, spec.api_key, spec.base_url, spec.model_id
+                    spec.provider, spec.api_key, spec.base_url, spec.model_id,
+                    thinking=spec.thinking,
+                    effort=spec.effort,
                 )
             return self._provider_cache[alias]
 
-    def route_request(self, payload, task_description="", toolset_name="minimal", depth=0, stream=True, estimated_tokens=2000):
+    def route_request(self, payload, task_description="", toolset_name="minimal",
+                      depth=0, stream=True, estimated_tokens=2000):
         if not self._policy or not self._policy.specs:
             # Fallback to main agent model if SUB_LIST is empty
             return self.safe_stream_request(payload) if stream else self.safe_request(payload)
@@ -76,7 +120,8 @@ class SafeLLMClient:
         spec = self._registry.get_spec(alias)
         inferred = self._policy.infer_conditions(task_description, toolset_name, depth)
 
-        print(f"\n[Router] Task -> '{alias}' | Conditions: {sorted(list(inferred))}")
+        print(f"\n[Router] Task -> '{alias}' | Conditions: {sorted(list(inferred))}"
+              f" | thinking={spec.thinking} effort={spec.effort}")
 
         max_retries = 2
         current_alias = alias
@@ -88,7 +133,8 @@ class SafeLLMClient:
             req_payload = payload.copy()
             req_payload["model"] = spec.model_id
 
-            resp, err = provider.safe_stream_request(req_payload) if stream else provider.safe_request(req_payload)
+            log_tag = f"SUBAGENT ROUTE -> '{current_alias}' (attempt {attempt+1})"
+            resp, err = provider.safe_stream_request(req_payload, logger=self.logger, log_tag=log_tag) if stream else provider.safe_request(req_payload, logger=self.logger, log_tag=log_tag)
 
             if err is None:
                 return resp, None
@@ -107,7 +153,8 @@ class SafeLLMClient:
                     fb_payload = payload.copy()
                     fb_payload["model"] = fb_spec.model_id
 
-                    resp, err = fb_provider.safe_stream_request(fb_payload) if stream else fb_provider.safe_request(fb_payload)
+                    fb_tag = f"SUBAGENT FALLBACK -> '{fallback_alias}'"
+                    resp, err = fb_provider.safe_stream_request(fb_payload, logger=self.logger, log_tag=fb_tag) if stream else fb_provider.safe_request(fb_payload, logger=self.logger, log_tag=fb_tag)
                     if err is None:
                         return resp, None
 

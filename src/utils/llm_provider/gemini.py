@@ -3,9 +3,30 @@
 import json
 from .base import LLMProvider
 
+# Mapping from abstract effort level to Gemini thinking_level
+# Used to configure Gemini's built-in thinking feature.
+# Note: the ThinkingLevel enum has no MAX, so "max" maps to HIGH.
+# Note: "disabled" maps to MINIMAL to suppress Gemini's default dynamic thinking.
+EFFORT_TO_THINKING_LEVEL = {
+    "disabled": "MINIMAL",
+    "low": "LOW",
+    "medium": "MEDIUM",
+    "high": "HIGH",
+    "max": "HIGH",
+}
+DEFAULT_EFFORT = "medium"
+
 
 class GeminiProvider(LLMProvider):
-    def __init__(self, api_key, base_url, model_id):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
+        """
+        Args:
+            api_key: API key for the provider
+            base_url: Custom base URL (optional, Gemini usually doesn't need it)
+            model_id: Model identifier
+            thinking: "enabled" or "disabled" - whether to enable extended thinking
+            effort: Reasoning effort level: "low", "medium", "high", or "max"
+        """
         try:
             from google import genai
             self.types = genai.types
@@ -14,6 +35,21 @@ class GeminiProvider(LLMProvider):
         except ImportError:
             raise RuntimeError("google-genai package is required. Please 'pip install google-genai'")
         self.model_id = model_id
+        self.thinking = thinking
+        self.effort = effort
+
+    def _build_thinking_config(self):
+        """Build Gemini thinking_config dict for GenerateContentConfig.
+
+        Uses thinking_level only; thinking_budget and thinking_level are
+        mutually exclusive in the Gemini API, so never send both fields.
+
+        Returns:
+            dict with "thinking_level" key.
+        """
+        key = "disabled" if self.thinking == "disabled" else self.effort
+        level = EFFORT_TO_THINKING_LEVEL.get(key, EFFORT_TO_THINKING_LEVEL["medium"])
+        return {"thinking_level": level}
 
     def _convert_schema(self, anthropic_schema):
         """Convert Anthropic JSON schema to Gemini FunctionDeclaration format."""
@@ -151,16 +187,31 @@ class GeminiProvider(LLMProvider):
 
         return SimpleNamespace(content=content, stop_reason=stop_reason)
 
-    def safe_request(self, payload):
+    def _log_if_needed(self, logger, log_tag, request_data):
+        """Log the final request payload (model, contents, config) if logger is provided."""
+        if logger and log_tag:
+            logger.log_api_call(log_tag, request_data)
+
+    def safe_request(self, payload, logger=None, log_tag=""):
         gemini_tools = self._convert_tools(payload.get("tools"))
         gemini_msgs = self._convert_messages(payload.get("messages", []))
         sys_prompt = payload.get("system", "")
 
-        config = self.types.GenerateContentConfig(
-            system_instruction=sys_prompt,
-            tools=gemini_tools,
-            temperature=0.7,
-            max_output_tokens=payload.get("max_tokens", 8192)
+        # Build GenerateContentConfig with optional thinking_config
+        config_kwargs = {
+            "system_instruction": sys_prompt,
+            "tools": gemini_tools,
+            "temperature": 0.7,
+            "max_output_tokens": payload.get("max_tokens", 8192)
+        }
+        thinking_config = self._build_thinking_config()
+        if thinking_config:
+            config_kwargs["thinking_config"] = thinking_config
+
+        config = self.types.GenerateContentConfig(**config_kwargs)
+        self._log_if_needed(
+            logger, log_tag,
+            {"model": self.model_id, "contents": gemini_msgs, "config": config}
         )
 
         try:
@@ -171,16 +222,26 @@ class GeminiProvider(LLMProvider):
         except Exception as e:
             return None, str(e)
 
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, logger=None, log_tag=""):
         gemini_tools = self._convert_tools(payload.get("tools"))
         gemini_msgs = self._convert_messages(payload.get("messages", []))
         sys_prompt = payload.get("system", "")
 
-        config = self.types.GenerateContentConfig(
-            system_instruction=sys_prompt,
-            tools=gemini_tools,
-            temperature=0.7,
-            max_output_tokens=payload.get("max_tokens", 8192)
+        # Build GenerateContentConfig with optional thinking_config
+        config_kwargs = {
+            "system_instruction": sys_prompt,
+            "tools": gemini_tools,
+            "temperature": 0.7,
+            "max_output_tokens": payload.get("max_tokens", 8192)
+        }
+        thinking_config = self._build_thinking_config()
+        if thinking_config:
+            config_kwargs["thinking_config"] = thinking_config
+
+        config = self.types.GenerateContentConfig(**config_kwargs)
+        self._log_if_needed(
+            logger, log_tag,
+            {"model": self.model_id, "contents": gemini_msgs, "config": config}
         )
 
         try:

@@ -3,9 +3,29 @@
 import json
 from .base import LLMProvider
 
+# Mapping from abstract effort level to OpenAI reasoning_effort string
+# Only applied when thinking=enabled. Standard GPT models will ignore this parameter.
+# Note: "max" maps to "high" because OpenAI doesn't support "xhigh" broadly
+# (only o3/o4 series models support "xhigh", so we stay safe with "high")
+EFFORT_TO_REASONING_EFFORT = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "max": "high",
+}
+DEFAULT_EFFORT = "medium"
+
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, api_key, base_url, model_id):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
+        """
+        Args:
+            api_key: API key for the provider
+            base_url: Custom base URL (optional)
+            model_id: Model identifier
+            thinking: "enabled" or "disabled" - whether to enable extended thinking
+            effort: Reasoning effort level: "low", "medium", "high", or "max"
+        """
         try:
             import openai
             # Custom base_url
@@ -16,6 +36,29 @@ class OpenAIProvider(LLMProvider):
         except ImportError:
             raise RuntimeError("openai package is required. Please 'pip install openai'")
         self.model_id = model_id
+        self.thinking = thinking
+        self.effort = effort
+
+        # Detect endpoints that do not support the reasoning_effort parameter.
+        # NVIDIA's OpenAI-compatible endpoint hosts models (e.g. z-ai, glm-5.2)
+        # that reject reasoning_effort with a 400 unsupported-parameter error.
+        self._supports_reasoning_effort = not (
+            "nvidia" in (base_url or "").lower()
+            or any(k in model_id.lower() for k in ("z-ai", "glm-5.2"))
+        )
+
+    def _inject_reasoning_effort(self, req_kwargs):
+        """Inject OpenAI reasoning_effort into request kwargs when thinking is enabled.
+
+        Only injected for endpoints that explicitly support the parameter;
+        NVIDIA-hosted models (z-ai, glm-5.2) reject it with a 400 error.
+        """
+        if self.thinking == "enabled" and self._supports_reasoning_effort:
+            reasoning_level = EFFORT_TO_REASONING_EFFORT.get(
+                self.effort, EFFORT_TO_REASONING_EFFORT["medium"]
+            )
+            req_kwargs["reasoning_effort"] = reasoning_level
+        # If thinking is "disabled", we simply don't add the parameter
 
     def _convert_tools(self, anthropic_tools):
         if not anthropic_tools:
@@ -122,7 +165,12 @@ class OpenAIProvider(LLMProvider):
 
         return SimpleNamespace(content=content, stop_reason=stop_reason)
 
-    def safe_request(self, payload):
+    def _log_if_needed(self, logger, log_tag, payload):
+        """Log the final payload after injection if logger is provided."""
+        if logger and log_tag:
+            logger.log_api_call(log_tag, payload)
+
+    def safe_request(self, payload, logger=None, log_tag=""):
         tools = self._convert_tools(payload.get("tools"))
         messages = self._convert_messages(payload.get("messages", []), payload.get("system", ""))
 
@@ -134,6 +182,10 @@ class OpenAIProvider(LLMProvider):
         }
         if tools:
             req_kwargs["tools"] = tools
+
+        # Inject reasoning_effort when thinking is enabled
+        self._inject_reasoning_effort(req_kwargs)
+        self._log_if_needed(logger, log_tag, req_kwargs)
 
         try:
             resp = self.client.chat.completions.create(**req_kwargs)
@@ -154,7 +206,7 @@ class OpenAIProvider(LLMProvider):
         except Exception as e:
             return None, str(e)
 
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, logger=None, log_tag=""):
         tools = self._convert_tools(payload.get("tools"))
         messages = self._convert_messages(payload.get("messages", []), payload.get("system", ""))
 
@@ -167,6 +219,10 @@ class OpenAIProvider(LLMProvider):
         }
         if tools:
             req_kwargs["tools"] = tools
+
+        # Inject reasoning_effort when thinking is enabled
+        self._inject_reasoning_effort(req_kwargs)
+        self._log_if_needed(logger, log_tag, req_kwargs)
 
         try:
             print("\n[Agent] ", end="", flush=True)

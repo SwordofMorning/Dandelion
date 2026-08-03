@@ -2,9 +2,26 @@
 
 from .base import LLMProvider
 
+# Mapping from abstract effort level to Anthropic-compatible budget_tokens
+# Used when thinking=enabled to control reasoning token budget
+EFFORT_TO_BUDGET_TOKENS = {
+    "low": 1024,
+    "medium": 4096,
+    "high": 8192,
+    "max": 16384,
+}
+DEFAULT_EFFORT = "medium"
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self, api_key, base_url, model_id):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
+        """
+        Args:
+            api_key: API key for the provider
+            base_url: Custom base URL (optional)
+            model_id: Model identifier
+            thinking: "enabled" or "disabled" - whether to enable extended thinking
+            effort: Reasoning effort level: "low", "medium", "high", or "max"
+        """
         from anthropic import Anthropic
         self.client = Anthropic(
             api_key=api_key,
@@ -15,17 +32,52 @@ class AnthropicProvider(LLMProvider):
             }
         )
         self.model_id = model_id
+        self.thinking = thinking
+        self.effort = effort
 
-    def safe_request(self, payload):
+        # Detect DeepSeek by base_url or model_id (case-insensitive)
+        self._is_deepseek = (
+            "deepseek" in (base_url or "").lower()
+            or "deepseek" in model_id.lower()
+        )
+
+    def _inject_thinking(self, payload):
+        """Inject thinking configuration into payload when enabled.
+
+        Two formats are supported:
+        - Standard Anthropic:  {"thinking": {"type": "enabled", "budget_tokens": N}}
+        - DeepSeek (Anthropic-compatible):
+            {"output_config": {"effort": "low"|"medium"|"high"|"max"}}
+          DeepSeek ignores budget_tokens; effort is the primary knob.
+        """
+        if self.thinking == "enabled":
+            if self._is_deepseek:
+                # DeepSeek uses output_config.effort (like OpenAI's reasoning_effort)
+                payload["output_config"] = {"effort": self.effort}
+            else:
+                budget = EFFORT_TO_BUDGET_TOKENS.get(self.effort, EFFORT_TO_BUDGET_TOKENS["medium"])
+                payload["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": budget
+                }
+        # If thinking is "disabled", we intentionally do NOT add a thinking/output_config field
+
+    def safe_request(self, payload, logger=None, log_tag=""):
         payload["model"] = self.model_id
+        self._inject_thinking(payload)
+        if logger and log_tag:
+            logger.log_api_call(log_tag, payload)
         try:
             resp = self.client.messages.create(**payload)
             return resp, None
         except Exception as e:
             return None, str(e)
 
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, logger=None, log_tag=""):
         payload["model"] = self.model_id
+        self._inject_thinking(payload)
+        if logger and log_tag:
+            logger.log_api_call(log_tag, payload)
         try:
             print("\n[Agent] ", end="", flush=True)
             with self.client.messages.stream(**payload) as stream:

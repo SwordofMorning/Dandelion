@@ -4,16 +4,65 @@ import os
 import configparser
 import json
 
+# ---------------------------------------------------------------------------
+# Validation helpers (new)
+# ---------------------------------------------------------------------------
+
+_VALID_THINKING = {"enabled", "disabled"}
+_VALID_EFFORT   = {"low", "medium", "high", "max"}
+
+def _parse_thinking(model_data: dict, model_id: str = "") -> str:
+    """Extract and validate the *thinking* field.
+
+    Returns ``"disabled"`` on missing or invalid values (safe default).
+    """
+    raw = model_data.get("thinking", "disabled")
+    if not isinstance(raw, str):
+        print(f"[!] Model '{model_id}': 'thinking' must be a string, "
+              f"got {type(raw).__name__}. Defaulting to 'disabled'.")
+        return "disabled"
+    value = raw.strip().lower()
+    if value not in _VALID_THINKING:
+        print(f"[!] Model '{model_id}': invalid thinking='{value}'. "
+              f"Expected one of {sorted(_VALID_THINKING)}. "
+              f"Defaulting to 'disabled'.")
+        return "disabled"
+    return value
+
+
+def _parse_effort(model_data: dict, model_id: str = "") -> str:
+    """Extract and validate the *effort* field.
+
+    Returns ``"medium"`` on missing or invalid values (safe default).
+    """
+    raw = model_data.get("effort", "medium")
+    if not isinstance(raw, str):
+        print(f"[!] Model '{model_id}': 'effort' must be a string, "
+              f"got {type(raw).__name__}. Defaulting to 'medium'.")
+        return "medium"
+    value = raw.strip().lower()
+    if value not in _VALID_EFFORT:
+        print(f"[!] Model '{model_id}': invalid effort='{value}'. "
+              f"Expected one of {sorted(_VALID_EFFORT)}. "
+              f"Defaulting to 'medium'.")
+        return "medium"
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Main configuration loader (modified)
+# ---------------------------------------------------------------------------
+
 def load_api_config(file_path):
     if not os.path.exists(file_path):
         return None
-    
+
     config = configparser.ConfigParser()
     config.read(file_path, encoding="utf-8")
-    
+
     if not config.has_section("Main"):
         return None
-        
+
     main_agent_id = config.get("Main", "MAIN_AGENT", fallback="")
     if not main_agent_id:
         return None
@@ -38,11 +87,11 @@ def load_api_config(file_path):
     for section in config.sections():
         if section == "Main":
             continue
-            
+
         sdk_type = config.get(section, "SDK_TYPE", fallback="Anthropic").strip('"\'')
         base_url = config.get(section, "BASE_URL", fallback="")
         api_key = config.get(section, "API_KEY", fallback="")
-        
+
         raw_models = config.get(section, "MODEL_LIST", fallback="[]")
         try:
             model_list = json.loads(raw_models)
@@ -52,10 +101,14 @@ def load_api_config(file_path):
         for model_data in model_list:
             if not isinstance(model_data, dict):
                 continue
-                
+
             model_id = model_data.get("model_id", "")
             if not model_id:
                 continue
+
+            # ---- New: parse thinking & effort with validation ----
+            thinking = _parse_thinking(model_data, model_id)
+            effort   = _parse_effort(model_data, model_id)
 
             # Enrich model data with provider info
             enriched_model = {
@@ -63,7 +116,10 @@ def load_api_config(file_path):
                 "sdk_type": sdk_type,
                 "base_url": base_url,
                 "api_key": api_key,
-                **model_data
+                **model_data,
+                # Ensure canonical values override any raw values from **model_data
+                "thinking": thinking,
+                "effort": effort,
             }
             all_models.append(enriched_model)
 
@@ -89,5 +145,8 @@ def load_api_config(file_path):
         "SUB_LIST": sub_list,
         "ALL_MODELS": all_models,
         # Search api key
-        "TAVILY_API_KEY": tavily_api_key
+        "TAVILY_API_KEY": tavily_api_key,
+        # Think Level
+        "THINKING": active_profile.get("thinking", "disabled"),
+        "EFFORT": active_profile.get("effort", "medium"),
     }

@@ -26,10 +26,12 @@ class MyAgent:
         self.session = session_manager
         self.workspace_dir = workspace_dir
         self.error_count = 0
-        
+        self.thinking = str(config.get("THINKING", "disabled")).strip().lower()
+        self.effort = str(config.get("EFFORT", "medium")).strip().lower()
+
         # 1. Load history from the current session
         self.history = self.session.load_history()
-        
+
         # 2. Init Sub-Systems with absolute paths
         self.client = SafeLLMClient(
             api_key=self.config["ANTHROPIC_API_KEY"],
@@ -37,20 +39,23 @@ class MyAgent:
             model_id=self.config["MODEL_ID"],
             sdk_type=self.config.get("SDK_TYPE", "Anthropic"),
             all_models=self.config.get("ALL_MODELS", []),
-            sub_list=self.config.get("SUB_LIST", [])
+            sub_list=self.config.get("SUB_LIST", []),
+            thinking=self.thinking,
+            effort=self.effort,
+            logger=self.session
         )
-        
+
         # In passing session_manager as logger to maintain compatibility with legacy code
         self.memory = MemoryManager(
-            memory_dir=os.path.join(self.workspace_dir, "llm", "memory"), 
-            safe_client=self.client, 
+            memory_dir=os.path.join(self.workspace_dir, "llm", "memory"),
+            safe_client=self.client,
             logger=self.session
         )
         self.skill = SkillManager(
             skill_dir=os.path.join(self.workspace_dir, "llm", "skill")
         )
         self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config)
-        
+
         # 3. Load Tools
         self._init_tools()
 
@@ -72,7 +77,7 @@ class MyAgent:
         edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
         # Others
         web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
-        
+
         # Create full tools mapping for Orchestrator
         all_tools = {
             bash.get_name(): bash,
@@ -87,7 +92,7 @@ class MyAgent:
             read_excel_tool.get_name(): read_excel_tool,
             write_excel_tool.get_name(): write_excel_tool
         }
-        
+
         self.pool = SubAgentPool(
             safe_client=self.client,
             logger=self.session,
@@ -95,25 +100,25 @@ class MyAgent:
             all_tools=all_tools,
             max_depth=int(self.config.get("MAX_SUBAGENT_DEPTH", 3))
         )
-        
+
         plan_tool = PlanTool(self.client, self.config)
         spawn_subagent = SpawnSubagentTool(self.pool)
-        
+
         # Added all tools to the registration list
         tool_list = [
-            bash, skill_loader, md_editor, 
+            bash, skill_loader, md_editor,
             grep_tool, write_tool, read_tool, list_tool,
             edit_tool, plan_tool, spawn_subagent, web_search_tool,
             read_excel_tool, write_excel_tool
         ]
-        
+
         for t in tool_list:
             self.tools[t.get_name()] = t
-            
+
         self.tool_schemas = [
             {
-                "name": t.get_name(), 
-                "description": t.get_description(), 
+                "name": t.get_name(),
+                "description": t.get_description(),
                 "input_schema": t.get_schema()
             } for t in self.tools.values()
         ]
@@ -124,15 +129,15 @@ class MyAgent:
         if len(self.history) > 40:
             print("[*] Context limit reaching threshold, compacting history...")
             head = self.history[:5]
-            
-            # Note: Find a safe breakpoint (a plain text user message) 
+
+            # Note: Find a safe breakpoint (a plain text user message)
             # to prevent cutting off the tool_use and tool_result combination.
             safe_idx = len(self.history) - 10
             while safe_idx > 5:
                 msg = self.history[safe_idx]
                 if msg["role"] == "user":
                     content = msg.get("content", "")
-                    # If it's not a list containing tool_result, 
+                    # If it's not a list containing tool_result,
                     # it indicates a safe starting point.
                     is_tool_result = isinstance(content, list) and any(
                         isinstance(b, dict) and b.get("type") == "tool_result" for b in content
@@ -154,16 +159,16 @@ class MyAgent:
         memories_content = self.memory.load_memories_string(self.history)
         # Dynamic System Prompt injection
         system_prompt = self.prompt_builder.build()
-        
+
         req_messages = self.history.copy()
-        
+
         # Find last user message to inject memory
         last_user_idx = -1
         for i in range(len(req_messages) - 1, -1, -1):
             if req_messages[i].get("role") == "user":
                 last_user_idx = i
                 break
-                
+
         if memories_content and last_user_idx != -1:
             msg_content = req_messages[last_user_idx].get("content", "")
 
@@ -188,39 +193,40 @@ class MyAgent:
             "max_tokens": int(self.config["MAX_TOKENS"]),
             "system": system_prompt
         }
-        
-        self.session.log_api_call("PRE LLM CALL - MAIN", payload)
-        
+
+        # PRE-call logging is now handled inside SafeLLMClient -> Provider
+        # (after thinking injection), so we only log POST here.
+
         # Streaming
         resp, err = self.client.safe_stream_request(payload)
-        
+
         self.session.log_api_call("POST LLM CALL - MAIN", resp if resp else {"error": err})
-        
+
         if err is not None:
             print(f"[-] API Error: {err}")
-            return False 
-            
+            return False
+
         self.history.append({"role": "assistant", "content": resp.content})
         self.session.save_history(self.history)
-        
+
         # 3. Handle Output or Tools
         if resp.stop_reason != "tool_use":
-            return False 
+            return False
 
         # Handle Tools
         results = []
         for block in resp.content:
-            if block.type != "tool_use": 
+            if block.type != "tool_use":
                 continue
-                
+
             cli.print(f"\nTool requested: {block.name}", level="info")
             handler = self.tools.get(block.name)
-            
+
             if handler:
                 success, output = handler.execute(**block.input)
             else:
                 success, output = False, f"Unknown tool: {block.name}"
-                
+
             cli.print(f"    Result length: {len(str(output))} chars", level="debug")
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
 
@@ -228,7 +234,7 @@ class MyAgent:
             self.history.append({"role": "user", "content": results})
         else:
             self.history.append({"role": "user", "content": "You indicated a tool use but provided no valid tool calls."})
-            
+
         self.session.save_history(self.history)
         return True # Continue loop to process tool results
 

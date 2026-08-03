@@ -2,6 +2,45 @@
 
 from dataclasses import dataclass, field
 
+# ---------------------------------------------------------------------------
+# Validation helpers (mirror those in config.py for consistency)
+# ---------------------------------------------------------------------------
+
+_VALID_THINKING = {"enabled", "disabled"}
+_VALID_EFFORT   = {"low", "medium", "high", "max"}
+
+def _safe_thinking(value, model_id: str = "") -> str:
+    """Normalise a thinking value, falling back to ``"disabled"``."""
+    if not isinstance(value, str):
+        print(f"[!] Model '{model_id}': 'thinking' must be a string. "
+              f"Defaulting to 'disabled'.")
+        return "disabled"
+    v = value.strip().lower()
+    if v not in _VALID_THINKING:
+        print(f"[!] Model '{model_id}': invalid thinking='{v}'. "
+              f"Defaulting to 'disabled'.")
+        return "disabled"
+    return v
+
+
+def _safe_effort(value, model_id: str = "") -> str:
+    """Normalise an effort value, falling back to ``"medium"``."""
+    if not isinstance(value, str):
+        print(f"[!] Model '{model_id}': 'effort' must be a string. "
+              f"Defaulting to 'medium'.")
+        return "medium"
+    v = value.strip().lower()
+    if v not in _VALID_EFFORT:
+        print(f"[!] Model '{model_id}': invalid effort='{v}'. "
+              f"Defaulting to 'medium'.")
+        return "medium"
+    return v
+
+
+# ---------------------------------------------------------------------------
+# Dataclass
+# ---------------------------------------------------------------------------
+
 @dataclass
 class RegistryModelSpec:
     alias: str
@@ -14,6 +53,14 @@ class RegistryModelSpec:
     tpm: int = 0
     rpm: int = 0
     rpd: int = 0
+    # ---- New: thinking & effort fields ----
+    thinking: str = "disabled"
+    effort: str = "medium"
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
 
 class ModelRegistry:
     def __init__(self, all_models, sub_list):
@@ -24,12 +71,16 @@ class ModelRegistry:
     def _load(self, all_models, sub_list):
         # Create lookup dict for quick model matching
         model_lookup = {m.get("model_id"): m for m in all_models}
-        
+
         # Strictly follow the priority in SUB_LIST
         for model_id in sub_list:
             if model_id in model_lookup:
                 m = model_lookup[model_id]
-                alias = model_id 
+                alias = model_id
+
+                thinking = _safe_thinking(m.get("thinking", "disabled"), model_id)
+                effort   = _safe_effort(m.get("effort", "medium"), model_id)
+
                 spec = RegistryModelSpec(
                     alias=alias,
                     provider=m.get("sdk_type", "Anthropic"),
@@ -41,6 +92,8 @@ class ModelRegistry:
                     tpm=m.get("TPM", 0),
                     rpm=m.get("RPM", 0),
                     rpd=m.get("RPD", 0),
+                    thinking=thinking,
+                    effort=effort,
                 )
                 self._specs[alias] = spec
                 self._ordered_aliases.append(alias)
