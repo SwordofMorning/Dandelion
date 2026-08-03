@@ -81,7 +81,7 @@ class PromptBuilder:
         )
 
         # 6. Target/Task State and Attention Management
-        state_file = os.path.join(self.workspace_dir, ".regent", "task_state.json")
+        state_file = os.path.join(self.workspace_dir, "llm/task", "task_state.json")
         if os.path.exists(state_file):
             try:
                 with open(state_file, "r", encoding="utf-8") as f:

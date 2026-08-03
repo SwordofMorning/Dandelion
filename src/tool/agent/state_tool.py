@@ -7,7 +7,7 @@ from ..base_tool import BaseTool
 class StateTool(BaseTool):
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
-        self.state_dir = os.path.join(self.workspace_dir, ".regent")
+        self.state_dir = os.path.join(self.workspace_dir, "llm/task")
         self.state_file = os.path.join(self.state_dir, "task_state.json")
         os.makedirs(self.state_dir, exist_ok=True)
         
