@@ -290,3 +290,11 @@ class MyAgent:
 
         self.session.save_history(self.history)
         return True
+
+    def inject_user_message(self, text):
+        self.history.append({"role": "user", "content": text})
+        self.session.save_history(self.history)
+        self._compact_context()
+
+    def reload_history(self):
+        self.history = self.session.load_history()
