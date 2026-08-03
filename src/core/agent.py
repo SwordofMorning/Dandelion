@@ -26,8 +26,6 @@ class MyAgent:
         self.session = session_manager
         self.workspace_dir = workspace_dir
         self.error_count = 0
-
-        # --- Thinking configuration for the active profile ---
         self.thinking = str(config.get("THINKING", "disabled")).strip().lower()
         self.effort = str(config.get("EFFORT", "medium")).strip().lower()
 
@@ -43,7 +41,8 @@ class MyAgent:
             all_models=self.config.get("ALL_MODELS", []),
             sub_list=self.config.get("SUB_LIST", []),
             thinking=self.thinking,
-            effort=self.effort
+            effort=self.effort,
+            logger=self.session
         )
 
         # In passing session_manager as logger to maintain compatibility with legacy code
@@ -195,7 +194,8 @@ class MyAgent:
             "system": system_prompt
         }
 
-        self.session.log_api_call("PRE LLM CALL - MAIN", payload)
+        # PRE-call logging is now handled inside SafeLLMClient -> Provider
+        # (after thinking injection), so we only log POST here.
 
         # Streaming
         resp, err = self.client.safe_stream_request(payload)

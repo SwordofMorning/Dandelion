@@ -6,7 +6,8 @@ from ..llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
 class SafeLLMClient:
     def __init__(self, api_key, base_url, model_id, sdk_type="Anthropic",
                  all_models=None, sub_list=None,
-                 thinking="disabled", effort="medium"):
+                 thinking="disabled", effort="medium",
+                 logger=None):
         """
         Args:
             api_key: API key for the main agent.
@@ -17,11 +18,13 @@ class SafeLLMClient:
             sub_list: Sub-agent model ID list.
             thinking: "enabled" or "disabled" — extended thinking toggle for the main agent.
             effort: Reasoning effort: "low", "medium", "high", or "max".
+            logger: Optional SessionManager for logging final API payloads (post-injection).
         """
         self.model_id = model_id
         self.sdk_type = sdk_type.lower()
         self.thinking = thinking
         self.effort = effort
+        self.logger = logger
 
         # Setup Default Provider for Main Agent
         self.provider = self._create_provider(
@@ -63,20 +66,21 @@ class SafeLLMClient:
     # Public request wrappers
     # ------------------------------------------------------------------
 
-    def safe_request(self, payload):
-        """Non-streaming request wrapper."""
-        return self.provider.safe_request(payload)
+    def safe_request(self, payload, log_tag="PRE LLM CALL - MAIN"):
+        """Non-streaming request wrapper. Logs final payload after thinking injection."""
+        return self.provider.safe_request(payload, logger=self.logger, log_tag=log_tag)
 
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, log_tag="PRE LLM CALL - MAIN"):
         """
         Wraps the SDK stream call for real-time console output.
         Automatically accumulates tool calls and text into a final message.
+        Logs the final payload (with thinking injected) if logger is configured.
 
         Returns:
             (response_object, None) on success.
             (None, error_string) on failure.
         """
-        return self.provider.safe_stream_request(payload)
+        return self.provider.safe_stream_request(payload, logger=self.logger, log_tag=log_tag)
 
     def extract_text(self, content):
         """Extract text wrapper."""
@@ -116,7 +120,6 @@ class SafeLLMClient:
         spec = self._registry.get_spec(alias)
         inferred = self._policy.infer_conditions(task_description, toolset_name, depth)
 
-        # Thinking state alongside routing info
         print(f"\n[Router] Task -> '{alias}' | Conditions: {sorted(list(inferred))}"
               f" | thinking={spec.thinking} effort={spec.effort}")
 
@@ -130,7 +133,8 @@ class SafeLLMClient:
             req_payload = payload.copy()
             req_payload["model"] = spec.model_id
 
-            resp, err = provider.safe_stream_request(req_payload) if stream else provider.safe_request(req_payload)
+            log_tag = f"SUBAGENT ROUTE -> '{current_alias}' (attempt {attempt+1})"
+            resp, err = provider.safe_stream_request(req_payload, logger=self.logger, log_tag=log_tag) if stream else provider.safe_request(req_payload, logger=self.logger, log_tag=log_tag)
 
             if err is None:
                 return resp, None
@@ -149,7 +153,8 @@ class SafeLLMClient:
                     fb_payload = payload.copy()
                     fb_payload["model"] = fb_spec.model_id
 
-                    resp, err = fb_provider.safe_stream_request(fb_payload) if stream else fb_provider.safe_request(fb_payload)
+                    fb_tag = f"SUBAGENT FALLBACK -> '{fallback_alias}'"
+                    resp, err = fb_provider.safe_stream_request(fb_payload, logger=self.logger, log_tag=fb_tag) if stream else fb_provider.safe_request(fb_payload, logger=self.logger, log_tag=fb_tag)
                     if err is None:
                         return resp, None
 

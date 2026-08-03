@@ -153,7 +153,12 @@ class OpenAIProvider(LLMProvider):
 
         return SimpleNamespace(content=content, stop_reason=stop_reason)
 
-    def safe_request(self, payload):
+    def _log_if_needed(self, logger, log_tag, payload):
+        """Log the final payload after injection if logger is provided."""
+        if logger and log_tag:
+            logger.log_api_call(log_tag, payload)
+
+    def safe_request(self, payload, logger=None, log_tag=""):
         tools = self._convert_tools(payload.get("tools"))
         messages = self._convert_messages(payload.get("messages", []), payload.get("system", ""))
 
@@ -168,6 +173,7 @@ class OpenAIProvider(LLMProvider):
 
         # Inject reasoning_effort when thinking is enabled
         self._inject_reasoning_effort(req_kwargs)
+        self._log_if_needed(logger, log_tag, req_kwargs)
 
         try:
             resp = self.client.chat.completions.create(**req_kwargs)
@@ -188,7 +194,7 @@ class OpenAIProvider(LLMProvider):
         except Exception as e:
             return None, str(e)
 
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, logger=None, log_tag=""):
         tools = self._convert_tools(payload.get("tools"))
         messages = self._convert_messages(payload.get("messages", []), payload.get("system", ""))
 
@@ -204,6 +210,7 @@ class OpenAIProvider(LLMProvider):
 
         # Inject reasoning_effort when thinking is enabled
         self._inject_reasoning_effort(req_kwargs)
+        self._log_if_needed(logger, log_tag, req_kwargs)
 
         try:
             print("\n[Agent] ", end="", flush=True)

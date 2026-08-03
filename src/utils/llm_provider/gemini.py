@@ -185,7 +185,12 @@ class GeminiProvider(LLMProvider):
 
         return SimpleNamespace(content=content, stop_reason=stop_reason)
 
-    def safe_request(self, payload):
+    def _log_if_needed(self, logger, log_tag, config_kwargs):
+        """Log the final config after thinking injection if logger is provided."""
+        if logger and log_tag:
+            logger.log_api_call(log_tag, config_kwargs)
+
+    def safe_request(self, payload, logger=None, log_tag=""):
         gemini_tools = self._convert_tools(payload.get("tools"))
         gemini_msgs = self._convert_messages(payload.get("messages", []))
         sys_prompt = payload.get("system", "")
@@ -200,6 +205,8 @@ class GeminiProvider(LLMProvider):
         thinking_config = self._build_thinking_config()
         if thinking_config:
             config_kwargs["thinking_config"] = thinking_config
+
+        self._log_if_needed(logger, log_tag, config_kwargs)
 
         config = self.types.GenerateContentConfig(**config_kwargs)
 
@@ -211,7 +218,7 @@ class GeminiProvider(LLMProvider):
         except Exception as e:
             return None, str(e)
 
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, logger=None, log_tag=""):
         gemini_tools = self._convert_tools(payload.get("tools"))
         gemini_msgs = self._convert_messages(payload.get("messages", []))
         sys_prompt = payload.get("system", "")
@@ -226,6 +233,8 @@ class GeminiProvider(LLMProvider):
         thinking_config = self._build_thinking_config()
         if thinking_config:
             config_kwargs["thinking_config"] = thinking_config
+
+        self._log_if_needed(logger, log_tag, config_kwargs)
 
         config = self.types.GenerateContentConfig(**config_kwargs)
 

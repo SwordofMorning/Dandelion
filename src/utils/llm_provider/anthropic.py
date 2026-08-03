@@ -46,18 +46,22 @@ class AnthropicProvider(LLMProvider):
             }
         # If thinking is "disabled", we intentionally do NOT add a thinking field
 
-    def safe_request(self, payload):
+    def safe_request(self, payload, logger=None, log_tag=""):
         payload["model"] = self.model_id
         self._inject_thinking(payload)
+        if logger and log_tag:
+            logger.log_api_call(log_tag, payload)
         try:
             resp = self.client.messages.create(**payload)
             return resp, None
         except Exception as e:
             return None, str(e)
 
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, logger=None, log_tag=""):
         payload["model"] = self.model_id
         self._inject_thinking(payload)
+        if logger and log_tag:
+            logger.log_api_call(log_tag, payload)
         try:
             print("\n[Agent] ", end="", flush=True)
             with self.client.messages.stream(**payload) as stream:
