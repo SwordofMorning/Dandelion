@@ -21,3 +21,6 @@ Thumbs.db
 # Regent runtime file
 llm/memory/
 llm/task/
+
+# Agent Playground
+playground/
