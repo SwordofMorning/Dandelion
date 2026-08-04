@@ -1,4 +1,9 @@
-# src/utils/cli/interactive_cli.py
+##
+# @file src/utils/cli/interactive_cli.py
+# @date 2026/08/04
+# 
+# @brief Interactive CLI for Regent.
+#
 
 import os
 import shlex
@@ -6,6 +11,11 @@ import tempfile
 import subprocess
 import builtins
 
+##
+# @note import toolkit
+# if success, there will be Tab auto-completion
+# if not, could still use without auto-completion.
+#
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import NestedCompleter, PathCompleter
@@ -17,14 +27,23 @@ except ImportError:
 
 from .cli_printer import CLIPrinter
 
-
+##
+# @brief Interactive CLI for Regent workspace management.
+#
 class InteractiveCLI:
-    """Interactive CLI for Regent workspace management."""
-
+    ##
+    # @brief Constructor.
+    # 
+    # @param agent_instance: instance of class MyAgent.
+    # @param session_manager: instance of SessionManager.
+    # 
     def __init__(self, agent_instance, session_manager):
+        # Assignment object.
         self.agent = agent_instance
         self.session = session_manager
+        # @note This will clear staged message when you exit Regent without commit, which have no save function.
         self.staged_message = ""
+        # Init printer.
         self.cli = CLIPrinter()
 
         # Initialize prompt_toolkit session with in-memory history
@@ -32,18 +51,25 @@ class InteractiveCLI:
             self.prompt_session = PromptSession(history=InMemoryHistory())
         else:
             self.prompt_session = None
+        # End-if
+    # End-def
 
+    ##
+    # @brief Dynamically build the context-aware completer before each prompt.
+    #
     def _build_completer(self):
-        """Dynamically build the context-aware completer before each prompt."""
         if not HAS_PTK:
             return None
 
+        # Gather session's info, used for `checkout` and `branch`.
         sessions = self.session.list_sessions()
         session_targets = {}
         for s in sessions:
             session_targets[s['name']] = None
             session_targets[s['id']] = None
+        # End-for
 
+        # Completion Dict.
         comp_dict = {
             'branch': {
                 '-a': None,
@@ -64,7 +90,11 @@ class InteractiveCLI:
         }
 
         return NestedCompleter.from_nested_dict(comp_dict)
+    # End-def
 
+    ##
+    # @brief Help.
+    #
     def _print_help(self):
         help_text = (
             f"{self.cli.C_CYAN}\n================= REGENT WORKSPACE ================={self.cli.C_RESET}\n"
@@ -84,15 +114,27 @@ class InteractiveCLI:
             f"{self.cli.C_CYAN}===================================================={self.cli.C_RESET}\n"
         )
         self.cli.raw(help_text)
+    # End-def
 
+    ##
+    # @brief Map session names to exact session IDs
+    #
+    # @param target, session name or ID
+    # 
+    # @return Session's ID, or None.
+    #
     def _resolve_session_id(self, target):
-        """Map user-friendly session names to exact session IDs"""
         sessions = self.session.list_sessions()
         for s in sessions:
             if target == s['id'] or target == s['name']:
                 return s['id']
+        # End-for
         return None
+    # End-def
 
+    ##
+    # @brief
+    #
     def _cmd_branch(self, args):
         if not args or args[0] == '-a':
             sessions = self.session.list_sessions()
