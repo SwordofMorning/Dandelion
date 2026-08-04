@@ -1,22 +1,20 @@
-# src/utils/cli_printer.py
-
-"""
-CLIPrinter - Standalone CLI printing and formatting utility.
-
-Extracted from InteractiveCLI to provide reusable colored output functionality
-with no dependencies on the original class.
-"""
+##
+# @file src/utils/cli_printer.py
+# @date 2026/08/04
+# 
+# @brief CLI printing and formatting utility.
+# A wrapper function, string -> cli_printer -> string(colorful) -> terminal
+#
 
 import builtins
 
-class CLIPrinter:
-    """
-    Centralized print utility with color control and level-based formatting.
-    
-    Provides consistent colored output for CLI applications with support for
-    different message levels: info, success, error, warning, debug, agent, raw.
-    """
-    
+##
+# @brief Centralized print class with color control and level-based formatting.
+# 
+# Provides consistent colored output for CLI applications with support for
+# different message levels: info, success, error, warning, debug, agent, raw.
+#
+class CLIPrinter:    
     # ANSI Color Codes
     C_RESET   = "\033[0m"
     C_RED     = "\033[31m"
@@ -27,16 +25,17 @@ class CLIPrinter:
     C_CYAN    = "\033[36m"
     C_GRAY    = "\033[90m"
 
+    ##
+    # @brief Centralized print function with color control and level dispatch.
+    # 
+    # @param msg: The message to print.
+    # @param level: Output level - one of: info, success, error, warning, debug, agent, raw.
+    # @param end: String appended after the message (default: newline).
+    #
+    # @return None.
+    #
     @staticmethod
     def print(msg: str, level: str = "info", end: str = "\n") -> None:
-        """
-        Centralized print function with color control and level dispatch.
-        
-        Args:
-            msg: The message to print.
-            level: Output level - one of: info, success, error, warning, debug, agent, raw.
-            end: String appended after the message (default: newline).
-        """
         # Handle prefix newline cleanly
         if msg.startswith("\n"):
             builtins.print("\n", end="")
@@ -65,67 +64,83 @@ class CLIPrinter:
             
         builtins.print(f"{prefix}{msg}", end=end)
 
+    ##
+    # @brief Print an informational message (cyan [*]).
+    #
     @staticmethod
     def info(msg: str, end: str = "\n") -> None:
-        """Print an informational message (cyan [*])."""
         CLIPrinter.print(msg, level="info", end=end)
 
+    ##
+    # @brief Print a success message (green [+]).
+    #
     @staticmethod
     def success(msg: str, end: str = "\n") -> None:
-        """Print a success message (green [+])."""
         CLIPrinter.print(msg, level="success", end=end)
 
+    ##
+    # @brief Print an error message (red [-]).
+    #
     @staticmethod
     def error(msg: str, end: str = "\n") -> None:
-        """Print an error message (red [-])."""
         CLIPrinter.print(msg, level="error", end=end)
 
+    ##
+    # @brief Print a warning message (yellow [!]).
+    #
     @staticmethod
     def warning(msg: str, end: str = "\n") -> None:
-        """Print a warning message (yellow [!])."""
         CLIPrinter.print(msg, level="warning", end=end)
 
+    ##
+    # @brief Print a debug message (gray [>]).
+    #
     @staticmethod
     def debug(msg: str, end: str = "\n") -> None:
-        """Print a debug message (gray [>])."""
         CLIPrinter.print(msg, level="debug", end=end)
 
+    ##
+    # @brief Print an agent message (magenta [Agent]).
+    #
     @staticmethod
     def agent(msg: str, end: str = "\n") -> None:
-        """Print an agent message (magenta [Agent])."""
         CLIPrinter.print(msg, level="agent", end=end)
 
+    ##
+    # @brief Print a raw message without any prefix or formatting.
+    #
     @staticmethod
     def raw(msg: str, end: str = "\n") -> None:
-        """Print a raw message without any prefix or formatting."""
         CLIPrinter.print(msg, level="raw", end=end)
 
+    ##
+    # @brief Print a divider line.
+    # 
+    # @param char: Character to repeat for the divider.
+    # @param length: Length of the divider line.
+    # @param color: Optional color constant (e.g., CLIPrinter.C_CYAN).
+    # 
+    # @return None.
+    #
     @staticmethod
     def divider(char: str = "=", length: int = 50, color: str = None) -> None:
-        """
-        Print a divider line.
-        
-        Args:
-            char: Character to repeat for the divider.
-            length: Length of the divider line.
-            color: Optional color constant (e.g., CLIPrinter.C_CYAN).
-        """
         line = char * length
         if color:
             line = f"{color}{line}{CLIPrinter.C_RESET}"
         CLIPrinter.raw(line)
 
+    ##
+    # @brief Print a formatted header with title centered between dividers.
+    # 
+    # @param title: The header title text.
+    # @param char: Divider character.
+    # @param length: Total width of the header.
+    # @param color: Optional color for the dividers.
+    # 
+    # @return None.
+    #
     @staticmethod
     def header(title: str, char: str = "=", length: int = 50, color: str = None) -> None:
-        """
-        Print a formatted header with title centered between dividers.
-        
-        Args:
-            title: The header title text.
-            char: Divider character.
-            length: Total width of the header.
-            color: Optional color for the dividers.
-        """
         if color is None:
             color = CLIPrinter.C_CYAN
         CLIPrinter.divider(char, length, color)
@@ -134,25 +149,25 @@ class CLIPrinter:
         CLIPrinter.raw(f"{' ' * padding}{title}")
         CLIPrinter.divider(char, length, color)
 
+    ##
+    # @brief Print a key-value pair with optional colors.
+    # 
+    # @param key: The key/label.
+    # @param value: The value.
+    # @param key_color: Optional color for the key.
+    # @param value_color: Optional color for the value.
+    # 
+    # @return None.
+    #
     @staticmethod
     def key_value(key: str, value: str, key_color: str = None, value_color: str = None) -> None:
-        """
-        Print a key-value pair with optional colors.
-        
-        Args:
-            key: The key/label.
-            value: The value.
-            key_color: Optional color for the key.
-            value_color: Optional color for the value.
-        """
         formatted_key = f"{key_color}{key}{CLIPrinter.C_RESET}" if key_color else key
         formatted_value = f"{value_color}{value}{CLIPrinter.C_RESET}" if value_color else value
         CLIPrinter.raw(f"{formatted_key}: {formatted_value}")
 
 
-# Convenience instance for direct usage
+# @note Convenience instance for direct usage
 cli = CLIPrinter()
-
 
 if __name__ == "__main__":
     # Demo usage
