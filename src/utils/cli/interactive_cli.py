@@ -57,6 +57,8 @@ class InteractiveCLI:
     ##
     # @brief Dynamically build the context-aware completer before each prompt.
     #
+    # @return comp_dict or None (if not HAS_PTK).
+    #
     def _build_completer(self):
         if not HAS_PTK:
             return None
@@ -117,11 +119,14 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief Map session names to exact session IDs
+    # @brief Map session names to exact session IDs.
     #
-    # @param target, session name or ID
+    # @param target: Session name or ID.
     # 
-    # @return Session's ID, or None.
+    # @return ID or None.
+    # 
+    # @retval id: Session's ID.
+    # @retval None: No such id or name.
     #
     def _resolve_session_id(self, target):
         sessions = self.session.list_sessions()
@@ -133,24 +138,37 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief
+    # @brief `brach` command handle. 
+    #
+    # @param args: Terminal input.
     #
     def _cmd_branch(self, args):
+        # @note List all branch.
         if not args or args[0] == '-a':
+            # Get sessions.
             sessions = self.session.list_sessions()
             self.cli.success("\nAvailable Sessions (Branches):")
+            # Traverse and print.
             for s in sessions:
                 mark = "*" if s["id"] == self.session.current_session_id else " "
                 self.cli.raw(f" {mark} {s['name']:<20} | {s['id']}")
+            # End-for
             self.cli.raw("")
+        # End-if
 
+        # @note Delete branch <name/id>.
         elif args[0] == '-d':
+            # No <name/id>.
             if len(args) < 2:
                 self.cli.error("Usage: branch -d <name/id>")
                 return
+            # End-if
+
+            # Get Session's ID.
             target = args[1]
             session_id = self._resolve_session_id(target)
 
+            # TODO HERE
             if not session_id:
                 self.cli.error(f"Error: Session '{target}' not found.")
                 return
@@ -164,8 +182,13 @@ class InteractiveCLI:
                     self.cli.error(msg)
             else:
                 self.cli.error("Deletion aborted.")
+        # End-elif
+
+        # @note: others
         else:
             self.cli.error(f"Unknown branch argument: {args[0]}. Try 'branch -a' or 'branch -d'.")
+        # End-else
+    # End-def
 
     def _cmd_checkout(self, args):
         if not args:
