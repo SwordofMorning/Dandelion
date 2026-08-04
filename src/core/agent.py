@@ -224,24 +224,30 @@ class MyAgent:
 
     def _soft_token_limit(self):
         """History-only token budget: MAX_CONTEXT_TOKENS minus the fixed request
-        overhead (system prompt, tool schemas, cached memories tail). Compaction
-        triggered at this limit keeps the COMBINED provider request within
-        MAX_CONTEXT_TOKENS instead of silently overflowing it."""
+        overhead (system prompt + tool schemas). The system prompt already
+        includes the memories tail (_last_system_prompt is built by appending
+        memories_content in step()), so memories must NOT be counted twice here.
+        Compaction triggered at this limit keeps the COMBINED provider request
+        within MAX_CONTEXT_TOKENS instead of silently overflowing it."""
         base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
         overhead = self._estimate_tokens([
             {"role": "user", "content": self._last_system_prompt or self.prompt_builder.build()},
             {"role": "user", "content": json.dumps(self.tool_schemas, ensure_ascii=False)},
         ])
-        if self._memories_cache:
-            overhead += self._estimate_tokens(
-                [{"role": "user", "content": self._memories_cache}])
         return max(int(base - overhead), 1)
 
     def _compact_context(self):
         est_tokens = self._estimate_tokens()
         soft_limit = self._soft_token_limit()
 
-        if est_tokens < soft_limit or len(self.history) < 20:
+        # The token budget is the SINGLE compaction switch: when history alone
+        # is already at/over the soft limit, compaction must run regardless of
+        # history length. A short-history bypass here (e.g. len < 20) would let
+        # the request overflow MAX_CONTEXT_TOKENS (and provider rejection) in
+        # setups with a large system prompt + tool schemas. Short-history
+        # handling lives INSIDE the compaction flow below (head+summary-only
+        # fallback), never before the budget check.
+        if est_tokens < soft_limit:
             return
 
         print(f"[*] Context limit reached (~{int(est_tokens)} tokens), compacting history via LLM...")
@@ -329,6 +335,16 @@ class MyAgent:
         # Invalidate memories cache: history changed (plain-text user messages may shift).
         self._invalidate_memories_cache()
         print("[+] Context compacted successfully.")
+
+        # Post-compaction guard: if the budget is still exceeded (e.g. the
+        # configured MAX_CONTEXT_TOKENS is below the system-prompt + tools
+        # overhead), warn loudly once per compaction instead of letting every
+        # subsequent step re-trigger an LLM summarization call in a loop.
+        remaining = self._estimate_tokens()
+        if remaining >= soft_limit:
+            print(f"[-] Warning: history still ~{int(remaining)} tokens after "
+                  f"compaction (soft limit ~{int(soft_limit)}). Consider raising "
+                  "MAX_CONTEXT_TOKENS or reducing system-prompt/tool overhead.")
 
     def _invalidate_memories_cache(self):
         """Drop both memory cache fields so the next _get_memories() call

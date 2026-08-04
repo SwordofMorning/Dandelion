@@ -36,8 +36,10 @@ class StateTool(BaseTool):
         state_file = self._get_state_file()
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         if not os.path.exists(state_file):
-            with open(state_file, "w", encoding="utf-8") as f:
-                json.dump({"target": "No specific target set.", "todos": [], "completed": []}, f)
+            self._atomic_write_json(
+                state_file,
+                {"target": "No specific target set.", "todos": [], "completed": []}
+            )
         return state_file
 
     def get_name(self):
@@ -83,9 +85,24 @@ class StateTool(BaseTool):
                 # on state["target"] updates.
                 if isinstance(loaded, dict):
                     state = loaded
-            except Exception:
-                pass
+                else:
+                    print(f"[-] Warning: task state at {state_file} is not a JSON "
+                          "object; falling back to a fresh default state.")
+            except Exception as e:
+                # A corrupt state file must not break the tool, but the loss is
+                # loud: the next successful update overwrites the corrupt file.
+                print(f"[-] Warning: failed to parse task state at {state_file}: {e}")
         return state
+
+    @staticmethod
+    def _atomic_write_json(path, state):
+        """Write JSON atomically (tmp + os.replace) so a crash mid-write never
+        leaves a half-written task_state.json (the attention anchor would be
+        lost and silently reset to defaults on the next turn)."""
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
 
     @staticmethod
     def _has_non_ascii(value):
@@ -117,7 +134,12 @@ class StateTool(BaseTool):
         if "completed" in kwargs and kwargs.get("completed") is not None:
             state["completed"] = kwargs.get("completed")
 
-        state_file = self._ensure_state_file()
-        with open(state_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False)
+        try:
+            state_file = self._ensure_state_file()
+            self._atomic_write_json(state_file, state)
+        except OSError as e:
+            # Disk-level failures (state path corrupted into a directory, full
+            # disk, permission errors) surface as a tool error instead of
+            # crashing the whole agent turn.
+            return False, f"Error: failed to write task state: {e}"
         return True, "Task state updated successfully. It will be reflected in your next turn."

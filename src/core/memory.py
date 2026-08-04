@@ -218,13 +218,36 @@ class MemoryManager:
         split the '---' delimiters (protects _parse_frontmatter)."""
         return str(value or "").replace("\r", " ").replace("\n", " ").replace("---", "-")
 
+    @staticmethod
+    def _sanitize_filename(name):
+        """Deterministic filename sanitization: two distinct original names must
+        never map to the same sanitized filename.
+
+        Replaces whitespace/CR/LF, path separators and Windows-reserved chars
+        with '_'. The mapping is deterministic so re-writing the SAME memory
+        (update semantics) resolves to the same file, while distinct names that
+        would collide after sanitization are rejected later by the collision
+        check in write_memory()."""
+        return (name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                .replace("\r", "_").replace("\n", "_")
+                .replace(":", "_").replace("?", "_").replace("*", "_")
+                .replace('"', "_").replace("<", "_").replace(">", "_")
+                .replace("|", "_"))
+
     def write_memory(self, name, description, tags, content, scope="global"):
         import datetime
         target_dir = self._dir_for_scope(scope)
         os.makedirs(target_dir, exist_ok=True)
 
-        safe_name = (name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-                     .replace("\r", "_").replace("\n", "_"))
+        safe_name = self._sanitize_filename(name)
+        # Length guard: overlong names would raise ENAMETOOLONG/OSError at
+        # open() time and crash the turn; reject them explicitly instead.
+        if not safe_name or len(safe_name) > 100:
+            raise ValueError(
+                "Error: memory name must be 1-100 characters after "
+                f"sanitization, got '{safe_name or ''}' ({len(safe_name)} chars). "
+                "Please choose a shorter name."
+            )
         # Reserve the tier index filename (case-insensitive): a memory named
         # "MEMORY" must never resolve to MEMORY.md, which would overwrite the
         # per-tier index file.
@@ -244,6 +267,30 @@ class MemoryManager:
         clean_desc = self._frontmatter_clean(description)
         clean_tags = self._frontmatter_clean(tags)
 
+        # Collision guard: if the sanitized path already exists but stores a
+        # DIFFERENT memory name, reject the write. Overwriting it would make the
+        # index keep stale entries (content/index inconsistency) and silently
+        # destroy the earlier memory. Re-writing the SAME name is the normal
+        # update path and stays allowed.
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    raw = f.read()
+                meta, _ = self._parse_frontmatter(raw)
+                existing_name = meta.get("name", "").strip()
+            except (OSError, UnicodeDecodeError) as e:
+                raise ValueError(
+                    f"Error: cannot verify existing memory file {filename}: {e}"
+                )
+            # _parse_frontmatter strips surrounding quotes, mirror that here so
+            # names with leading/trailing quotes never false-positive.
+            if existing_name and existing_name != clean_name.strip().strip('"').strip("'"):
+                raise ValueError(
+                    f"Error: memory name '{name}' sanitizes to '{filename}', "
+                    f"which is already used by memory '{existing_name}'. Please "
+                    "choose a distinct name."
+                )
+
         frontmatter = (
             "---\n"
             f"name: {clean_name}\n"
@@ -254,8 +301,12 @@ class MemoryManager:
             "---\n"
         )
 
-        with open(filepath, "w", encoding="utf-8") as f:
+        # Atomic write: crash mid-write must never leave a half-written memory
+        # file behind (readers skip corrupt files silently).
+        tmp_path = filepath + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(frontmatter + content)
+        os.replace(tmp_path, filepath)
 
         self._update_index(target_dir, clean_name, clean_desc, clean_tags, now)
         return True
@@ -277,5 +328,8 @@ class MemoryManager:
         if len(index_lines) > 200:
             index_lines = index_lines[-200:]
 
-        with open(index_file, "w", encoding="utf-8") as f:
+        # Atomic write (see write_memory).
+        tmp_path = index_file + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.writelines(index_lines)
+        os.replace(tmp_path, index_file)

@@ -41,7 +41,8 @@ class MemoryTool(BaseTool):
         description = kwargs.get("description", "")
         tags = kwargs.get("tags", "general")
         content = kwargs.get("content", "")
-        scope = str(kwargs.get("scope", "global")).strip().lower()
+        # Treat an explicit null scope the same as an omitted one (default global).
+        scope = str(kwargs.get("scope") or "global").strip().lower()
 
         if not name or not content:
             return False, "Error: name and content are required."
@@ -66,9 +67,14 @@ class MemoryTool(BaseTool):
         try:
             success = self.memory.write_memory(name, description, tags, content, scope=scope)
         except ValueError as e:
-            # Reserved names (e.g. MEMORY -> MEMORY.md collision) surface as a
-            # tool error instead of crashing the turn.
+            # Reserved names (e.g. MEMORY -> MEMORY.md collision), sanitized-name
+            # collisions, overlong names and unverifiable existing files surface
+            # as a tool error instead of crashing the turn.
             return False, str(e)
+        except OSError as e:
+            # Disk-level failures (ENAMETOOLONG survivors, permission errors,
+            # full disk) must never crash the agent turn.
+            return False, f"Error: failed to write memory file: {e}"
         if success:
             return True, f"Successfully saved {scope} memory topic '{name}'."
         return False, "Failed to save memory."

@@ -67,8 +67,13 @@ class SessionManager:
         if not state_file:
             return False
         self._ensure_session_layout(self.current_session_dir)
-        with open(state_file, "w", encoding="utf-8") as f:
+        # Atomic write (tmp + os.replace): a crash mid-write must never leave a
+        # half-written task_state.json that would silently reset the attention
+        # anchor to defaults on the next turn.
+        tmp_path = state_file + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, state_file)
         return True
 
     def migrate_legacy_task_state(self, workspace_dir):
