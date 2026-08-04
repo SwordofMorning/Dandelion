@@ -66,8 +66,46 @@ class SafeLLMClient:
     # Public request wrappers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _merge_content(a, b):
+        """Merge two message contents into one Anthropic-style block list,
+        preserving the original order of both sides."""
+        def as_blocks(c):
+            if isinstance(c, str):
+                return [{"type": "text", "text": c}]
+            if isinstance(c, list):
+                return list(c)
+            return []
+        return as_blocks(a) + as_blocks(b)
+
+    @classmethod
+    def _normalize_messages(cls, messages):
+        """Merge adjacent messages with the same role (e.g. the consecutive
+        user turns produced by history compaction around the summary message),
+        preserving content order. Returns a new list; input is not mutated."""
+        merged = []
+        for msg in messages or []:
+            if merged and merged[-1].get("role") == msg.get("role"):
+                prev = merged[-1]
+                prev["content"] = cls._merge_content(
+                    prev["content"], msg.get("content", ""))
+            else:
+                merged.append(dict(msg))
+        return merged
+
+    def _with_normalized_messages(self, payload):
+        """Return a copy of payload whose 'messages' have adjacent same-role
+        entries merged, so providers that require strict role alternation
+        (Anthropic, Gemini) never receive consecutive identical roles."""
+        if not payload.get("messages"):
+            return payload
+        out = dict(payload)
+        out["messages"] = self._normalize_messages(payload["messages"])
+        return out
+
     def safe_request(self, payload, log_tag="PRE LLM CALL - MAIN"):
         """Non-streaming request wrapper. Logs final payload after thinking injection."""
+        payload = self._with_normalized_messages(payload)
         return self.provider.safe_request(payload, logger=self.logger, log_tag=log_tag)
 
     def safe_stream_request(self, payload, log_tag="PRE LLM CALL - MAIN"):
@@ -80,6 +118,7 @@ class SafeLLMClient:
             (response_object, None) on success.
             (None, error_string) on failure.
         """
+        payload = self._with_normalized_messages(payload)
         return self.provider.safe_stream_request(payload, logger=self.logger, log_tag=log_tag)
 
     def extract_text(self, content):

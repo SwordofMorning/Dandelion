@@ -17,3 +17,10 @@ __pycache__/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Regent runtime file
+llm/memory/
+llm/task/
+
+# Agent Playground
+playground/

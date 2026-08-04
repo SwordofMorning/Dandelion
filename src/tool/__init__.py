@@ -4,6 +4,8 @@ from .shell.bash_tool import BashTool
 from .agent.skill_tool import LoadSkillTool
 from .agent.plan_tool import PlanTool
 from .agent.spawn_tool import SpawnSubagentTool
+from .agent.state_tool import StateTool
+from .agent.memory_tool import MemoryTool
 from .editor.markdown_tool import MarkdownTool
 from .editor.excel_tool import ReadExcelTool, WriteExcelTool
 from .filesystem.grep_search_tool import GrepSearchTool
