@@ -6,14 +6,14 @@ import sys
 import json
 import datetime
 
-from review_fix.utils import SafeLLMClient
-from review_fix.utils import CLIPrinter
-from review_fix.core.memory import MemoryManager
-from review_fix.core.skill import SkillManager
-from review_fix.core.sysprompt import PromptBuilder
-from review_fix.subagent import SubAgentPool
+from src.utils import SafeLLMClient
+from src.utils import CLIPrinter
+from src.core.memory import MemoryManager
+from src.core.skill import SkillManager
+from src.core.sysprompt import PromptBuilder
+from src.subagent import SubAgentPool
 
-from review_fix.tool import (
+from src.tool import (
     BashTool, LoadSkillTool, MarkdownTool,
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
