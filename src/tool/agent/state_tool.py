@@ -5,15 +5,30 @@ import json
 from ..base_tool import BaseTool
 
 class StateTool(BaseTool):
-    def __init__(self, workspace_dir=None):
+    def __init__(self, workspace_dir=None, session_manager=None):
         super().__init__(workspace_dir)
-        self.state_dir = os.path.join(self.workspace_dir, "llm/task")
-        self.state_file = os.path.join(self.state_dir, "task_state.json")
-        os.makedirs(self.state_dir, exist_ok=True)
-        
-        if not os.path.exists(self.state_file):
-            with open(self.state_file, "w", encoding="utf-8") as f:
+        self.session_manager = session_manager
+        # Legacy global path kept as a fallback for setups without a
+        # session manager (e.g. standalone usage or tests).
+        self.legacy_state_dir = os.path.join(self.workspace_dir, "llm/task")
+        self.legacy_state_file = os.path.join(self.legacy_state_dir, "task_state.json")
+
+    def _get_state_file(self):
+        """Resolve the active session's task_state.json dynamically, so
+        `checkout` (session switch) works without rebuilding the agent."""
+        if self.session_manager is not None:
+            state_file = self.session_manager.get_task_state_file()
+            if state_file:
+                return state_file
+        return self.legacy_state_file
+
+    def _ensure_state_file(self):
+        state_file = self._get_state_file()
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        if not os.path.exists(state_file):
+            with open(state_file, "w", encoding="utf-8") as f:
                 json.dump({"target": "No specific target set.", "todos": [], "completed": []}, f)
+        return state_file
 
     def get_name(self):
         return "update_state"
@@ -21,8 +36,9 @@ class StateTool(BaseTool):
     def get_description(self):
         return (
             "Update the current task state, including the main target and TODO lists. "
-            "Use this to manage your attention, plan steps, and mark them as completed. "
-            "This state is injected into your system prompt on every turn to keep you focused."
+            "This state is scoped to the current session branch "
+            "(stored at .log/sess_<id>/task_state.json) and is injected into the "
+            "system prompt on every turn to keep you focused."
         )
 
     def get_schema(self):
@@ -47,9 +63,10 @@ class StateTool(BaseTool):
 
     def _load(self):
         state = {"target": "No specific target set.", "todos": [], "completed": []}
-        if os.path.exists(self.state_file):
+        state_file = self._get_state_file()
+        if os.path.exists(state_file):
             try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
+                with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
             except Exception:
                 pass
@@ -85,6 +102,7 @@ class StateTool(BaseTool):
         if "completed" in kwargs and kwargs.get("completed") is not None:
             state["completed"] = kwargs.get("completed")
 
-        with open(self.state_file, "w", encoding="utf-8") as f:
+        state_file = self._ensure_state_file()
+        with open(state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
         return True, "Task state updated successfully. It will be reflected in your next turn."

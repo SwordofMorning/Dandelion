@@ -5,6 +5,11 @@ import json
 import datetime
 import shutil
 
+TASK_STATE_FILENAME = "task_state.json"
+SESSION_MEMORY_DIRNAME = "memory"
+
+DEFAULT_TASK_STATE = {"target": "No specific target set.", "todos": [], "completed": []}
+
 class SessionManager:
     def __init__(self, log_dir=".log"):
         self.log_dir = log_dir
@@ -15,6 +20,93 @@ class SessionManager:
             os.makedirs(self.log_dir)
             
         self._ensure_default_session()
+
+    # ------------------------------------------------------------------
+    # Session-scoped runtime layout: task_state.json + memory/ live inside
+    # the session directory so each branch has its own task state and
+    # session-local memory. (Previously task_state was a single global file
+    # under llm/task/ shared by every session branch.)
+    # ------------------------------------------------------------------
+    def _ensure_session_layout(self, session_dir):
+        """Ensure a session directory has task_state.json and memory/."""
+        os.makedirs(session_dir, exist_ok=True)
+
+        memory_dir = os.path.join(session_dir, SESSION_MEMORY_DIRNAME)
+        os.makedirs(memory_dir, exist_ok=True)
+
+        state_file = os.path.join(session_dir, TASK_STATE_FILENAME)
+        if not os.path.exists(state_file):
+            with open(state_file, "w", encoding="utf-8") as f:
+                json.dump(DEFAULT_TASK_STATE, f, indent=2, ensure_ascii=False)
+
+    def get_task_state_file(self):
+        """Path of the current session's task_state.json (None if no active session)."""
+        if not self.current_session_dir:
+            return None
+        return os.path.join(self.current_session_dir, TASK_STATE_FILENAME)
+
+    def get_session_memory_dir(self):
+        """Path of the current session's memory/ dir (None if no active session)."""
+        if not self.current_session_dir:
+            return None
+        return os.path.join(self.current_session_dir, SESSION_MEMORY_DIRNAME)
+
+    def load_task_state(self):
+        state_file = self.get_task_state_file()
+        if not state_file or not os.path.exists(state_file):
+            return None
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[-] Warning: Failed to parse task state at {state_file}: {e}")
+            return None
+
+    def save_task_state(self, state):
+        state_file = self.get_task_state_file()
+        if not state_file:
+            return False
+        self._ensure_session_layout(self.current_session_dir)
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        return True
+
+    def migrate_legacy_task_state(self, workspace_dir):
+        """One-time, idempotent migration of the legacy global task state
+        (llm/task/task_state.json) into the current session's task_state.json.
+
+        - Copies the legacy content into the session file only when the session
+          file is missing OR still holds the empty default placeholder.
+        - Backs up (renames) the legacy global file so old code stops seeing it.
+        Safe to call on every startup.
+        """
+        legacy_file = os.path.join(workspace_dir, "llm", "task", "task_state.json")
+        if not os.path.exists(legacy_file):
+            return False
+
+        state_file = self.get_task_state_file()
+        if not state_file:
+            return False
+
+        self._ensure_session_layout(self.current_session_dir)
+
+        # Never overwrite real session state; only fill empty placeholders.
+        should_copy = not os.path.exists(state_file)
+        if not should_copy:
+            try:
+                with open(state_file, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                should_copy = existing == DEFAULT_TASK_STATE
+            except Exception:
+                should_copy = False
+
+        if should_copy:
+            shutil.copy2(legacy_file, state_file)
+
+        backup_file = legacy_file + ".legacy-backup"
+        if not os.path.exists(backup_file):
+            os.rename(legacy_file, backup_file)
+        return True
 
     def _ensure_default_session(self):
         sessions = self.list_sessions()
@@ -42,6 +134,7 @@ class SessionManager:
             json.dump(meta, f, indent=2)
             
         self.save_history([], session_dir)
+        self._ensure_session_layout(session_dir)
         self.switch_session(session_id)
         return session_id
 
@@ -73,6 +166,8 @@ class SessionManager:
 
         self.current_session_id = safe_session_id
         self.current_session_dir = target_dir
+        # Sessions created before this layout existed get lazily initialized.
+        self._ensure_session_layout(target_dir)
         return True
 
     def get_current_meta(self):

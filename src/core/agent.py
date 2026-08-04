@@ -35,6 +35,15 @@ class MyAgent:
         # 1. Load history from the current session
         self.history = self.session.load_history()
 
+        # 1b. One-time migration of the legacy global task state
+        # (llm/task/task_state.json) into the current session. Idempotent:
+        # existing session state is never overwritten and the legacy file is
+        # backed up (renamed), so old code stops reading it.
+        try:
+            self.session.migrate_legacy_task_state(self.workspace_dir)
+        except Exception as e:
+            print(f"[-] Warning: task state migration failed: {e}")
+
         # 2. Init Sub-Systems with absolute paths
         self.client = SafeLLMClient(
             api_key=self.config["ANTHROPIC_API_KEY"],
@@ -49,15 +58,20 @@ class MyAgent:
         )
 
         # In passing session_manager as logger to maintain compatibility with legacy code
+        # Memory is two-tier: global (llm/memory/) + current session
+        # (.log/sess_<id>/memory/). The session tier resolves dynamically via
+        # session_manager so `checkout` switches memory scope without a rebuild.
         self.memory = MemoryManager(
             memory_dir=os.path.join(self.workspace_dir, "llm", "memory"),
+            session_manager=self.session,
             safe_client=self.client,
             logger=self.session
         )
         self.skill = SkillManager(
             skill_dir=os.path.join(self.workspace_dir, "llm", "skill")
         )
-        self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config, self.workspace_dir)
+        self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config, self.workspace_dir,
+                                            session_manager=self.session)
 
         # Memories cache: refresh only when the last plain-text user message changes,
         # so the tail of system_prompt stays stable during tool loops (cache-friendly).
@@ -86,7 +100,7 @@ class MyAgent:
         # Others
         web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
         # Memory
-        state_tool = StateTool(workspace_dir=self.workspace_dir)
+        state_tool = StateTool(workspace_dir=self.workspace_dir, session_manager=self.session)
         memory_tool = MemoryTool(self.memory)
 
         # Create full tools mapping for Orchestrator
@@ -372,3 +386,7 @@ class MyAgent:
 
     def reload_history(self):
         self.history = self.session.load_history()
+        # Session switched: memory relevance cache must be recomputed because
+        # the session tier (and possibly the whole history) changed.
+        self._memories_key = None
+        self._memories_cache = ""
