@@ -15,11 +15,21 @@ class StateTool(BaseTool):
 
     def _get_state_file(self):
         """Resolve the active session's task_state.json dynamically, so
-        `checkout` (session switch) works without rebuilding the agent."""
+        `checkout` (session switch) works without rebuilding the agent.
+
+        Falls back to the legacy global file (llm/task/task_state.json) ONLY
+        when no session manager is attached (standalone usage / tests). The
+        fallback is loud on purpose: a global task_state must never be read
+        or written silently, and production runs (main.py) always bind task
+        state to a session via SessionManager.
+        """
         if self.session_manager is not None:
             state_file = self.session_manager.get_task_state_file()
             if state_file:
                 return state_file
+        print("[-] Warning: StateTool has no session manager; using the legacy "
+              "global state file (llm/task/task_state.json). Production runs "
+              "(main.py) always bind task state to a session.")
         return self.legacy_state_file
 
     def _ensure_state_file(self):

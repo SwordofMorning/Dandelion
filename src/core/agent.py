@@ -465,3 +465,8 @@ class MyAgent:
         # the session tier (and possibly the whole history) changed.
         self._memories_key = None
         self._memories_cache = ""
+        # The cached system prompt was built from the PREVIOUS session's task
+        # state and memory index. Drop it so the next token-budget estimate
+        # (_soft_token_limit) rebuilds from the new session instead of
+        # reusing stale overhead from the old branch.
+        self._last_system_prompt = ""

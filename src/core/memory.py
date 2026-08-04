@@ -41,13 +41,23 @@ class MemoryManager:
         return self._static_session_memory_dir
 
     def _dir_for_scope(self, scope):
+        """Resolve the tier directory for a WRITE operation.
+
+        Raises ValueError when a session-scoped write is requested but no
+        session tier is configured: silently falling back to the global tier
+        would leak session-local facts across branches (data-isolation bug).
+        Reads are unaffected (list_memories/get_index_text resolve tiers via
+        session_memory_dir() and safely skip a missing session tier).
+        """
         scope = (scope or "global").lower()
         if scope in ("session", "local"):
             session_dir = self.session_memory_dir()
             if not session_dir:
-                print("[-] Warning: no session memory dir configured; "
-                      "falling back to the global tier.")
-                return self.memory_dir
+                raise ValueError(
+                    "Error: scope='session' requested but no session memory "
+                    "directory is configured (no active session). Use "
+                    "scope='global' instead, or attach a session manager."
+                )
             return session_dir
         return self.memory_dir
 
