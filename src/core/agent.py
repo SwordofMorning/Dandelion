@@ -78,6 +78,9 @@ class MyAgent:
         # so the tail of system_prompt stays stable during tool loops (cache-friendly).
         self._memories_key = None
         self._memories_cache = ""
+        # Last built system prompt, reused by _soft_token_limit() so the token
+        # budget accounts for the real request overhead without rebuilding.
+        self._last_system_prompt = ""
 
         # 3. Load Tools
         self._init_tools()
@@ -219,9 +222,24 @@ class MyAgent:
                     non_ascii_chars += 1
         return ascii_chars / 4.0 + non_ascii_chars / 1.5
 
+    def _soft_token_limit(self):
+        """History-only token budget: MAX_CONTEXT_TOKENS minus the fixed request
+        overhead (system prompt, tool schemas, cached memories tail). Compaction
+        triggered at this limit keeps the COMBINED provider request within
+        MAX_CONTEXT_TOKENS instead of silently overflowing it."""
+        base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
+        overhead = self._estimate_tokens([
+            {"role": "user", "content": self._last_system_prompt or self.prompt_builder.build()},
+            {"role": "user", "content": json.dumps(self.tool_schemas, ensure_ascii=False)},
+        ])
+        if self._memories_cache:
+            overhead += self._estimate_tokens(
+                [{"role": "user", "content": self._memories_cache}])
+        return max(int(base - overhead), 1)
+
     def _compact_context(self):
         est_tokens = self._estimate_tokens()
-        soft_limit = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
+        soft_limit = self._soft_token_limit()
 
         if est_tokens < soft_limit or len(self.history) < 20:
             return
@@ -309,8 +327,14 @@ class MyAgent:
         self.session.save_history(self.history)
 
         # Invalidate memories cache: history changed (plain-text user messages may shift).
-        self._memories_key = None
+        self._invalidate_memories_cache()
         print("[+] Context compacted successfully.")
+
+    def _invalidate_memories_cache(self):
+        """Drop both memory cache fields so the next _get_memories() call
+        reloads persisted memories instead of returning a stale value."""
+        self._memories_key = None
+        self._memories_cache = ""
 
     def _get_memories(self):
         """Load relevant memories, cached until the last plain-text user message changes."""
@@ -342,6 +366,7 @@ class MyAgent:
         # entire prefix cache of 'tools' + 'messages'.
         if memories_content:
             system_prompt += f"\n\n{memories_content}"
+        self._last_system_prompt = system_prompt
 
         # Pure append-only copy, ZERO mutations.
         req_messages = self.history.copy()
@@ -385,6 +410,12 @@ class MyAgent:
 
             if handler:
                 success, output = handler.execute(**block.input)
+                # A successful memory write changes what _get_memories() would
+                # load for the next tool-loop iteration; drop the cache so the
+                # system prompt tail reflects the newly persisted memory.
+                # Failed executions keep the previous cache untouched.
+                if success and handler.get_name() == "remember":
+                    self._invalidate_memories_cache()
             else:
                 success, output = False, f"Unknown tool: {block.name}"
 

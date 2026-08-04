@@ -63,7 +63,12 @@ class MemoryTool(BaseTool):
                 f"and re-submit: {non_ascii}"
             )
 
-        success = self.memory.write_memory(name, description, tags, content, scope=scope)
+        try:
+            success = self.memory.write_memory(name, description, tags, content, scope=scope)
+        except ValueError as e:
+            # Reserved names (e.g. MEMORY -> MEMORY.md collision) surface as a
+            # tool error instead of crashing the turn.
+            return False, str(e)
         if success:
             return True, f"Successfully saved {scope} memory topic '{name}'."
         return False, "Failed to save memory."

@@ -113,8 +113,14 @@ class MemoryManager:
         index_file = self._index_file(tier_dir)
         if not os.path.exists(index_file):
             return ""
-        with open(index_file, "r", encoding="utf-8") as f:
-            return f.read().strip()
+        try:
+            with open(index_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except (OSError, UnicodeDecodeError) as e:
+            # A corrupt/unreadable index must not break the system prompt
+            # build; get_index_text() naturally skips this tier's section.
+            print(f"[-] Warning: skipping unreadable memory index {index_file}: {e}")
+            return ""
 
     def get_index_text(self):
         """Combined index of both tiers (injected into the system prompt)."""
