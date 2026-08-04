@@ -26,12 +26,19 @@ class PromptBuilder:
             self.terminal_hint = f"{self.os_name} Environment. Primary shell is 'bash'."
 
     def _resolve_state_file(self):
-        """Resolve the current session's task_state.json. Falls back to the
-        legacy global file (llm/task/task_state.json) for pre-migration setups."""
+        """Resolve the current session's task_state.json.
+
+        Falls back to the legacy global file (llm/task/task_state.json) ONLY
+        for standalone setups without a session manager (e.g. tests) or as a
+        read-only last resort for pre-migration data. The fallback is loud so
+        a global task state can never be consumed silently.
+        """
         if self.session_manager is not None:
             state_file = self.session_manager.get_task_state_file()
             if state_file:
                 return state_file
+        print("[-] Warning: PromptBuilder has no session manager; falling back "
+              "to the legacy global state file (llm/task/task_state.json).")
         return os.path.join(self.workspace_dir, "llm/task", "task_state.json")
 
     def build(self):
