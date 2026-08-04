@@ -67,7 +67,12 @@ class StateTool(BaseTool):
         if os.path.exists(state_file):
             try:
                 with open(state_file, "r", encoding="utf-8") as f:
-                    state = json.load(f)
+                    loaded = json.load(f)
+                # Keep the loaded value only when it is a dict; otherwise the
+                # file is malformed (e.g. manual edits) and execute would crash
+                # on state["target"] updates.
+                if isinstance(loaded, dict):
+                    state = loaded
             except Exception:
                 pass
         return state

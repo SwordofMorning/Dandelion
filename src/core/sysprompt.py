@@ -122,6 +122,18 @@ class PromptBuilder:
             try:
                 with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
+                if not isinstance(state, dict):
+                    raise ValueError("task state is not a JSON object")
+
+                def _coerce_list(value):
+                    """Safely render todos/completed: null -> '', list -> joined
+                    strings, anything else (e.g. a bare string) -> str(value)."""
+                    if value is None:
+                        return ""
+                    if isinstance(value, list):
+                        return ", ".join(str(x) for x in value if x is not None)
+                    return str(value)
+
                 session_hint = ""
                 if self.session_manager is not None and getattr(self.session_manager, "current_session_id", None):
                     session_hint = f" (session: {self.session_manager.current_session_id})"
@@ -129,12 +141,13 @@ class PromptBuilder:
                     "## Current Task State (Attention Anchor)"
                     f"{session_hint}\n"
                     f"- Target: {state.get('target', 'None')}\n"
-                    f"- Pending TODOs: {', '.join(state.get('todos', []))}\n"
-                    f"- Completed: {', '.join(state.get('completed', []))}\n"
+                    f"- Pending TODOs: {_coerce_list(state.get('todos'))}\n"
+                    f"- Completed: {_coerce_list(state.get('completed'))}\n"
                     "(You must frequently use the 'update_state' tool to keep this updated)"
                 )
                 sections.append(state_str)
-            except Exception:
-                pass
+            except Exception as e:
+                # Log failure details instead of silently dropping the section.
+                print(f"[-] Warning: Failed to load task state from {state_file}: {e}")
 
         return "\n\n".join(sections)

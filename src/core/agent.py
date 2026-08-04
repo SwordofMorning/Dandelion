@@ -4,15 +4,16 @@ import os
 import re
 import sys
 import json
+import datetime
 
-from src.utils import SafeLLMClient
-from src.utils import CLIPrinter
-from src.core.memory import MemoryManager
-from src.core.skill import SkillManager
-from src.core.sysprompt import PromptBuilder
-from src.subagent import SubAgentPool
+from review_fix.utils import SafeLLMClient
+from review_fix.utils import CLIPrinter
+from review_fix.core.memory import MemoryManager
+from review_fix.core.skill import SkillManager
+from review_fix.core.sysprompt import PromptBuilder
+from review_fix.subagent import SubAgentPool
 
-from src.tool import (
+from review_fix.tool import (
     BashTool, LoadSkillTool, MarkdownTool,
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
@@ -164,6 +165,44 @@ class MyAgent:
             )
         return True
 
+    @staticmethod
+    def _msg_ends_with_tool_use(msg):
+        """True if an assistant message ends with a tool_use block (handles both
+        dict blocks loaded from history.log and SDK objects in memory)."""
+        if msg.get("role") != "assistant":
+            return False
+        content = msg.get("content", "")
+        if not isinstance(content, list) or not content:
+            return False
+        last = content[-1]
+        if isinstance(last, dict):
+            return last.get("type") == "tool_use"
+        return getattr(last, "type", None) == "tool_use"
+
+    @staticmethod
+    def _trim_head_for_tool_use(history, head_size):
+        """Trim head so it never ends with an assistant tool_use message. The
+        trimmed tool_use message stays in middle (summarized) together with its
+        matching tool_result, so the summary insertion can never split a pair."""
+        head = history[:head_size]
+        while head and MyAgent._msg_ends_with_tool_use(head[-1]):
+            head = head[:-1]
+        return head
+
+    @staticmethod
+    def _archive_path(archive_dir, history_len):
+        """Append-only archive filename: history length + timestamp, so a second
+        compaction at the same history length never overwrites the first."""
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        return os.path.join(archive_dir, f"history_{history_len}_{ts}.json")
+
+    @staticmethod
+    def _artifact_path(session_dir, block_id):
+        """Absolute artifact path (resolvable by read_file even when the process
+        CWD differs from the workspace/session directory)."""
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(block_id))
+        return os.path.abspath(os.path.join(session_dir, "artifacts", f"{safe_id}.txt"))
+
     def _estimate_tokens(self, history=None):
         """Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token."""
         history = history if history is not None else self.history
@@ -192,7 +231,7 @@ class MyAgent:
         # 1. Full archive backup (append-only, restorable)
         archive_dir = os.path.join(self.session.current_session_dir, "archives")
         os.makedirs(archive_dir, exist_ok=True)
-        archive_path = os.path.join(archive_dir, f"history_{len(self.history)}.json")
+        archive_path = self._archive_path(archive_dir, len(self.history))
         with open(archive_path, "w", encoding="utf-8") as f:
             json.dump(self.history, f, ensure_ascii=False, indent=2,
                       default=self.session._default_serializer)
@@ -200,26 +239,31 @@ class MyAgent:
         head_size = 5
         recent_size = 15
 
-        head = self.history[:head_size]
+        # Trim head so it never ends with an assistant tool_use message; the
+        # summary (role=user) is inserted right after head, and a trailing
+        # tool_use with no matching tool_result would corrupt the pairing.
+        head = self._trim_head_for_tool_use(self.history, head_size)
+        trimmed_head_size = len(head)
 
         # 2. Find a safe start for the recent window: the latest plain-text user
         #    message within the look-back limit. Starting at a plain-text user
         #    message guarantees tool_use/tool_result pairs are never split.
-        max_lookback = min(len(self.history) - head_size, recent_size * 2)
+        max_lookback = min(len(self.history) - trimmed_head_size, recent_size * 2)
         start_idx = None
         for i in range(len(self.history) - 1, len(self.history) - 1 - max_lookback, -1):
             if self._is_plain_user_msg(self.history[i]):
                 start_idx = i
                 break
 
-        if start_idx is None:
-            # Fallback: no plain-text user message in the look-back window;
-            # keep only head + summary to avoid dangling tool_result blocks.
+        if start_idx is None or start_idx < trimmed_head_size:
+            # Fallback: no usable plain-text user message outside the head
+            # window; keep only head + summary to avoid dangling or duplicated
+            # tool_result blocks.
             print("[-] No safe compaction breakpoint found; keeping head + summary only.")
             start_idx = len(self.history)
 
         recent = self.history[start_idx:]
-        middle = self.history[head_size:start_idx]
+        middle = self.history[trimmed_head_size:start_idx]
 
         # 3. Summarize head + middle (early goals are the most drift-prone part).
         summary_src = head + middle
@@ -354,10 +398,10 @@ class MyAgent:
             # pointer so the model can read_file the missing parts on demand.
             MAX_INLINE_CHARS = 8000
             if len(output_str) > MAX_INLINE_CHARS:
-                artifact_dir = os.path.join(self.session.current_session_dir, "artifacts")
-                os.makedirs(artifact_dir, exist_ok=True)
-                safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(block.id))
-                artifact_path = os.path.join(artifact_dir, f"{safe_id}.txt")
+                # Absolute path: the truncated pointer is resolved by read_file
+                # relative to the workspace, so it must not depend on the CWD.
+                artifact_path = self._artifact_path(self.session.current_session_dir, block.id)
+                os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
 
                 with open(artifact_path, "w", encoding="utf-8") as f:
                     f.write(output_str)

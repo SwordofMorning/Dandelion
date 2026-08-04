@@ -78,8 +78,14 @@ class MemoryManager:
                 continue
 
             fpath = os.path.join(tier_dir, fname)
-            with open(fpath, "r", encoding="utf-8") as f:
-                raw = f.read()
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    raw = f.read()
+            except (OSError, UnicodeDecodeError) as e:
+                # Skip unreadable / invalid-UTF-8 files instead of breaking the
+                # whole memory scan (and the system prompt build).
+                print(f"[-] Warning: skipping unreadable memory file {fname}: {e}")
+                continue
 
             meta, body = self._parse_frontmatter(raw)
             name = meta.get("name", fname.replace(".md", ""))
@@ -190,22 +196,43 @@ class MemoryManager:
     # ------------------------------------------------------------------
     # Writing
     # ------------------------------------------------------------------
+    @staticmethod
+    def _frontmatter_clean(value):
+        """Keep frontmatter values single-line and unable to inject keys or
+        split the '---' delimiters (protects _parse_frontmatter)."""
+        return str(value or "").replace("\r", " ").replace("\n", " ").replace("---", "-")
+
     def write_memory(self, name, description, tags, content, scope="global"):
         import datetime
         target_dir = self._dir_for_scope(scope)
         os.makedirs(target_dir, exist_ok=True)
 
-        safe_name = name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+        safe_name = (name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                     .replace("\r", "_").replace("\n", "_"))
+        # Reserve the tier index filename (case-insensitive): a memory named
+        # "MEMORY" must never resolve to MEMORY.md, which would overwrite the
+        # per-tier index file.
+        if safe_name.lower() == "memory":
+            raise ValueError(
+                "Error: memory name 'MEMORY' is reserved for the tier index "
+                "file (MEMORY.md). Please choose a different name."
+            )
         filename = f"{safe_name}.md"
         filepath = os.path.join(target_dir, filename)
 
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Sanitize values used in the frontmatter so embedded newlines or '---'
+        # text cannot create extra keys or break _parse_frontmatter.
+        clean_name = self._frontmatter_clean(name)
+        clean_desc = self._frontmatter_clean(description)
+        clean_tags = self._frontmatter_clean(tags)
+
         frontmatter = (
             "---\n"
-            f"name: {name}\n"
-            f"description: {description}\n"
-            f"tags: [{tags}]\n"
+            f"name: {clean_name}\n"
+            f"description: {clean_desc}\n"
+            f"tags: [{clean_tags}]\n"
             f"updated_at: {now}\n"
             f"scope: {scope}\n"
             "---\n"
@@ -214,7 +241,7 @@ class MemoryManager:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(frontmatter + content)
 
-        self._update_index(target_dir, name, description, tags, now)
+        self._update_index(target_dir, clean_name, clean_desc, clean_tags, now)
         return True
 
     def _update_index(self, tier_dir, name, description, tags, updated_at):
