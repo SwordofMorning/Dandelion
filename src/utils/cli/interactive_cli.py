@@ -381,20 +381,31 @@ class InteractiveCLI:
         # End-if
     # End-def
 
+    ##
+    # @brief Run class InteractiveCLI. 
+    # Send message to LLM.
+    #
     def run(self):
         self.cli.raw(f"\n{self.cli.C_CYAN}================ REGENT SHELL READY ================{self.cli.C_RESET}")
+
+        # Try to load HAS_PTK (tab completion)
         if HAS_PTK:
             self.cli.success("Bash-style Tab completion enabled (Powered by prompt_toolkit).")
         else:
             self.cli.error("prompt_toolkit not found. Fallback to basic input. (pip install prompt_toolkit)")
+        # End-if
+
+        # Print help
         self._print_help()
 
         # Track consecutive errors to prevent infinite loop of death
         consecutive_errors = 0
 
+        # Interactive Loop
         while True:
             try:
-                # 1. Background task check
+                # ----- 1. Background task check (Agent running) -----
+
                 if self.agent.history and self.agent.history[-1]["role"] == "user":
                     content = self.agent.history[-1]["content"]
                     if isinstance(content, list) and len(content) > 0 and content[0].get("type") == "tool_result":
@@ -412,10 +423,14 @@ class InteractiveCLI:
                             self.cli.error("Dropping the pending tool result to prevent infinite API retry loop.")
                             self.agent.history.pop()
                             self.session.save_history(self.agent.history)
+                        # End-if
 
                         continue
+                    # End-if
+                # End-if
 
-                # 2. UI Prompt Render
+                # 2. ----- UI Prompt Render -----
+
                 meta = self.session.get_current_meta()
                 branch_name = meta.get("name", "unknown")
                 dirty_flag = "*" if self.staged_message.strip() else ""
@@ -433,7 +448,8 @@ class InteractiveCLI:
                     f"{self.cli.C_GRAY}>{self.cli.C_RESET} "
                 )
 
-                # 3. Read user input
+                # 3. ----- Read user input -----
+
                 if HAS_PTK:
                     cmd_input = self.prompt_session.prompt(
                         ANSI(prompt_str_ansi),
@@ -442,6 +458,7 @@ class InteractiveCLI:
                     ).strip()
                 else:
                     cmd_input = input(prompt_str_ansi).strip()
+                # End-if
 
                 # Reset error counter because we successfully reached the blocking input layer
                 consecutive_errors = 0
@@ -449,16 +466,21 @@ class InteractiveCLI:
                 if not cmd_input:
                     continue
 
-                # 4. Parse and Dispatch
+                # 4. ----- Parse and Dispatch-----
+
+                # Parse command.
                 try:
                     parts = shlex.split(cmd_input)
                 except ValueError as e:
                     self.cli.error(f"Shell syntax error: {e}")
                     continue
+                # End-try
 
+                # Split command.
                 command = parts[0].lower()
                 args = parts[1:]
 
+                # Dispatch command.
                 if command in ['help', '-h']:
                     self._print_help()
                 elif command in ['quit', 'exit', '-q']:
@@ -481,6 +503,10 @@ class InteractiveCLI:
                     self.cli.success("Buffer cleared.")
                 else:
                     self.cli.error(f"Unknown command '{command}'. Type 'help' for available commands.")
+                # End-if
+            # End-try
+
+            # 5. ----- Exception Handle -----
 
             except KeyboardInterrupt:
                 self.cli.raw("")
@@ -499,3 +525,6 @@ class InteractiveCLI:
 
                 self.cli.info("Shell recovered. Your staged message and session are preserved.")
                 continue
+        # End-while
+    # End-def
+# End-class
