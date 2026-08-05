@@ -139,6 +139,8 @@ class InteractiveCLI:
 
     ##
     # @brief `brach` command handle. 
+    # branch -a:            list all branch;
+    # branch -d <name/id>:  delete selected branch.
     #
     # @param args: Terminal input.
     #
@@ -195,6 +197,8 @@ class InteractiveCLI:
 
     ##
     # @brief `checkout` command handle. 
+    # checkout -b <name/id>:    create a new session branch;
+    # checkout <name/id>:       switch to one existed session branch.
     #
     # @param args: Terminal input.
     #
@@ -246,10 +250,16 @@ class InteractiveCLI:
         # End-if
     # End-def
 
+    ##
+    # @brief `vim` command handle. 
+    # Open editor and write message, saved on staged buffer.
+    #
     def _cmd_vim(self):
+        # Set default editor: vim on Linux and notepad on Windows.
         editor = os.environ.get('EDITOR')
         if not editor:
             editor = 'vim' if os.name != 'nt' else 'notepad'
+        # End-if
 
         # Create temporary file for drafting
         fd, tmp_path = tempfile.mkstemp(suffix=".md", prefix="regent_draft_", text=True)
@@ -277,48 +287,78 @@ class InteractiveCLI:
                 self.cli.info("Buffer unchanged.")
         finally:
             os.remove(tmp_path)
+    # End-def
 
+    ##
+    # @brief `load` command handle. 
+    # load <filepath>: load a file (like .md) to staged message buffer.
+    #
+    # @param args: Terminal input.
+    #
     def _cmd_load(self, args):
+        # Error
         if not args:
             self.cli.error("Usage: load <filepath>")
             return
+        # End-if
 
+        # Error
         filepath = args[0]
         if not os.path.exists(filepath):
             self.cli.error(f"Error: File not found -> {filepath}")
             return
+        # End-if
 
+        # Overwrite staged message buffer which is not empty.
         if self.staged_message.strip():
             ans = input(f"{self.cli.C_YELLOW}[!]{self.cli.C_RESET} Warning: The buffer is not empty. Overwrite? [y/N]: ").strip().lower()
             if ans not in ['y', 'yes']:
                 self.cli.error("Load aborted.")
                 return
+            # End-if
+        # End-if
 
+        # Write-in
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.staged_message = f.read().strip()
             self.cli.success(f"Successfully loaded {os.path.getsize(filepath)} bytes into buffer.")
         except Exception as e:
             self.cli.error(f"Error loading file: {e}")
+    # End-def
 
+    ##
+    # @brief `status` command handle. 
+    # Show current branch and staged message buffer.
+    #
     def _cmd_status(self):
+        # Print branch info.
         meta = self.session.get_current_meta()
         self.cli.info(f"\nCurrent Branch : {meta.get('name', 'Unknown')}")
         self.cli.info(f"History Turns  : {len(self.agent.history)}")
 
+        # No staged message.
         if not self.staged_message:
             self.cli.info("Staged Buffer  : (Empty)\n")
             return
+        # End-if
 
+        # Print stated message.
         self.cli.info("Staged Buffer Preview:")
         self.cli.raw("-" * 50)
         preview = self.staged_message[:300]
         self.cli.raw(preview)
+        # Cut-off
         if len(self.staged_message) > 300:
             self.cli.raw("\n... [Truncated]")
         self.cli.raw("-" * 50)
         self.cli.raw(f"    (Total: {len(self.staged_message)} chars)\n")
+    # End-def
 
+    ##
+    # @brief `commit` command handle. 
+    # Send message to LLM.
+    #
     def _cmd_commit(self):
         if not self.staged_message.strip():
             self.cli.error("Error: Buffer is empty. Draft a message using 'vim' or 'load' first.")
@@ -338,6 +378,8 @@ class InteractiveCLI:
                 pass
         else:
             self.cli.error("Send cancelled.")
+        # End-if
+    # End-def
 
     def run(self):
         self.cli.raw(f"\n{self.cli.C_CYAN}================ REGENT SHELL READY ================{self.cli.C_RESET}")
