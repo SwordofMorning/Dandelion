@@ -1,4 +1,10 @@
-# src/utils/llm_provider/gemini.py
+##
+ # @file src/utils/llm_provider/gemini.py
+ # @date 2026/08/05
+ # 
+ # @todo Need update to InteractionsAPI.
+ # Not impl now.
+ #
 
 import json
 from .base import LLMProvider

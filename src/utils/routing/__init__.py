@@ -1,10 +1,10 @@
-# src/utils/routing/__init__.py
-
-"""
-Routing Package.
-
-Provides routing policy, rate limiting, and model registry for sub-agent selection.
-"""
+##
+ # @file src/utils/routing/__init__.py
+ # @date 2026/08/05
+ # 
+ # @brief Routing Package.
+ # Provides routing policy, rate limiting, and model registry for sub-agent selection.
+ #
 
 from .rate_limiter import RateLimiter, RateLimitConfig, UsageWindow
 from .model_registry import ModelRegistry, RegistryModelSpec

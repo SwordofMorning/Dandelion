@@ -1,4 +1,10 @@
-# src/utils/routing/rate_limiter.py
+##
+ # @file src/utils/routing/rate_limiter.py
+ # @date 2026/08/05
+ # 
+ # @brief Sliding-window rate limiter (TPM/RPM/RPD) per model alias.
+ # @todo Future: global real-time limit checking (or use provider's own limits).
+ #
 
 import time
 import threading
