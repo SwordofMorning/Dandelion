@@ -3,6 +3,19 @@
  # @date 2026/08/05
  # 
  # @brief LLM Request and models routing.
+ # 
+ # @note Two LLM Request:
+ # - Main Agent
+ #      MyAgent.step() -> payload -> afeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
+ # - Sub Agent
+ #      PlanTool.execute()  -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
+ #      SubAgent.run()      -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
+ #
+ # For main: Message normalization (_normalize_messages) 
+ # and memory/task state injection both occur in the main agent path.
+ #
+ # For sub: Dynamically selects models based on task_description/toolset/depth;
+ # Includes retries and fallbacks; memory/state injection without going through the main agent.
  #
 
 import threading
@@ -189,7 +202,22 @@ class SafeLLMClient:
     # End-def
 
     ##
-     # @brief @note What is this? used for what?
+     # @brief Route a request through the sub-agent model pool.
+     #
+     # Selects a model from SUB_LIST via RoutingPolicy (condition match + rate
+     # limit), retries the selected model, then walks the fallback chain
+     # (get_fallback_chain) when it keeps failing. Used by PlanTool and
+     # SubAgent.run for all non-main-agent LLM calls; falls back to the main
+     # provider when no sub-agent pool is configured.
+     #
+     # @param payload             Request payload (tools/messages/max_tokens/system).
+     # @param task_description    Sub-agent task text, feeds condition inference.
+     # @param toolset_name        Sub-agent toolset ("minimal"/"planning"/...).
+     # @param depth               Sub-agent recursion depth (>=2 forces "complex").
+     # @param stream              True -> safe_stream_request, False -> safe_request.
+     # @param estimated_tokens    Token estimate used by the rate limiter.
+     #
+     # @return (response, None) on success; (None, error_string) on failure.
      #
     def route_request(self, payload, task_description="", toolset_name="minimal",
                       depth=0, stream=True, estimated_tokens=2000):

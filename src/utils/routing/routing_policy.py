@@ -132,7 +132,16 @@ class RoutingPolicy:
     # End-def
 
     ##
-     # @todo @note @brief What is this?
+     # @brief Build the ordered fallback chain of sub-agent models.
+     #
+     # Returns every registered sub-agent alias except `exclude_alias`, in
+     # SUB_LIST priority order. Used by route_request as the last-resort
+     # candidates when the selected model fails; rate-limit checks are done
+     # by the caller per candidate.
+     #
+     # @param exclude_alias  The alias that failed and must be excluded.
+     #
+     # @return List of candidate aliases (possibly empty).
      #
     def get_fallback_chain(self, exclude_alias: str) -> list:
         chain = []
