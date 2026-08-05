@@ -404,7 +404,7 @@ class InteractiveCLI:
         # Interactive Loop
         while True:
             try:
-                # ----- 1. Background task check (Agent running) -----
+                # ----- @par 1. Background task check (Agent running) -----
 
                 if self.agent.history and self.agent.history[-1]["role"] == "user":
                     content = self.agent.history[-1]["content"]
@@ -429,7 +429,7 @@ class InteractiveCLI:
                     # End-if
                 # End-if
 
-                # 2. ----- UI Prompt Render -----
+                # 2. ----- @par UI Prompt Render -----
 
                 meta = self.session.get_current_meta()
                 branch_name = meta.get("name", "unknown")
@@ -448,7 +448,7 @@ class InteractiveCLI:
                     f"{self.cli.C_GRAY}>{self.cli.C_RESET} "
                 )
 
-                # 3. ----- Read user input -----
+                # 3. ----- @par Read user input -----
 
                 if HAS_PTK:
                     cmd_input = self.prompt_session.prompt(
@@ -466,7 +466,7 @@ class InteractiveCLI:
                 if not cmd_input:
                     continue
 
-                # 4. ----- Parse and Dispatch-----
+                # 4. ----- @par Parse and Dispatch-----
 
                 # Parse command.
                 try:
@@ -506,7 +506,7 @@ class InteractiveCLI:
                 # End-if
             # End-try
 
-            # 5. ----- Exception Handle -----
+            # 5. ----- @par Exception Handle -----
 
             except KeyboardInterrupt:
                 self.cli.raw("")
