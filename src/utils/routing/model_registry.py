@@ -1,16 +1,32 @@
-# src/utils/routing/model_registry.py
+##
+ # @file src/utils/routing/model_registry.py
+ # @date 2026/08/05
+ # 
+ # @brief Wrapped model into a class obj.
+ #
 
 from dataclasses import dataclass, field
 
-# ---------------------------------------------------------------------------
-# Validation helpers (mirror those in config.py for consistency)
-# ---------------------------------------------------------------------------
+##
+ # ========================================
+ # @section I. Validation helpers (Same logic with config.py)
+ # ========================================
+ #
 
 _VALID_THINKING = {"enabled", "disabled"}
 _VALID_EFFORT   = {"low", "medium", "high", "max"}
 
+##
+ # @brief Normalise a thinking value, falling back to ``"disabled"``.
+ # 
+ # @param value: Model metadata (json).
+ # @param model_id: Model ID.
+ #
+ # @return "enabled" or "disabled".
+ # @retval enabled: if specify "enabled" in metadata.
+ # @retval disabled: "disabled" on missing or invalid values (safe default).
+ #
 def _safe_thinking(value, model_id: str = "") -> str:
-    """Normalise a thinking value, falling back to ``"disabled"``."""
     if not isinstance(value, str):
         print(f"[!] Model '{model_id}': 'thinking' must be a string. "
               f"Defaulting to 'disabled'.")
@@ -21,10 +37,17 @@ def _safe_thinking(value, model_id: str = "") -> str:
               f"Defaulting to 'disabled'.")
         return "disabled"
     return v
+# End-def
 
-
+##
+ # @brief Normalise an effort value, falling back to ``"medium"``.
+ # 
+ # @param value: Model metadata (json).
+ # @param model_id: Model ID.
+ #
+ # @return config in metadata or "medium" on missing or invalid values (safe default).
+ #
 def _safe_effort(value, model_id: str = "") -> str:
-    """Normalise an effort value, falling back to ``"medium"``."""
     if not isinstance(value, str):
         print(f"[!] Model '{model_id}': 'effort' must be a string. "
               f"Defaulting to 'medium'.")
@@ -35,12 +58,17 @@ def _safe_effort(value, model_id: str = "") -> str:
               f"Defaulting to 'medium'.")
         return "medium"
     return v
+# End-def
 
+##
+ # ========================================
+ # @section II. Dataclass
+ # ========================================
+ #
 
-# ---------------------------------------------------------------------------
-# Dataclass
-# ---------------------------------------------------------------------------
-
+##
+ # @brief Model Wrapper Struct.
+ #
 @dataclass
 class RegistryModelSpec:
     alias: str
@@ -53,21 +81,35 @@ class RegistryModelSpec:
     tpm: int = 0
     rpm: int = 0
     rpd: int = 0
-    # ---- New: thinking & effort fields ----
     thinking: str = "disabled"
     effort: str = "medium"
+# End-class
 
+##
+ # ========================================
+ # @section III. Registry Factor
+ # ========================================
+ #
 
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
-
+##
+ # @brief Registry Factor of `RegistryModelSpec`.
+ #
 class ModelRegistry:
+    ##
+     # @brief Constructor.
+     #
     def __init__(self, all_models, sub_list):
         self._specs = {}
         self._ordered_aliases = []
         self._load(all_models, sub_list)
+    # End-def
 
+    ##
+     # @brief registry all models.
+     #
+     # @param all_models, main and sub LLM models.
+     # @param sub_list, models in SUB_LIST.
+     #
     def _load(self, all_models, sub_list):
         # Create lookup dict for quick model matching
         model_lookup = {m.get("model_id"): m for m in all_models}
@@ -97,9 +139,23 @@ class ModelRegistry:
                 )
                 self._specs[alias] = spec
                 self._ordered_aliases.append(alias)
+            # End-if
+        # End-for
+    # End-def
 
+    ##
+     # @brief Get specified model's RegistryModelSpec.
+     #
+     # @param alias, specified model.
+     #
     def get_spec(self, alias: str) -> RegistryModelSpec:
         return self._specs.get(alias)
+    # End-def
 
+    ##
+     # @brief Get all models' RegistryModelSpec.
+     #
     def get_all_subagent_specs(self) -> list:
         return [self._specs[alias] for alias in self._ordered_aliases]
+    # End-def
+# End-class
