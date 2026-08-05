@@ -8,8 +8,8 @@
 from abc import ABC, abstractmethod
 
 ##
-# @brief Abstract base class for LLM Providers.
-#
+ # @brief Abstract base class for LLM Providers.
+ #
 class LLMProvider(ABC):
     ##
      # @brief Constructor.
