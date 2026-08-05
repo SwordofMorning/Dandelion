@@ -2,8 +2,8 @@
  # @file src/utils/logging/logger.py
  # @date 2026/08/05
  # 
- # @brief Logging Package.
- # Provides logging utilities for the Regent agent.
+ # @brief Agent Logger Component.
+ # Provides logging utilities for the agent.
  #
 
 import os

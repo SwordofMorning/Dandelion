@@ -1,55 +1,96 @@
-# src/utils/logging/session.py
+##
+ # @file src/utils/logging/session.py
+ # @date 2026/08/05
+ # 
+ # @brief Session Management.
+ # Provides session interface include target and memory.
+ #
 
 import os
 import json
 import datetime
 import shutil
 
+##
+ # ========================================
+ # @section I. Task State (target) and memory const value.
+ # ========================================
+ #
+
 TASK_STATE_FILENAME = "task_state.json"
 SESSION_MEMORY_DIRNAME = "memory"
 
 DEFAULT_TASK_STATE = {"target": "No specific target set.", "todos": [], "completed": []}
 
+##
+ # @brief Session class, provides all session control for CLI.
+ #
 class SessionManager:
+    ##
+     # @brief Constructor.
+     # 
+     # @param log_dir, path to save session file (dir), default to `.log/` subfolder.
+     #
     def __init__(self, log_dir=".log"):
         self.log_dir = log_dir
         self.current_session_id = None
         self.current_session_dir = None
-        
+
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
-            
-        self._ensure_default_session()
 
-    # ------------------------------------------------------------------
-    # Session-scoped runtime layout: task_state.json + memory/ live inside
-    # the session directory so each branch has its own task state and
-    # session-local memory. (Previously task_state was a single global file
-    # under llm/task/ shared by every session branch.)
-    # ------------------------------------------------------------------
+        self._ensure_default_session()
+    # End-def
+
+    ##
+     # ========================================
+     # @section II. Memory and Task State Layout
+     # ========================================
+     #
+
+    ##
+     # @brief Ensure a session directory has `task_state.json` and `memory/`.
+     #
+     # @param session_dir, path to save session file (dir), default to `.log/sess_xxxxxx/` subfolder.
+     # 
+     # @note Session-scoped runtime layout: 
+     # task_state.json + memory/ live inside the session directory;
+     # so each branch has its own task state and session-local memory.
+     #
+     # @note Global memory is still in `./llm` subfolder, while NO global task state (target).
+     #
     def _ensure_session_layout(self, session_dir):
-        """Ensure a session directory has task_state.json and memory/."""
         os.makedirs(session_dir, exist_ok=True)
 
+        # `memory/`
         memory_dir = os.path.join(session_dir, SESSION_MEMORY_DIRNAME)
         os.makedirs(memory_dir, exist_ok=True)
 
+        # `task_state.json`
         state_file = os.path.join(session_dir, TASK_STATE_FILENAME)
         if not os.path.exists(state_file):
             with open(state_file, "w", encoding="utf-8") as f:
                 json.dump(DEFAULT_TASK_STATE, f, indent=2, ensure_ascii=False)
+        # End-if
+    # End-def
 
+    ##
+     # @brief Path of the current session's task_state.json (None if no active session).
+     #
     def get_task_state_file(self):
-        """Path of the current session's task_state.json (None if no active session)."""
         if not self.current_session_dir:
             return None
         return os.path.join(self.current_session_dir, TASK_STATE_FILENAME)
+    # End-def
 
+    ##
+     # @brief Path of the current session's memory/ dir (None if no active session).
+     #
     def get_session_memory_dir(self):
-        """Path of the current session's memory/ dir (None if no active session)."""
         if not self.current_session_dir:
             return None
         return os.path.join(self.current_session_dir, SESSION_MEMORY_DIRNAME)
+    # End-def
 
     def load_task_state(self):
         state_file = self.get_task_state_file()
@@ -239,3 +280,4 @@ class SessionManager:
             return True, f"Session '{safe_session_id}' deleted successfully."
         except Exception as e:
             return False, f"Failed to delete session: {e}"
+# End-class

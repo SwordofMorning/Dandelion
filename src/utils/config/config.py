@@ -22,24 +22,24 @@ import configparser
 import json
 
 ##
-# ========================================
-# @section Thinking Level
-# ========================================
-#
+ # ========================================
+ # @section I. Thinking Level
+ # ========================================
+ #
 
 _VALID_THINKING = {"enabled", "disabled"}
 _VALID_EFFORT   = {"low", "medium", "high", "max"}
 
 ##
-# @brief Extract and validate the *thinking* field.
-# 
-# @param model_data: Model metadata (json).
-# @param model_id: Model ID.
-#
-# @return "enabled" or "disabled".
-# @retval enabled: if specify "enabled" in metadata.
-# @retval disabled: "disabled" on missing or invalid values (safe default).
-#
+ # @brief Extract and validate the *thinking* field.
+ # 
+ # @param model_data: Model metadata (json).
+ # @param model_id: Model ID.
+ #
+ # @return "enabled" or "disabled".
+ # @retval enabled: if specify "enabled" in metadata.
+ # @retval disabled: "disabled" on missing or invalid values (safe default).
+ #
 def _parse_thinking(model_data: dict, model_id: str = "") -> str:
     # Get model's thinking level.
     raw = model_data.get("thinking", "disabled")
@@ -66,13 +66,13 @@ def _parse_thinking(model_data: dict, model_id: str = "") -> str:
 # End-def
 
 ##
-# @brief Extract and validate the *effort* field.
-# 
-# @param model_data: Model metadata (json).
-# @param model_id: Model ID.
-#
-# @return config in metadata or "medium" on missing or invalid values (safe default).
-#
+ # @brief Extract and validate the *effort* field.
+ # 
+ # @param model_data: Model metadata (json).
+ # @param model_id: Model ID.
+ #
+ # @return config in metadata or "medium" on missing or invalid values (safe default).
+ #
 def _parse_effort(model_data: dict, model_id: str = "") -> str:
     # Get model's thinking level.
     raw = model_data.get("effort", "medium")
@@ -97,22 +97,22 @@ def _parse_effort(model_data: dict, model_id: str = "") -> str:
 # End-def
 
 ##
-# ========================================
-# @section Main Config Loader
-# ========================================
-#
+ # ========================================
+ # @section II. Main Config Loader
+ # ========================================
+ #
 
 ##
-# @brief Load config.
-# 
-# @param file_path: file path to config.
-#
-# @return Return a flat dict compatible with existing agent.py expectations,
-# with the ALL_MODELS registry for future dynamic routing.
-#
-# @note part.1 load "Main" section; 
-# @note part.2 load others sections i.e. LLM providers.
-#
+ # @brief Load config.
+ # 
+ # @param file_path: file path to config.
+ #
+ # @return Return a flat dict compatible with existing agent.py expectations,
+ # with the ALL_MODELS registry for future dynamic routing.
+ #
+ # @note part.1 load "Main" section; 
+ # @note part.2 load others sections i.e. LLM providers.
+ #
 def load_api_config(file_path):
     # ----- @par 1. "Main" Section Handle -----
 
