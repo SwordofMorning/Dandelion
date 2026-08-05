@@ -1,4 +1,10 @@
-# src/utils/llm_provider/openai.py
+##
+# @file src/utils/llm_provider/openai.py
+# @date 2026/08/05
+# 
+# @todo Need update to ResponseAPI.
+# Not impl now.
+#
 
 import json
 from .base import LLMProvider
