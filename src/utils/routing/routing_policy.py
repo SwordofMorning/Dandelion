@@ -104,7 +104,8 @@ class RoutingPolicy:
      # @param depth Subagent's "SubSub" depth, used to call infer_conditions.
      # @param estimated_tokens Estimated tokens.
      #
-     # @return Specified model.
+     # @return Selected model alias (str); None if no sub models defined.
+     # @throws RuntimeError when all sub-agent models are rate-limited.
      #
     def select_model(self, task_description: str, toolset_name: str, depth: int, estimated_tokens: int = 2000) -> str:
         if not self.specs:

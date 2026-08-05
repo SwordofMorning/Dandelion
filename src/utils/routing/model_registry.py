@@ -19,7 +19,7 @@ _VALID_EFFORT   = {"low", "medium", "high", "max"}
 ##
  # @brief Normalise a thinking value, falling back to ``"disabled"``.
  # 
- # @param value: Model metadata (json).
+ # @param value: Raw value of the "thinking" field from model metadata.
  # @param model_id: Model ID.
  #
  # @return "enabled" or "disabled".
@@ -42,7 +42,7 @@ def _safe_thinking(value, model_id: str = "") -> str:
 ##
  # @brief Normalise an effort value, falling back to ``"medium"``.
  # 
- # @param value: Model metadata (json).
+ # @param value: Raw value of the "effort" field from model metadata.
  # @param model_id: Model ID.
  #
  # @return config in metadata or "medium" on missing or invalid values (safe default).

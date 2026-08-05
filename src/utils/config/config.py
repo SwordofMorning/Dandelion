@@ -71,10 +71,10 @@ def _parse_thinking(model_data: dict, model_id: str = "") -> str:
  # @param model_data Model metadata (json).
  # @param model_id Model ID.
  #
- # @return config in metadata or "medium" on missing or invalid values (safe default).
+ # @return "effort" field value, or "medium" on missing/invalid values (safe default).
  #
 def _parse_effort(model_data: dict, model_id: str = "") -> str:
-    # Get model's thinking level.
+    # Get model's thinking level (effort).
     raw = model_data.get("effort", "medium")
 
     # 1. No "effort" key.

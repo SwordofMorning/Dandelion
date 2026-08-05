@@ -57,7 +57,7 @@ class AnthropicProvider(LLMProvider):
     ##
      # @brief Inject thinking configuration into payload when enabled.
      #
-     # @param payload model's config dict data.
+     # @param payload Request which is send to LLM payload to be mutated in place.
      #
      # @note Two formats are supported:
      # - Standard Anthropic: {"thinking": {"type": "enabled", "budget_tokens": N}}
@@ -90,7 +90,7 @@ class AnthropicProvider(LLMProvider):
      # @return LLM's response and error.
      #
     def safe_request(self, payload, logger=None, log_tag=""):
-        # 1. Construct payload.
+        # 1. Patch payload: set model id and inject thinking.
         payload["model"] = self.model_id
         self._inject_thinking(payload)
 
@@ -118,7 +118,7 @@ class AnthropicProvider(LLMProvider):
      # @return LLM's response and error.
      #
     def safe_stream_request(self, payload, logger=None, log_tag=""):
-        # Construct payload.
+        # 1. Patch payload: set model id and inject thinking.
         payload["model"] = self.model_id
         self._inject_thinking(payload)
 

@@ -27,7 +27,7 @@ class AgentLogger:
     # End-def
 
     ##
-     # @brief Get date.
+     # @brief Get today's daily log file path (log_dir/YYYY_MM_DD.log).
      #
      # @return log dir append date suffix.
      #

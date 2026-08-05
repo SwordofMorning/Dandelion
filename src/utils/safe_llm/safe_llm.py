@@ -2,7 +2,8 @@
  # @file src/utils/safe_llm/safe_llm.py
  # @date 2026/08/05
  # 
- # @brief LLM Request and models routing.
+ # @brief Thread-safe wrapper around LLM providers: message normalization,
+ # logging, and sub-agent model routing with retry/fallback.
  # 
  # @note Two LLM Request:
  # - Main Agent
@@ -122,7 +123,7 @@ class SafeLLMClient:
 
     ##
      # @brief Merge adjacent messages with the same role (e.g. the consecutive
-     # ser turns produced by history compaction around the summary message),
+     # user turns produced by history compaction around the summary message),
      # preserving content order. Returns a new list; input is not mutated.
      #
     @classmethod

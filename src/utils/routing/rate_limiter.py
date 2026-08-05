@@ -2,8 +2,8 @@
  # @file src/utils/routing/rate_limiter.py
  # @date 2026/08/05
  # 
- # @brief Rate limit control.
- # @todo Impl in the future, need to set a global-realtime limit checker (or by request limits from LLM).
+ # @brief Sliding-window rate limiter (TPM/RPM/RPD) per model alias.
+ # @todo Future: global real-time limit checking (or use provider's own limits).
  #
 
 import time
