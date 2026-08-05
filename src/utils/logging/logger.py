@@ -18,7 +18,7 @@ class AgentLogger:
     ##
      # @brief Constructor.
      #
-     # @param log_dir: Default to `.log/` subfolder.
+     # @param log_dir Default to `.log/` subfolder.
      #
     def __init__(self, log_dir="./.log"):
         self.log_dir = log_dir
@@ -29,7 +29,7 @@ class AgentLogger:
     ##
      # @brief Get today's daily log file path (log_dir/YYYY_MM_DD.log).
      #
-     # @return log dir append date suffix.
+     # @return Full path to today's log file.
      #
     def _get_daily_log_file(self):
         now_str = datetime.datetime.now().strftime("%Y_%m_%d")

@@ -34,8 +34,8 @@ class InteractiveCLI:
     ##
      # @brief Constructor.
      # 
-     # @param agent_instance: instance of class MyAgent.
-     # @param session_manager: instance of SessionManager.
+     # @param agent_instance instance of class MyAgent.
+     # @param session_manager instance of SessionManager.
      # 
     def __init__(self, agent_instance, session_manager):
         # Assignment object.
@@ -121,12 +121,12 @@ class InteractiveCLI:
     ##
      # @brief Map session names to exact session IDs.
      #
-     # @param target: Session name or ID.
+     # @param target Session name or ID.
      # 
      # @return ID or None.
      # 
-     # @retval id: Session's ID.
-     # @retval None: No such id or name.
+     # @retval id Session's ID.
+     # @retval None No such id or name.
      #
     def _resolve_session_id(self, target):
         sessions = self.session.list_sessions()
@@ -142,7 +142,7 @@ class InteractiveCLI:
      # branch -a:            list all branch;
      # branch -d <name/id>:  delete selected branch.
      #
-     # @param args: Terminal input.
+     # @param args Terminal input.
      #
     def _cmd_branch(self, args):
         # ----- 1. List all branch -----
@@ -200,7 +200,7 @@ class InteractiveCLI:
      # checkout -b <name/id>:    create a new session branch;
      # checkout <name/id>:       switch to one existed session branch.
      #
-     # @param args: Terminal input.
+     # @param args Terminal input.
      #
     def _cmd_checkout(self, args):
         # Error
@@ -293,7 +293,7 @@ class InteractiveCLI:
      # @brief `load` command handle. 
      # load <filepath>: load a file (like .md) to staged message buffer.
      #
-     # @param args: Terminal input.
+     # @param args Terminal input.
      #
     def _cmd_load(self, args):
         # Error

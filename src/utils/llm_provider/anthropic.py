@@ -28,7 +28,7 @@ class AnthropicProvider(LLMProvider):
      # @param base_url Custom base URL (optional).
      # @param model_id Model identifier.
      # @param thinking "enabled" or "disabled" - whether to enable extended thinking.
-     # @param effort: Reasoning effort level: "low", "medium", "high", or "max".
+     # @param effort Reasoning effort level: "low", "medium", "high", or "max".
      #
     def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
         # Dynamic import.
@@ -57,7 +57,7 @@ class AnthropicProvider(LLMProvider):
     ##
      # @brief Inject thinking configuration into payload when enabled.
      #
-     # @param payload Request which is send to LLM payload to be mutated in place.
+     # @param payload Request payload to be mutated in place (the payload sent to the LLM).
      #
      # @note Two formats are supported:
      # - Standard Anthropic: {"thinking": {"type": "enabled", "budget_tokens": N}}

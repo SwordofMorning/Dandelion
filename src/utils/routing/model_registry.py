@@ -19,12 +19,12 @@ _VALID_EFFORT   = {"low", "medium", "high", "max"}
 ##
  # @brief Normalise a thinking value, falling back to ``"disabled"``.
  # 
- # @param value: Raw value of the "thinking" field from model metadata.
- # @param model_id: Model ID.
+ # @param value Raw value of the "thinking" field from model metadata.
+ # @param model_id Model ID.
  #
  # @return "enabled" or "disabled".
- # @retval enabled: if specify "enabled" in metadata.
- # @retval disabled: "disabled" on missing or invalid values (safe default).
+ # @retval enabled when "enabled" is specified in metadata.
+ # @retval disabled "disabled" on missing or invalid values (safe default).
  #
 def _safe_thinking(value, model_id: str = "") -> str:
     if not isinstance(value, str):
@@ -42,10 +42,10 @@ def _safe_thinking(value, model_id: str = "") -> str:
 ##
  # @brief Normalise an effort value, falling back to ``"medium"``.
  # 
- # @param value: Raw value of the "effort" field from model metadata.
- # @param model_id: Model ID.
+ # @param value Raw value of the "effort" field from model metadata.
+ # @param model_id Model ID.
  #
- # @return config in metadata or "medium" on missing or invalid values (safe default).
+ # @return "effort" field value, or "medium" on missing/invalid values (safe default).
  #
 def _safe_effort(value, model_id: str = "") -> str:
     if not isinstance(value, str):
@@ -87,12 +87,12 @@ class RegistryModelSpec:
 
 ##
  # ========================================
- # @section III. Registry Factor
+ # @section III. Registry Factory
  # ========================================
  #
 
 ##
- # @brief Registry Factor of `RegistryModelSpec`.
+ # @brief Registry Factory of `RegistryModelSpec`.
  #
 class ModelRegistry:
     ##

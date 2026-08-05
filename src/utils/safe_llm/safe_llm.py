@@ -7,7 +7,7 @@
  # 
  # @note Two LLM Request:
  # - Main Agent
- #      MyAgent.step() -> payload -> afeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
+ #      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
  # - Sub Agent
  #      PlanTool.execute()  -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
  #      SubAgent.run()      -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
@@ -15,10 +15,10 @@
  # For main: Message normalization (_normalize_messages) 
  # and memory/task state injection both occur in the main agent path.
  #
- # For sub: Dynamically selects models based on task_description/toolset/depth;
- # Includes retries and fallbacks; memory/state injection without going through the main agent.
+ # For sub: Dynamically selects models based on task_description/toolset/depth,
+ # with retries and fallbacks; no memory/task-state injection (main-agent path only).
  #
- # BTW, PlanTool is a bypass LLM call which is not belong to Main Agent.
+ # BTW, PlanTool is a bypass LLM call which does not go through the Main Agent.
  #
 
 import threading
@@ -37,14 +37,14 @@ class SafeLLMClient:
     ##
      # @brief Constructor.
      #
-     # @param api_key: API key for the main agent.
-     # @param base_url: Base URL for the main agent.
-     # @param model_id: Model identifier for the main agent.
-     # @param sdk_type: SDK type ("Anthropic", "OpenAI", "Gemini", "AI Studio", "NVIDIA").
-     # @param all_models: Full model list for sub-agent routing.
-     # @param thinking: "enabled" or "disabled" — extended thinking toggle for the main agent.
-     # @param effort: Reasoning effort: "low", "medium", "high", or "max".
-     # @param logger: Optional SessionManager for logging final API payloads (post-injection).
+     # @param api_key API key for the main agent.
+     # @param base_url Base URL for the main agent.
+     # @param model_id Model identifier for the main agent.
+     # @param sdk_type SDK type ("Anthropic", "OpenAI", "Gemini", "AI Studio", "NVIDIA").
+     # @param all_models Full model list for sub-agent routing.
+     # @param thinking "enabled" or "disabled" — extended thinking toggle for the main agent.
+     # @param effort Reasoning effort: "low", "medium", "high", or "max".
+     # @param logger Optional SessionManager for logging final API payloads (post-injection).
      #
     def __init__(self, api_key, base_url, model_id, sdk_type="Anthropic",
                  all_models=None, sub_list=None,
@@ -247,7 +247,7 @@ class SafeLLMClient:
         max_retries = 2
         current_alias = alias
 
-        # 3. Choose models, with `max_retries + 1` times retry.
+        # 3. Retry the selected model up to `max_retries + 1` times.
         for attempt in range(max_retries + 1):
             provider = self._get_cached_provider(current_alias)
 
@@ -263,9 +263,9 @@ class SafeLLMClient:
 
             print(f"[Router] Model '{current_alias}' attempt {attempt+1} failed: {err}")
 
-            # 4. Reach max retry times, then fallback.
+            # 4. All retries failed, walk the fallback chain.
             if attempt == max_retries:
-                # Iterate all models, candidate given by `get_fallback_chain`, check in for loop .
+                # Iterate all models; candidates come from `get_fallback_chain`.
                 for fallback_alias in self._policy.get_fallback_chain(current_alias):
                     # If exhausted limits, ignore this one.
                     if not self._rate_limiter.acquire(fallback_alias, estimated_tokens):

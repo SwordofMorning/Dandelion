@@ -115,8 +115,8 @@ class SessionManager:
      # @param state state json which need to write to `task_state.json`.
      #
      # @return Success or Fail.
-     # @retval True, write file success.
-     # @retval False, write file fail.
+     # @retval True write file success.
+     # @retval False write file fail.
      #
     def save_task_state(self, state):
         state_file = self.get_task_state_file()
@@ -154,7 +154,7 @@ class SessionManager:
     ##
      # @brief Create one session.
      #
-     # @param name: Session name.
+     # @param name Session name.
      #
      # @return Session ID.
      #
@@ -216,8 +216,8 @@ class SessionManager:
      # @param session_id target session ID.
      #
      # @return Success or fail. 
-     # @retval True, switch session success.
-     # @retval False, switch session fail.
+     # @retval True switch session success.
+     # @retval False switch session fail.
      #
     def switch_session(self, session_id):
         safe_session_id = os.path.basename(session_id.strip())
@@ -322,8 +322,8 @@ class SessionManager:
      # @param session_id which session will be deleted.
      #
      # @return Success or fail. 
-     # @retval True, delete session success.
-     # @retval False, delete session fail.
+     # @retval True delete session success.
+     # @retval False delete session fail.
      #
     def delete_session(self, session_id):
         # Check existed.

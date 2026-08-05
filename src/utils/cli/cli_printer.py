@@ -28,9 +28,9 @@ class CLIPrinter:
     ##
      # @brief Centralized print function with color control and level dispatch.
      # 
-     # @param msg: The message to print.
-     # @param level: Output level - one of: info, success, error, warning, debug, agent, raw.
-     # @param end: String appended after the message (default: newline).
+     # @param msg The message to print.
+     # @param level Output level - one of: info, success, error, warning, debug, agent, raw.
+     # @param end String appended after the message (default: newline).
      #
      # @return None.
      #
@@ -125,9 +125,9 @@ class CLIPrinter:
     ##
      # @brief Print a divider line.
      # 
-     # @param char: Character to repeat for the divider.
-     # @param length: Length of the divider line.
-     # @param color: Optional color constant (e.g., CLIPrinter.C_CYAN).
+     # @param char Character to repeat for the divider.
+     # @param length Length of the divider line.
+     # @param color Optional color constant (e.g., CLIPrinter.C_CYAN).
      # 
      # @return None.
      #
@@ -142,10 +142,10 @@ class CLIPrinter:
     ##
      # @brief Print a formatted header with title centered between dividers.
      # 
-     # @param title: The header title text.
-     # @param char: Divider character.
-     # @param length: Total width of the header.
-     # @param color: Optional color for the dividers.
+     # @param title The header title text.
+     # @param char Divider character.
+     # @param length Total width of the header.
+     # @param color Optional color for the dividers.
      # 
      # @return None.
      #
@@ -163,10 +163,10 @@ class CLIPrinter:
     ##
      # @brief Print a key-value pair with optional colors.
      # 
-     # @param key: The key/label.
-     # @param value: The value.
-     # @param key_color: Optional color for the key.
-     # @param value_color: Optional color for the value.
+     # @param key The key/label.
+     # @param value The value.
+     # @param key_color Optional color for the key.
+     # @param value_color Optional color for the value.
      # 
      # @return None.
      #

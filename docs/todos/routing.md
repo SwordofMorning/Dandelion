@@ -1,7 +1,7 @@
 ## 路由子系统全景
 
 ```
-api.cfg（.env/）
+api.cfg (.env/)
  │  ALL_MODELS: 全部模型元数据（含 conditions/TPM/RPM/RPD/thinking/effort/max_token）
  │  SUB_LIST:   子代理模型优先级列表（字符串数组）
  ▼

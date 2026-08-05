@@ -37,8 +37,8 @@ _VALID_EFFORT   = {"low", "medium", "high", "max"}
  # @param model_id Model ID.
  #
  # @return "enabled" or "disabled".
- # @retval enabled: if specify "enabled" in metadata.
- # @retval disabled: "disabled" on missing or invalid values (safe default).
+ # @retval enabled when "enabled" is specified in metadata.
+ # @retval disabled "disabled" on missing or invalid values (safe default).
  #
 def _parse_thinking(model_data: dict, model_id: str = "") -> str:
     # Get model's thinking level.

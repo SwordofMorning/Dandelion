@@ -21,10 +21,10 @@ __all__ = [
 ##
  # @brief Factory function to create a provider instance based on SDK type.
  # 
- # @param sdk_type: One of "anthropic", "openai", "gemini", "ai studio", "nvidia".
- # @param api_key: API key for the provider.
- # @param base_url: Base URL (optional).
- # @param model_id: Model identifier.
+ # @param sdk_type One of "anthropic", "openai", "gemini", "ai studio", "nvidia".
+ # @param api_key API key for the provider.
+ # @param base_url Base URL (optional).
+ # @param model_id Model identifier.
  #
  # @return LLMProvider instance.
  #
