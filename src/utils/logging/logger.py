@@ -37,7 +37,7 @@ class AgentLogger:
     # End-def
 
     ##
-     # @brief Serializer OBJ.
+     # @brief Convert Pydantic/SDK blocks (like ThinkingBlock) to standard dicts.
      #
      # @return OBJ's metadata.
      #
