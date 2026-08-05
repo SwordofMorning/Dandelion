@@ -1,4 +1,10 @@
-# src/utils/routing/rate_limiter.py
+##
+ # @file src/utils/routing/rate_limiter.py
+ # @date 2026/08/05
+ # 
+ # @brief Rate limit control.
+ # @todo Impl in the future, need to set a global-realtime limit checker (or by request limits from LLM).
+ #
 
 import time
 import threading
