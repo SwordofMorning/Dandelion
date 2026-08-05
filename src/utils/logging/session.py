@@ -44,7 +44,7 @@ class SessionManager:
 
     ##
      # ========================================
-     # @section II. Memory and Task State Layout
+     # @section II. Session Memory and Target Management
      # ========================================
      #
 
@@ -92,6 +92,11 @@ class SessionManager:
         return os.path.join(self.current_session_dir, SESSION_MEMORY_DIRNAME)
     # End-def
 
+    ##
+     # @brief Load `task_state.json`.
+     #
+     # @return `task_state.json` if success.
+     #
     def load_task_state(self):
         state_file = self.get_task_state_file()
         if not state_file or not os.path.exists(state_file):
@@ -102,7 +107,17 @@ class SessionManager:
         except Exception as e:
             print(f"[-] Warning: Failed to parse task state at {state_file}: {e}")
             return None
+    # End-def
 
+    ##
+     # @brief Save `task_state.json`.
+     #
+     # @param state, state json which need to write to `task_state.json`.
+     #
+     # @return Success or Fail.
+     # @retval True, write file success.
+     # @retval False, write file fail.
+     #
     def save_task_state(self, state):
         state_file = self.get_task_state_file()
         if not state_file:
@@ -116,6 +131,7 @@ class SessionManager:
             json.dump(state, f, indent=2, ensure_ascii=False)
         os.replace(tmp_path, state_file)
         return True
+    # End-def
 
     def migrate_legacy_task_state(self, workspace_dir):
         """One-time, idempotent migration of the legacy global task state
