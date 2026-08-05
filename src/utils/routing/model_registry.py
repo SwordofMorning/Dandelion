@@ -107,8 +107,8 @@ class ModelRegistry:
     ##
      # @brief registry all models.
      #
-     # @param all_models, main and sub LLM models.
-     # @param sub_list, models in SUB_LIST.
+     # @param all_models main and sub LLM models.
+     # @param sub_list models in SUB_LIST.
      #
     def _load(self, all_models, sub_list):
         # Create lookup dict for quick model matching
@@ -146,7 +146,7 @@ class ModelRegistry:
     ##
      # @brief Get specified model's RegistryModelSpec.
      #
-     # @param alias, specified model.
+     # @param alias specified model.
      #
     def get_spec(self, alias: str) -> RegistryModelSpec:
         return self._specs.get(alias)

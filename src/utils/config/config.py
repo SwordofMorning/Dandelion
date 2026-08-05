@@ -33,8 +33,8 @@ _VALID_EFFORT   = {"low", "medium", "high", "max"}
 ##
  # @brief Extract and validate the *thinking* field.
  # 
- # @param model_data: Model metadata (json).
- # @param model_id: Model ID.
+ # @param model_data Model metadata (json).
+ # @param model_id Model ID.
  #
  # @return "enabled" or "disabled".
  # @retval enabled: if specify "enabled" in metadata.
@@ -68,8 +68,8 @@ def _parse_thinking(model_data: dict, model_id: str = "") -> str:
 ##
  # @brief Extract and validate the *effort* field.
  # 
- # @param model_data: Model metadata (json).
- # @param model_id: Model ID.
+ # @param model_data Model metadata (json).
+ # @param model_id Model ID.
  #
  # @return config in metadata or "medium" on missing or invalid values (safe default).
  #
@@ -105,7 +105,7 @@ def _parse_effort(model_data: dict, model_id: str = "") -> str:
 ##
  # @brief Load config.
  # 
- # @param file_path: file path to config.
+ # @param file_path file path to config.
  #
  # @return Return a flat dict compatible with existing agent.py expectations,
  # with the ALL_MODELS registry for future dynamic routing.

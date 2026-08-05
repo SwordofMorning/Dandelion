@@ -29,7 +29,7 @@ class SessionManager:
     ##
      # @brief Constructor.
      # 
-     # @param log_dir, path to save session file (dir), default to `.log/` subfolder.
+     # @param log_dir path to save session file (dir), default to `.log/` subfolder.
      #
     def __init__(self, log_dir=".log"):
         self.log_dir = log_dir
@@ -51,7 +51,7 @@ class SessionManager:
     ##
      # @brief Ensure a session directory has `task_state.json` and `memory/`.
      #
-     # @param session_dir, path to save session file (dir), default to `.log/sess_xxxxxx/` subfolder.
+     # @param session_dir path to save session file (dir), default to `.log/sess_xxxxxx/` subfolder.
      # 
      # @note Session-scoped runtime layout: 
      # task_state.json + memory/ live inside the session directory;
@@ -112,7 +112,7 @@ class SessionManager:
     ##
      # @brief Save `task_state.json`.
      #
-     # @param state, state json which need to write to `task_state.json`.
+     # @param state state json which need to write to `task_state.json`.
      #
      # @return Success or Fail.
      # @retval True, write file success.
@@ -213,7 +213,7 @@ class SessionManager:
     ##
      # @brief Switch to another session. 
      #
-     # @param session_id, target session ID.
+     # @param session_id target session ID.
      #
      # @return Success or fail. 
      # @retval True, switch session success.
@@ -284,8 +284,8 @@ class SessionManager:
     ##
      # @brief Save chat history to session folder.
      #
-     # @param history, chat history (json format).
-     # @param target_dir, session dir.
+     # @param history chat history (json format).
+     # @param target_dir session dir.
      #
     def save_history(self, history, target_dir=None):
         tdir = target_dir or self.current_session_dir
@@ -300,8 +300,8 @@ class SessionManager:
     ##
      # @brief Save request logs.
      # 
-     # @param tag, MainAgent or SubAgent with serial number (sa-xxxx).
-     # @param payload, original data (payload, which is sent to LLM) to save.
+     # @param tag MainAgent or SubAgent with serial number (sa-xxxx).
+     # @param payload original data (payload, which is sent to LLM) to save.
      #
     def log_api_call(self, tag, payload):
         if not self.current_session_dir:
@@ -319,7 +319,7 @@ class SessionManager:
     ##
      # @brief Delete session.
      #
-     # @param session_id, which session will be deleted.
+     # @param session_id which session will be deleted.
      #
      # @return Success or fail. 
      # @retval True, delete session success.

@@ -103,8 +103,8 @@ class SafeLLMClient:
      # @brief Merge two message contents into one Anthropic-style block list,
      # preserving the original order of both sides.
      #
-     # @param a, message contents a.
-     # @param b, message contents b.
+     # @param a message contents a.
+     # @param b message contents b.
      #
      # @return [a + b].
      #

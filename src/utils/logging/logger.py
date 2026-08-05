@@ -51,8 +51,8 @@ class AgentLogger:
     ##
      # @brief Write payload to log file.
      #
-     # @param tag, MainAgent or SubAgent with serial number (sa-xxxx).
-     # @param payload, original data (payload, which is sent to LLM) to save.
+     # @param tag MainAgent or SubAgent with serial number (sa-xxxx).
+     # @param payload original data (payload, which is sent to LLM) to save.
      #
     def log_api_call(self, tag, payload):
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

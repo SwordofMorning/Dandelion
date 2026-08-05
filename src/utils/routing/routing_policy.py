@@ -56,9 +56,9 @@ class RoutingPolicy:
     ##
      # @brief Dynamic set conditions.
      #
-     # @param task_description, Subagent's task description.
-     # @param toolset_name, Subagent's toolset.
-     # @param depth, Subagent's "SubSub" depth.
+     # @param task_description Subagent's task description.
+     # @param toolset_name Subagent's toolset.
+     # @param depth Subagent's "SubSub" depth.
      #
      # @return Routing conditions.
      #
@@ -99,10 +99,10 @@ class RoutingPolicy:
     ##
      # @brief Choose Subagent (LLM Model) from condition
      #
-     # @param task_description, Subagent's task description, used to call infer_conditions.
-     # @param toolset_name, Subagent's toolset, used to call infer_conditions.
-     # @param depth, Subagent's "SubSub" depth, used to call infer_conditions.
-     # @param estimated_tokens, Estimated tokens.
+     # @param task_description Subagent's task description, used to call infer_conditions.
+     # @param toolset_name Subagent's toolset, used to call infer_conditions.
+     # @param depth Subagent's "SubSub" depth, used to call infer_conditions.
+     # @param estimated_tokens Estimated tokens.
      #
      # @return Specified model.
      #
