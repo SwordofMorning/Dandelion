@@ -1,9 +1,9 @@
 ##
-# @file src/utils/llm_provider/anthropic.py
-# @date 2026/08/05
-# 
-# @brief Anthropic API Implement.
-#
+ # @file src/utils/llm_provider/anthropic.py
+ # @date 2026/08/05
+ # 
+ # @brief Anthropic API Implement.
+ #
 
 from .base import LLMProvider
 
@@ -18,18 +18,18 @@ EFFORT_TO_BUDGET_TOKENS = {
 DEFAULT_EFFORT = "medium"
 
 ##
-# @brief Anthropic API Class.
-#
+ # @brief Anthropic API Class.
+ #
 class AnthropicProvider(LLMProvider):
     ##
-    # @brief Constructor.
-    # 
-    # @param api_key: API key for the provider.
-    # @param base_url: Custom base URL (optional).
-    # @param model_id: Model identifier.
-    # @param thinking: "enabled" or "disabled" - whether to enable extended thinking.
-    # @param effort: Reasoning effort level: "low", "medium", "high", or "max".
-    #
+     # @brief Constructor.
+     # 
+     # @param api_key: API key for the provider.
+     # @param base_url: Custom base URL (optional).
+     # @param model_id: Model identifier.
+     # @param thinking: "enabled" or "disabled" - whether to enable extended thinking.
+     # @param effort: Reasoning effort level: "low", "medium", "high", or "max".
+     #
     def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
         # Dynamic import.
         from anthropic import Anthropic
@@ -55,15 +55,15 @@ class AnthropicProvider(LLMProvider):
     # End-def
 
     ##
-    # @brief Inject thinking configuration into payload when enabled.
-    #
-    # @param payload model's config dict data.
-    #
-    # @note Two formats are supported:
-    # - Standard Anthropic: {"thinking": {"type": "enabled", "budget_tokens": N}}
-    # - DeepSeek (Anthropic-compatible): {"output_config": {"effort": "low"|"medium"|"high"|"max"}}
-    #   DeepSeek ignores budget_tokens; effort is the primary knob.
-    # 
+     # @brief Inject thinking configuration into payload when enabled.
+     #
+     # @param payload model's config dict data.
+     #
+     # @note Two formats are supported:
+     # - Standard Anthropic: {"thinking": {"type": "enabled", "budget_tokens": N}}
+     # - DeepSeek (Anthropic-compatible): {"output_config": {"effort": "low"|"medium"|"high"|"max"}}
+     #   DeepSeek ignores budget_tokens; effort is the primary knob.
+     # 
     def _inject_thinking(self, payload):
         if self.thinking == "enabled":
             if self._is_deepseek:
@@ -81,14 +81,14 @@ class AnthropicProvider(LLMProvider):
     # End-def
 
     ##
-    # @brief Non-streaming request.
-    #
-    # @param payload, data send to LLM.
-    # @param logger, logger object, save log to file.
-    # @param log_tag, log tag saved in file.
-    #
-    # @return LLM's response and error.
-    #
+     # @brief Non-streaming request.
+     #
+     # @param payload, data send to LLM.
+     # @param logger, logger object, save log to file.
+     # @param log_tag, log tag saved in file.
+     #
+     # @return LLM's response and error.
+     #
     def safe_request(self, payload, logger=None, log_tag=""):
         # 1. Construct payload.
         payload["model"] = self.model_id
@@ -109,14 +109,14 @@ class AnthropicProvider(LLMProvider):
     # End-def
 
     ##
-    # @brief Streaming request.
-    #
-    # @param payload, data send to LLM.
-    # @param logger, logger object, save log to file.
-    # @param log_tag, log tag saved in file.
-    #
-    # @return LLM's response and error.
-    #
+     # @brief Streaming request.
+     #
+     # @param payload, data send to LLM.
+     # @param logger, logger object, save log to file.
+     # @param log_tag, log tag saved in file.
+     #
+     # @return LLM's response and error.
+     #
     def safe_stream_request(self, payload, logger=None, log_tag=""):
         # Construct payload.
         payload["model"] = self.model_id
@@ -154,8 +154,8 @@ class AnthropicProvider(LLMProvider):
     # End-def
 
     ##
-    # @brief Extract plain text from response blocks.
-    #
+     # @brief Extract plain text from response blocks.
+     #
     def extract_text(self, content):
         if not isinstance(content, list):
             return str(content)

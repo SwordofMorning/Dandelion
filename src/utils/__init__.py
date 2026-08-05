@@ -1,9 +1,9 @@
 ##
-# @file src/utils/__init__.py
-# @date 2026/08/04
-# 
-# @brief Provides utilities for the Regent agent.
-#
+ # @file src/utils/__init__.py
+ # @date 2026/08/04
+ # 
+ # @brief Provides utilities for the Regent agent.
+ #
 
 # CLI utilities
 from .cli import CLIPrinter, InteractiveCLI, cli

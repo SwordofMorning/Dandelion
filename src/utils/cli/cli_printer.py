@@ -1,19 +1,19 @@
 ##
-# @file src/utils/cli_printer.py
-# @date 2026/08/04
-# 
-# @brief CLI printing and formatting utility.
-# A wrapper function, string -> cli_printer -> string(colorful) -> terminal
-#
+ # @file src/utils/cli_printer.py
+ # @date 2026/08/04
+ # 
+ # @brief CLI printing and formatting utility.
+ # A wrapper function, string -> cli_printer -> string(colorful) -> terminal
+ #
 
 import builtins
 
 ##
-# @brief Centralized print class with color control and level-based formatting.
-# 
-# Provides consistent colored output for CLI applications with support for
-# different message levels: info, success, error, warning, debug, agent, raw.
-#
+ # @brief Centralized print class with color control and level-based formatting.
+ # 
+ # Provides consistent colored output for CLI applications with support for
+ # different message levels: info, success, error, warning, debug, agent, raw.
+ #
 class CLIPrinter:    
     # ANSI Color Codes
     C_RESET   = "\033[0m"
@@ -26,14 +26,14 @@ class CLIPrinter:
     C_GRAY    = "\033[90m"
 
     ##
-    # @brief Centralized print function with color control and level dispatch.
-    # 
-    # @param msg: The message to print.
-    # @param level: Output level - one of: info, success, error, warning, debug, agent, raw.
-    # @param end: String appended after the message (default: newline).
-    #
-    # @return None.
-    #
+     # @brief Centralized print function with color control and level dispatch.
+     # 
+     # @param msg: The message to print.
+     # @param level: Output level - one of: info, success, error, warning, debug, agent, raw.
+     # @param end: String appended after the message (default: newline).
+     #
+     # @return None.
+     #
     @staticmethod
     def print(msg: str, level: str = "info", end: str = "\n") -> None:
         # Handle prefix newline cleanly
@@ -67,70 +67,70 @@ class CLIPrinter:
         builtins.print(f"{prefix}{msg}", end=end)
 
     ##
-    # @brief Print an informational message (cyan [*]).
-    #
+     # @brief Print an informational message (cyan [*]).
+     #
     @staticmethod
     def info(msg: str, end: str = "\n") -> None:
         CLIPrinter.print(msg, level="info", end=end)
     # End-def
 
     ##
-    # @brief Print a success message (green [+]).
-    #
+     # @brief Print a success message (green [+]).
+     #
     @staticmethod
     def success(msg: str, end: str = "\n") -> None:
         CLIPrinter.print(msg, level="success", end=end)
     # End-def
 
     ##
-    # @brief Print an error message (red [-]).
-    #
+     # @brief Print an error message (red [-]).
+     #
     @staticmethod
     def error(msg: str, end: str = "\n") -> None:
         CLIPrinter.print(msg, level="error", end=end)
     # End-def
 
     ##
-    # @brief Print a warning message (yellow [!]).
-    #
+     # @brief Print a warning message (yellow [!]).
+     #
     @staticmethod
     def warning(msg: str, end: str = "\n") -> None:
         CLIPrinter.print(msg, level="warning", end=end)
     # End-def
 
     ##
-    # @brief Print a debug message (gray [>]).
-    #
+     # @brief Print a debug message (gray [>]).
+     #
     @staticmethod
     def debug(msg: str, end: str = "\n") -> None:
         CLIPrinter.print(msg, level="debug", end=end)
     # End-def
 
     ##
-    # @brief Print an agent message (magenta [Agent]).
-    #
+     # @brief Print an agent message (magenta [Agent]).
+     #
     @staticmethod
     def agent(msg: str, end: str = "\n") -> None:
         CLIPrinter.print(msg, level="agent", end=end)
     # End-def
 
     ##
-    # @brief Print a raw message without any prefix or formatting.
-    #
+     # @brief Print a raw message without any prefix or formatting.
+     #
     @staticmethod
     def raw(msg: str, end: str = "\n") -> None:
         CLIPrinter.print(msg, level="raw", end=end)
     # End-def
 
     ##
-    # @brief Print a divider line.
-    # 
-    # @param char: Character to repeat for the divider.
-    # @param length: Length of the divider line.
-    # @param color: Optional color constant (e.g., CLIPrinter.C_CYAN).
-    # 
-    # @return None.
-    #
+     # @brief Print a divider line.
+     # 
+     # @param char: Character to repeat for the divider.
+     # @param length: Length of the divider line.
+     # @param color: Optional color constant (e.g., CLIPrinter.C_CYAN).
+     # 
+     # @return None.
+     #
     @staticmethod
     def divider(char: str = "=", length: int = 50, color: str = None) -> None:
         line = char * length
@@ -140,15 +140,15 @@ class CLIPrinter:
     # End-def
 
     ##
-    # @brief Print a formatted header with title centered between dividers.
-    # 
-    # @param title: The header title text.
-    # @param char: Divider character.
-    # @param length: Total width of the header.
-    # @param color: Optional color for the dividers.
-    # 
-    # @return None.
-    #
+     # @brief Print a formatted header with title centered between dividers.
+     # 
+     # @param title: The header title text.
+     # @param char: Divider character.
+     # @param length: Total width of the header.
+     # @param color: Optional color for the dividers.
+     # 
+     # @return None.
+     #
     @staticmethod
     def header(title: str, char: str = "=", length: int = 50, color: str = None) -> None:
         if color is None:
@@ -161,15 +161,15 @@ class CLIPrinter:
     # End-def
 
     ##
-    # @brief Print a key-value pair with optional colors.
-    # 
-    # @param key: The key/label.
-    # @param value: The value.
-    # @param key_color: Optional color for the key.
-    # @param value_color: Optional color for the value.
-    # 
-    # @return None.
-    #
+     # @brief Print a key-value pair with optional colors.
+     # 
+     # @param key: The key/label.
+     # @param value: The value.
+     # @param key_color: Optional color for the key.
+     # @param value_color: Optional color for the value.
+     # 
+     # @return None.
+     #
     @staticmethod
     def key_value(key: str, value: str, key_color: str = None, value_color: str = None) -> None:
         formatted_key = f"{key_color}{key}{CLIPrinter.C_RESET}" if key_color else key

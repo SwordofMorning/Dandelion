@@ -1,9 +1,9 @@
 ##
-# @file src/utils/cli/interactive_cli.py
-# @date 2026/08/04
-# 
-# @brief Interactive CLI for Regent.
-#
+ # @file src/utils/cli/interactive_cli.py
+ # @date 2026/08/04
+ # 
+ # @brief Interactive CLI for Regent.
+ #
 
 import os
 import shlex
@@ -12,10 +12,10 @@ import subprocess
 import builtins
 
 ##
-# @note import toolkit
-# if success, there will be Tab auto-completion
-# if not, could still use without auto-completion.
-#
+ # @note import toolkit
+ # if success, there will be Tab auto-completion
+ # if not, could still use without auto-completion.
+ #
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import NestedCompleter, PathCompleter
@@ -28,15 +28,15 @@ except ImportError:
 from .cli_printer import CLIPrinter
 
 ##
-# @brief Interactive CLI for Regent workspace management.
-#
+ # @brief Interactive CLI for Regent workspace management.
+ #
 class InteractiveCLI:
     ##
-    # @brief Constructor.
-    # 
-    # @param agent_instance: instance of class MyAgent.
-    # @param session_manager: instance of SessionManager.
-    # 
+     # @brief Constructor.
+     # 
+     # @param agent_instance: instance of class MyAgent.
+     # @param session_manager: instance of SessionManager.
+     # 
     def __init__(self, agent_instance, session_manager):
         # Assignment object.
         self.agent = agent_instance
@@ -55,10 +55,10 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief Dynamically build the context-aware completer before each prompt.
-    #
-    # @return comp_dict or None (if not HAS_PTK).
-    #
+     # @brief Dynamically build the context-aware completer before each prompt.
+     #
+     # @return comp_dict or None (if not HAS_PTK).
+     #
     def _build_completer(self):
         if not HAS_PTK:
             return None
@@ -95,8 +95,8 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief Help.
-    #
+     # @brief Help.
+     #
     def _print_help(self):
         help_text = (
             f"{self.cli.C_CYAN}\n================= REGENT WORKSPACE ================={self.cli.C_RESET}\n"
@@ -119,15 +119,15 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief Map session names to exact session IDs.
-    #
-    # @param target: Session name or ID.
-    # 
-    # @return ID or None.
-    # 
-    # @retval id: Session's ID.
-    # @retval None: No such id or name.
-    #
+     # @brief Map session names to exact session IDs.
+     #
+     # @param target: Session name or ID.
+     # 
+     # @return ID or None.
+     # 
+     # @retval id: Session's ID.
+     # @retval None: No such id or name.
+     #
     def _resolve_session_id(self, target):
         sessions = self.session.list_sessions()
         for s in sessions:
@@ -138,12 +138,12 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief `brach` command handle. 
-    # branch -a:            list all branch;
-    # branch -d <name/id>:  delete selected branch.
-    #
-    # @param args: Terminal input.
-    #
+     # @brief `brach` command handle. 
+     # branch -a:            list all branch;
+     # branch -d <name/id>:  delete selected branch.
+     #
+     # @param args: Terminal input.
+     #
     def _cmd_branch(self, args):
         # ----- 1. List all branch -----
         if not args or args[0] == '-a':
@@ -196,12 +196,12 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief `checkout` command handle. 
-    # checkout -b <name/id>:    create a new session branch;
-    # checkout <name/id>:       switch to one existed session branch.
-    #
-    # @param args: Terminal input.
-    #
+     # @brief `checkout` command handle. 
+     # checkout -b <name/id>:    create a new session branch;
+     # checkout <name/id>:       switch to one existed session branch.
+     #
+     # @param args: Terminal input.
+     #
     def _cmd_checkout(self, args):
         # Error
         if not args:
@@ -251,9 +251,9 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief `vim` command handle. 
-    # Open editor and write message, saved on staged buffer.
-    #
+     # @brief `vim` command handle. 
+     # Open editor and write message, saved on staged buffer.
+     #
     def _cmd_vim(self):
         # Set default editor: vim on Linux and notepad on Windows.
         editor = os.environ.get('EDITOR')
@@ -290,11 +290,11 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief `load` command handle. 
-    # load <filepath>: load a file (like .md) to staged message buffer.
-    #
-    # @param args: Terminal input.
-    #
+     # @brief `load` command handle. 
+     # load <filepath>: load a file (like .md) to staged message buffer.
+     #
+     # @param args: Terminal input.
+     #
     def _cmd_load(self, args):
         # Error
         if not args:
@@ -328,9 +328,9 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief `status` command handle. 
-    # Show current branch and staged message buffer.
-    #
+     # @brief `status` command handle. 
+     # Show current branch and staged message buffer.
+     #
     def _cmd_status(self):
         # Print branch info.
         meta = self.session.get_current_meta()
@@ -382,9 +382,9 @@ class InteractiveCLI:
     # End-def
 
     ##
-    # @brief Run class InteractiveCLI. 
-    # Send message to LLM.
-    #
+     # @brief Run class InteractiveCLI. 
+     # Send message to LLM.
+     #
     def run(self):
         self.cli.raw(f"\n{self.cli.C_CYAN}================ REGENT SHELL READY ================{self.cli.C_RESET}")
 

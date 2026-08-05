@@ -1,9 +1,9 @@
 ##
-# @file main.py
-# @date 2026/08/04
-# 
-# @brief Main function entrance.
-#
+ # @file main.py
+ # @date 2026/08/04
+ # 
+ # @brief Main function entrance.
+ #
 
 import os
 import sys

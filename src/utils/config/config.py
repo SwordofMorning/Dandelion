@@ -1,21 +1,21 @@
 ##
-# @file src/utils/config/config.py
-# @date 2026/08/05
-# 
-# @brief Load global config.
-#
-# @note Model metadata (json) like:
-# {
-#     "model_id": "deepseek-v4-pro",
-#     "conditions": ["reasoning", "long_context", "complex"],
-#     "max_token": 819200,
-#     "TPM": 0,
-#     "RPM": 10,
-#     "RPD": 500,
-#     "thinking": "enabled",
-#     "effort": "max"
-# }
-#
+ # @file src/utils/config/config.py
+ # @date 2026/08/05
+ # 
+ # @brief Load global config.
+ #
+ # @note Model metadata (json) like:
+ # {
+ #     "model_id": "deepseek-v4-pro",
+ #     "conditions": ["reasoning", "long_context", "complex"],
+ #     "max_token": 819200,
+ #     "TPM": 0,
+ #     "RPM": 10,
+ #     "RPD": 500,
+ #     "thinking": "enabled",
+ #     "effort": "max"
+ # }
+ #
 
 import os
 import configparser
