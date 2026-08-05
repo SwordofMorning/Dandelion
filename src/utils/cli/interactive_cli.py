@@ -143,7 +143,7 @@ class InteractiveCLI:
     # @param args: Terminal input.
     #
     def _cmd_branch(self, args):
-        # @note List all branch.
+        # ----- 1. List all branch -----
         if not args or args[0] == '-a':
             # Get sessions.
             sessions = self.session.list_sessions()
@@ -156,7 +156,7 @@ class InteractiveCLI:
             self.cli.raw("")
         # End-if
 
-        # @note Delete branch <name/id>.
+        # ----- 2. Delete branch <name/id> -----
         elif args[0] == '-d':
             # No <name/id>.
             if len(args) < 2:
@@ -168,11 +168,13 @@ class InteractiveCLI:
             target = args[1]
             session_id = self._resolve_session_id(target)
 
-            # TODO HERE
+            # Session ID not found.
             if not session_id:
                 self.cli.error(f"Error: Session '{target}' not found.")
                 return
+            # End-if
 
+            # Ask to delete.
             ans = input(f"{self.cli.C_YELLOW}[!]{self.cli.C_RESET} Are you sure you want to delete branch '{target}'? [y/N]: ").strip().lower()
             if ans in ['y', 'yes']:
                 success, msg = self.session.delete_session(session_id)
@@ -182,41 +184,67 @@ class InteractiveCLI:
                     self.cli.error(msg)
             else:
                 self.cli.error("Deletion aborted.")
+            # End-if
         # End-elif
 
-        # @note: others
+        # ----- 3. Others -----
         else:
             self.cli.error(f"Unknown branch argument: {args[0]}. Try 'branch -a' or 'branch -d'.")
         # End-else
     # End-def
 
+    ##
+    # @brief `checkout` command handle. 
+    #
+    # @param args: Terminal input.
+    #
     def _cmd_checkout(self, args):
+        # Error
         if not args:
             self.cli.error("Usage: checkout <name> OR checkout -b <new_name>")
             return
+        # End-if
 
+        # ----- 1. Create new session branch -----
         if args[0] == '-b':
+            # Error
             if len(args) < 2:
                 self.cli.error("Error: Please provide a name for the new session.")
                 return
+            # End-if
+
+            # @note Here not check duplicate name;
+            # Several session with different ID could have same name.
+
+            # Assignment session name.
             new_name = args[1]
+            # Generate session ID
             new_id = self.session.create_session(new_name)
+            # Refresh agent's history (nothing).
             self.agent.reload_history()
+            # Print success.
             self.cli.success(f"Switched to a new session branch: '{new_name}'")
             return
+        # End-if
 
+        # ----- 2. Checkout to existed session branch -----
         target = args[0]
         session_id = self._resolve_session_id(target)
 
+        # Session not found.
         if not session_id:
             self.cli.error(f"Error: Session '{target}' not found.")
             return
+        # End-if
 
+        # Try to switch/checkout session
         if self.session.switch_session(session_id):
             self.agent.reload_history()
             self.cli.success(f"Switched to session branch: '{target}'")
         else:
             self.cli.error(f"Error: Failed to switch to '{target}'. Directory might be corrupted.")
+        # End-if
+    # End-def
 
     def _cmd_vim(self):
         editor = os.environ.get('EDITOR')
