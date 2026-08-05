@@ -133,43 +133,6 @@ class SessionManager:
         return True
     # End-def
 
-    def migrate_legacy_task_state(self, workspace_dir):
-        """One-time, idempotent migration of the legacy global task state
-        (llm/task/task_state.json) into the current session's task_state.json.
-
-        - Copies the legacy content into the session file only when the session
-          file is missing OR still holds the empty default placeholder.
-        - Backs up (renames) the legacy global file so old code stops seeing it.
-        Safe to call on every startup.
-        """
-        legacy_file = os.path.join(workspace_dir, "llm", "task", "task_state.json")
-        if not os.path.exists(legacy_file):
-            return False
-
-        state_file = self.get_task_state_file()
-        if not state_file:
-            return False
-
-        self._ensure_session_layout(self.current_session_dir)
-
-        # Never overwrite real session state; only fill empty placeholders.
-        should_copy = not os.path.exists(state_file)
-        if not should_copy:
-            try:
-                with open(state_file, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                should_copy = existing == DEFAULT_TASK_STATE
-            except Exception:
-                should_copy = False
-
-        if should_copy:
-            shutil.copy2(legacy_file, state_file)
-
-        backup_file = legacy_file + ".legacy-backup"
-        if not os.path.exists(backup_file):
-            os.rename(legacy_file, backup_file)
-        return True
-
     def _ensure_default_session(self):
         sessions = self.list_sessions()
         if not sessions:

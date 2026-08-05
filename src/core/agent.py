@@ -36,15 +36,6 @@ class MyAgent:
         # 1. Load history from the current session
         self.history = self.session.load_history()
 
-        # 1b. One-time migration of the legacy global task state
-        # (llm/task/task_state.json) into the current session. Idempotent:
-        # existing session state is never overwritten and the legacy file is
-        # backed up (renamed), so old code stops reading it.
-        try:
-            self.session.migrate_legacy_task_state(self.workspace_dir)
-        except Exception as e:
-            print(f"[-] Warning: task state migration failed: {e}")
-
         # 2. Init Sub-Systems with absolute paths
         self.client = SafeLLMClient(
             api_key=self.config["ANTHROPIC_API_KEY"],
