@@ -17,6 +17,8 @@
  # For sub: Dynamically selects models based on task_description/toolset/depth;
  # Includes retries and fallbacks; memory/state injection without going through the main agent.
  #
+ # BTW, PlanTool is a bypass LLM call which is not belong to Main Agent.
+ #
 
 import threading
 from ..llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
@@ -219,19 +221,22 @@ class SafeLLMClient:
      #
      # @return (response, None) on success; (None, error_string) on failure.
      #
+     # @see PlanTool.execute()
+     # @see SubAgent.run()
+     #
     def route_request(self, payload, task_description="", toolset_name="minimal",
                       depth=0, stream=True, estimated_tokens=2000):
-        # Fallback to main agent model if SUB_LIST is empty.
+        # 0. Fallback to main agent model if SUB_LIST is empty.
         if not self._policy or not self._policy.specs:
             return self.safe_stream_request(payload) if stream else self.safe_request(payload)
 
-        # Get specified subagent model via conditions.
+        # 1. Get specified subagent model via conditions.
         try:
             alias = self._policy.select_model(task_description, toolset_name, depth, estimated_tokens)
         except RuntimeError as e:
             return None, str(e)
 
-        # Get subagent model's RegistryModelSpec.
+        # 2. Get subagent model's RegistryModelSpec.
         spec = self._registry.get_spec(alias)
         inferred = self._policy.infer_conditions(task_description, toolset_name, depth)
 
@@ -241,6 +246,7 @@ class SafeLLMClient:
         max_retries = 2
         current_alias = alias
 
+        # 3. Choose models, with `max_retries + 1` times retry.
         for attempt in range(max_retries + 1):
             provider = self._get_cached_provider(current_alias)
 
@@ -256,11 +262,15 @@ class SafeLLMClient:
 
             print(f"[Router] Model '{current_alias}' attempt {attempt+1} failed: {err}")
 
+            # 4. Reach max retry times, then fallback.
             if attempt == max_retries:
+                # Iterate all models, candidate given by `get_fallback_chain`, check in for loop .
                 for fallback_alias in self._policy.get_fallback_chain(current_alias):
+                    # If exhausted limits, ignore this one.
                     if not self._rate_limiter.acquire(fallback_alias, estimated_tokens):
                         continue
 
+                    # Try to copy payload and request.
                     print(f"[Router] Falling back to '{fallback_alias}'...")
                     fb_provider = self._get_cached_provider(fallback_alias)
                     fb_spec = self._registry.get_spec(fallback_alias)
@@ -270,12 +280,15 @@ class SafeLLMClient:
 
                     fb_tag = f"SUBAGENT FALLBACK -> '{fallback_alias}'"
                     resp, err = fb_provider.safe_stream_request(fb_payload, logger=self.logger, log_tag=fb_tag) if stream else fb_provider.safe_request(fb_payload, logger=self.logger, log_tag=fb_tag)
+
+                    # Request Success, return.
                     if err is None:
                         return resp, None
 
                     print(f"[Router] Fallback '{fallback_alias}' also failed: {err}")
                 # End-for
 
+                # All fallback fail, throw error.
                 return None, f"All SubAgent models exhausted. Last error: {err}"
             # End-if
         # End-for
