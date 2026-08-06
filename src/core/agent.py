@@ -246,19 +246,25 @@ class MyAgent:
         return head
     # End-def
 
+    ##
+     # @brief Append-only archive filename: history length + timestamp,
+     # so a second compaction at the same history length never overwrites the first.
+     #
     @staticmethod
     def _archive_path(archive_dir, history_len):
-        """Append-only archive filename: history length + timestamp, so a second
-        compaction at the same history length never overwrites the first."""
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return os.path.join(archive_dir, f"history_{history_len}_{ts}.json")
+    # End-def
 
+    ##
+     # @brief Absolute artifact path (resolvable by read_file
+     # even when the process CWD differs from the workspace/session directory).
+     #
     @staticmethod
     def _artifact_path(session_dir, block_id):
-        """Absolute artifact path (resolvable by read_file even when the process
-        CWD differs from the workspace/session directory)."""
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(block_id))
         return os.path.abspath(os.path.join(session_dir, "artifacts", f"{safe_id}.txt"))
+    # End-def
 
     ##
      # ========================================
