@@ -321,11 +321,12 @@ class MyAgent:
         est_tokens = self._estimate_tokens()
         soft_limit = self._soft_token_limit()
 
-        ## The token budget is the SINGLE compaction switch: 
+        ## 
+         # @brief The token budget is the SINGLE compaction switch: 
          # when history alone is already at/over the soft limit,
          # compaction must run regardless of history length (chat turns).
          #
-         # A short-history bypass here (e.g. len < 20) would let
+         # @note A short-history bypass here (e.g. len < 20) would let
          # the request overflow MAX_CONTEXT_TOKENS (and provider rejection) in
          # setups with a large system prompt + tool schemas. Short-history
          # handling lives INSIDE the compaction flow below (head+summary-only
@@ -335,7 +336,9 @@ class MyAgent:
 
         print(f"[*] Context limit reached (~{int(est_tokens)} tokens), compacting history via LLM...")
 
-        # 1. Full archive backup (append-only, restorable)
+        # ----- @par 1. Backup -----
+
+        Full archive backup (append-only, restorable)
         archive_dir = os.path.join(self.session.current_session_dir, "archives")
         os.makedirs(archive_dir, exist_ok=True)
         archive_path = self._archive_path(archive_dir, len(self.history))
@@ -346,21 +349,28 @@ class MyAgent:
         head_size = 5
         recent_size = 15
 
-        # Trim head so it never ends with an assistant tool_use message; the
-        # summary (role=user) is inserted right after head, and a trailing
-        # tool_use with no matching tool_result would corrupt the pairing.
+        ## 
+         # @brief Trim head so it never ends with an assistant tool_use message.
+         #
+         # @note The summary (role=user) is inserted right after head, and a trailing
+         # tool_use with no matching tool_result would corrupt the pairing.
+         #
         head = self._trim_head_for_tool_use(self.history, head_size)
         trimmed_head_size = len(head)
 
-        # 2. Find a safe start for the recent window: the latest plain-text user
-        #    message within the look-back limit. Starting at a plain-text user
-        #    message guarantees tool_use/tool_result pairs are never split.
+        # ----- @par 2. Context Window -----
+
+        # Find a safe start for the recent window: the latest plain-text user
+        # @note message within the look-back limit. Starting at a plain-text user;
+        # @note message guarantees tool_use/tool_result pairs are never split.
         max_lookback = min(len(self.history) - trimmed_head_size, recent_size * 2)
         start_idx = None
         for i in range(len(self.history) - 1, len(self.history) - 1 - max_lookback, -1):
             if self._is_plain_user_msg(self.history[i]):
                 start_idx = i
                 break
+            # End-if
+        # End-for
 
         if start_idx is None or start_idx < trimmed_head_size:
             # Fallback: no usable plain-text user message outside the head
@@ -368,11 +378,14 @@ class MyAgent:
             # tool_result blocks.
             print("[-] No safe compaction breakpoint found; keeping head + summary only.")
             start_idx = len(self.history)
+        # End-if
 
         recent = self.history[start_idx:]
         middle = self.history[trimmed_head_size:start_idx]
 
-        # 3. Summarize head + middle (early goals are the most drift-prone part).
+        # ----- @par 3. Summarize -----
+
+        # Summarize head + middle (early goals are the most drift-prone part)
         summary_src = head + middle
         summary_text = json.dumps(summary_src, ensure_ascii=False, indent=2,
                                   default=self.session._default_serializer)
@@ -381,6 +394,7 @@ class MyAgent:
             summary_text = (summary_text[:50000]
                             + "\n...[middle omitted from summarization input]...\n"
                             + summary_text[-150000:])
+        # End-if
 
         summary_prompt = (
             "Please summarize the following conversation history.\n"
@@ -398,6 +412,8 @@ class MyAgent:
             "max_tokens": 2000,
             "system": "You are a concise memory summarization AI."
         }
+
+        # ----- @par 4. Request -----
 
         resp, err = self.client.safe_request(summary_payload, log_tag="COMPRESSION SUMMARY")
         if err:
@@ -418,6 +434,8 @@ class MyAgent:
         # Invalidate memories cache: history changed (plain-text user messages may shift).
         self._invalidate_memories_cache()
         print("[+] Context compacted successfully.")
+
+        # ----- @par 5. Post -----
 
         # Post-compaction guard: if the budget is still exceeded (e.g. the
         # configured MAX_CONTEXT_TOKENS is below the system-prompt + tools
