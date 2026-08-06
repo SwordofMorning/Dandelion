@@ -34,7 +34,7 @@ class MemoryManager:
      # @param memory_dir Global memory path.
      # @param session_memory_dir Session tier memory path.
      # @param session_manager Used to call session's functions.
-     # @param client @todo What is this?
+     # @param safe_client SafeLLMClient instance, reserved for future LLM-assisted memory features (summarize/merge/extract). Currently stored but not consumed.
      # @param logger Save logs.
      #
     def __init__(self, memory_dir="./llm/memory", session_memory_dir=None,
@@ -68,6 +68,12 @@ class MemoryManager:
     ##
      # @brief Resolve the tier directory for a WRITE operation.
      #
+     # @param scope "global" or "session/local"
+     #
+     # @return path to memory dir.
+     #         self.memory_dir, when "global" or scope is empty
+     #         current session's memory path, when "session/local"
+     #
      # @note Raises ValueError
      # when a session-scoped write is requested but no session tier is configured.
      # Silently falling back to the global tier
@@ -90,12 +96,34 @@ class MemoryManager:
         return self.memory_dir
     # End-def
 
+    ##
+     # @brief index to memory content.
+     #
     def _index_file(self, tier_dir):
         return os.path.join(tier_dir, "MEMORY.md")
+    # End-def
 
-    # ------------------------------------------------------------------
-    # Reading
-    # ------------------------------------------------------------------
+    ##
+     # ========================================
+     # @section II. Reading.
+     # ========================================
+     #
+
+    ##
+     # @brief Parse memory file, which look like:
+     #
+     # @param text @todo Original file output string.
+     #
+     # @return [meta, what?] @todo
+     #
+     # ---
+     # name: terminal_reply_format
+     # description: User preference: use numbered lists / bullets in terminal replies, avoid Markdown tables
+     # tags: [preference, format, terminal, cli, reply-style]
+     # updated_at: 2026-08-06 14:24:34
+     # scope: global
+     # ---
+     #
     def _parse_frontmatter(self, text):
         if not text.startswith("---"): return {}, text
         parts = text.split("---", 2)
@@ -105,8 +133,14 @@ class MemoryManager:
             if ":" in line:
                 k, v = line.split(":", 1)
                 meta[k.strip()] = v.strip().strip('"').strip("'")
+            # End-if
+        # End-for
         return meta, parts[2].strip()
+    # End-def
 
+    ##
+     #
+     #
     def _list_tier(self, tier_dir, scope_label):
         result = []
         if not tier_dir or not os.path.exists(tier_dir):
@@ -136,6 +170,7 @@ class MemoryManager:
                 "scope": scope_label
             })
         return result
+    # End-def
 
     def list_memories(self, scope="all"):
         """List memories: scope='all' | 'global' | 'session'."""
@@ -238,9 +273,12 @@ class MemoryManager:
         parts.append("</relevant_memories>")
         return "\n\n".join(parts)
 
-    # ------------------------------------------------------------------
-    # Writing
-    # ------------------------------------------------------------------
+    ##
+     # ========================================
+     # @section III. Writing.
+     # ========================================
+     #
+
     @staticmethod
     def _frontmatter_clean(value):
         """Keep frontmatter values single-line and unable to inject keys or
