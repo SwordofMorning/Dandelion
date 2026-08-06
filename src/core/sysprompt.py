@@ -148,7 +148,19 @@ class PromptBuilder:
             "translate the offending values to English and re-submit."
         )
 
-        # 6. Memories (index). Kept AFTER static sections on purpose:
+        # 6. Reply Format (hardcoded user preference; mirrors
+        #    llm/memory/terminal_reply_format.md so it is ALWAYS present,
+        #    independent of memory retrieval hits).
+        sections.append(
+            "Reply Format:\n"
+            "1. Use numbered lists / bullets in terminal replies "
+            "(e.g. '1. xxx' with '  - xxx' sub-bullets).\n"
+            "2. Avoid Markdown tables in chat responses; they are hard to read "
+            "in a terminal/CLI context.\n"
+            "3. Applies to user-facing summaries and code-explanation answers."
+        )
+
+        # 7. Memories (index). Kept AFTER static sections on purpose:
         #    memory index changes when 'remember' is called, so it must stay in
         #    the tail region of the system prompt to preserve prefix caching.
         #    The index combines the global tier (project-wide) and the current
@@ -163,7 +175,7 @@ class PromptBuilder:
             )
         # End-if
 
-        # 7. Target/Task State and Attention Management
+        # 8. Target/Task State and Attention Management
         state_file = self._resolve_state_file()
         if state_file and os.path.exists(state_file):
             try:
