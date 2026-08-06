@@ -482,9 +482,20 @@ class MyAgent:
      #
 
     ##
-     # @brief Agent-Loop Function.
+     # @brief Tool-Iterate Function.
      #
-     # @see src/utils/cli/interactive_cli.py 
+     # @note This function only one round chat:
+     # Request LLM -> Execute All Tools -> Return.
+     #
+     # @note Agent-loop is held by CLI:
+     # CLI -> agent.step() -> Request LLM -> Execute All Tools -> Return ->
+     # CLI (continue? or stop?) -> agent.step() | Stop in CLI
+     #
+     # @see src/utils/cli/interactive_cli.py
+     #
+     # @return Stop or not (in-loop).
+     # @retval True This round executed a tool call, need feed back result to LLM. Continue.
+     # @retval False This round is a plain text reply (or an API error). Breakout.
      #
     def step(self):
         # 0. Check context budget every turn (not only on user messages).
@@ -537,6 +548,8 @@ class MyAgent:
 
         # Handle Tools
         results = []
+
+        # Tools Iterator.
         for block in resp.content:
             if block.type != "tool_use":
                 continue
