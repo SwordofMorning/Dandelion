@@ -273,8 +273,10 @@ class MyAgent:
      # ========================================
      #
 
+    ##
+     # @brief Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token.
+     #
     def _estimate_tokens(self, history=None):
-        """Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token."""
         history = history if history is not None else self.history
         ascii_chars = 0
         non_ascii_chars = 0
@@ -287,33 +289,47 @@ class MyAgent:
                     ascii_chars += 1
                 else:
                     non_ascii_chars += 1
+                # End-if
+            # End-for
+        # End-for
         return ascii_chars / 4.0 + non_ascii_chars / 1.5
+    # End-def
 
+    ##
+     # @brief History-only token budget: MAX_CONTEXT_TOKENS minus 
+     # the fixed request overhead (system prompt + tool schemas).
+     #
+     # @note The system prompt already includes the memories tail
+     # (_last_system_prompt is built by appending memories_content in step()),
+     # so memories must NOT be counted twice here.
+     # @note Compaction triggered at this limit keeps the COMBINED provider request
+     # within MAX_CONTEXT_TOKENS instead of silently overflowing it.
+     #
     def _soft_token_limit(self):
-        """History-only token budget: MAX_CONTEXT_TOKENS minus the fixed request
-        overhead (system prompt + tool schemas). The system prompt already
-        includes the memories tail (_last_system_prompt is built by appending
-        memories_content in step()), so memories must NOT be counted twice here.
-        Compaction triggered at this limit keeps the COMBINED provider request
-        within MAX_CONTEXT_TOKENS instead of silently overflowing it."""
         base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
         overhead = self._estimate_tokens([
             {"role": "user", "content": self._last_system_prompt or self.prompt_builder.build()},
             {"role": "user", "content": json.dumps(self.tool_schemas, ensure_ascii=False)},
         ])
         return max(int(base - overhead), 1)
+    # End-def
 
+    ##
+     # @brief Compact context and memory save.
+     # 
     def _compact_context(self):
         est_tokens = self._estimate_tokens()
         soft_limit = self._soft_token_limit()
 
-        # The token budget is the SINGLE compaction switch: when history alone
-        # is already at/over the soft limit, compaction must run regardless of
-        # history length. A short-history bypass here (e.g. len < 20) would let
-        # the request overflow MAX_CONTEXT_TOKENS (and provider rejection) in
-        # setups with a large system prompt + tool schemas. Short-history
-        # handling lives INSIDE the compaction flow below (head+summary-only
-        # fallback), never before the budget check.
+        ## The token budget is the SINGLE compaction switch: 
+         # when history alone is already at/over the soft limit,
+         # compaction must run regardless of history length (chat turns).
+         #
+         # A short-history bypass here (e.g. len < 20) would let
+         # the request overflow MAX_CONTEXT_TOKENS (and provider rejection) in
+         # setups with a large system prompt + tool schemas. Short-history
+         # handling lives INSIDE the compaction flow below (head+summary-only
+         # fallback), never before the budget check.
         if est_tokens < soft_limit:
             return
 
@@ -412,6 +428,7 @@ class MyAgent:
             print(f"[-] Warning: history still ~{int(remaining)} tokens after "
                   f"compaction (soft limit ~{int(soft_limit)}). Consider raising "
                   "MAX_CONTEXT_TOKENS or reducing system-prompt/tool overhead.")
+    # End-def _compact_context
 
     def _invalidate_memories_cache(self):
         """Drop both memory cache fields so the next _get_memories() call
