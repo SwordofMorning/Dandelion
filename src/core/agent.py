@@ -338,7 +338,7 @@ class MyAgent:
 
         # ----- @par 1. Backup -----
 
-        Full archive backup (append-only, restorable)
+        # Full archive backup (append-only, restorable)
         archive_dir = os.path.join(self.session.current_session_dir, "archives")
         os.makedirs(archive_dir, exist_ok=True)
         archive_path = self._archive_path(archive_dir, len(self.history))
