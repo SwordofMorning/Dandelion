@@ -1,4 +1,9 @@
-# src/core/agent.py
+##
+ # @file src/core/agent.py
+ # @date 2026/08/06
+ # 
+ # @brief Agent-Loop and others helper functions.
+ #
 
 import os
 import re
@@ -24,19 +29,36 @@ from src.tool import (
 # Create a module-level CLIPrinter instance for convenience
 cli = CLIPrinter()
 
+##
+ # @brief Agent Loop Wrapper Class.
+ #
 class MyAgent:
+    ##
+     # @brief Constructor.
+     #
+     # @param config api.cfg loaded from .env/.
+     # @param session_manager SessionManager object.
+     # @param workspace_dir current pwd, used to avoid agent(llm) escape.
+     #
     def __init__(self, config, session_manager, workspace_dir):
+        # ----- @par 1. Init members -----
+
+        # Alignment members.
         self.config = config
         self.session = session_manager
         self.workspace_dir = workspace_dir
+        # Clear error counts.
         self.error_count = 0
+        # Inject thinking level.
         self.thinking = str(config.get("THINKING", "disabled")).strip().lower()
         self.effort = str(config.get("EFFORT", "medium")).strip().lower()
 
-        # 1. Load history from the current session
+        # Load history from the current session
         self.history = self.session.load_history()
 
-        # 2. Init Sub-Systems with absolute paths
+        # ----- @par 2. Init Subsystem -----
+
+        # Init request client with absolute paths.
         self.client = SafeLLMClient(
             api_key=self.config["ANTHROPIC_API_KEY"],
             base_url=self.config["ANTHROPIC_BASE_URL"],
@@ -49,10 +71,9 @@ class MyAgent:
             logger=self.session
         )
 
-        # In passing session_manager as logger to maintain compatibility with legacy code
-        # Memory is two-tier: global (llm/memory/) + current session
-        # (.log/sess_<id>/memory/). The session tier resolves dynamically via
-        # session_manager so `checkout` switches memory scope without a rebuild.
+        # In passing session_manager as logger to maintain compatibility with legacy code.
+        # Memory is two-tier: global (llm/memory/) + current session (.log/sess_<id>/memory/).
+        # The session tier resolves dynamically via session_manager so `checkout` switches memory scope without a rebuild.
         self.memory = MemoryManager(
             memory_dir=os.path.join(self.workspace_dir, "llm", "memory"),
             session_manager=self.session,
@@ -73,8 +94,11 @@ class MyAgent:
         # budget accounts for the real request overhead without rebuilding.
         self._last_system_prompt = ""
 
-        # 3. Load Tools
+        # ----- @par 3. Load Tools -----
+
+        # Init tools for Main Agent.
         self._init_tools()
+    # End-def
 
     def _init_tools(self):
         self.tools = {}
