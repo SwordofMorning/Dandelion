@@ -1,4 +1,10 @@
-# src/core/sysprompt.py
+##
+ # @file src/core/sysprompt.py
+ # @date 2026/08/05
+ # 
+ # @brief Skill Package.
+ # Provides agent (LLM request), memory, skill and prompt builder.
+ #
 
 import os
 import json
@@ -6,37 +12,47 @@ import platform
 import shutil
 import datetime
 
+##
+ # @brief System Prompt Builder.
+ #
 class PromptBuilder:
+    ##
+     # @brief Constructor.
+     #
     def __init__(self, memory_manager, skill_manager, config, workspace_dir=".", session_manager=None):
+        # Members Init.
         self.memory = memory_manager
         self.skill = skill_manager
         self.config = config
         self.workspace_dir = workspace_dir
         self.session_manager = session_manager
-        
+
+        # OS
         self.os_name = platform.system()
         self.has_pwsh = shutil.which("powershell") is not None
         self.has_bash = shutil.which("bash") is not None
-        
+
+        # Windows's shell choose.
         if self.os_name == "Windows" and self.has_pwsh:
             self.terminal_hint = "Windows Environment. Primary shell is 'powershell'. Avoid linux-specific arguments like 'ls -la'."
         elif self.os_name == "Windows" and self.has_bash:
             self.terminal_hint = "Windows Environment but using 'bash' (Git Bash/MSYS). Use standard unix commands."
         else:
             self.terminal_hint = f"{self.os_name} Environment. Primary shell is 'bash'."
+    # End-def
 
+    ##
+     # @brief Resolve the current session's task_state.json. i.e. "target".
+     #
     def _resolve_state_file(self):
-        """Resolve the current session's task_state.json.
-
-        Falls back to the legacy global file (llm/task/task_state.json) ONLY
-        for standalone setups without a session manager (e.g. tests) or as a
-        read-only last resort for pre-migration data. The fallback is loud so
-        a global task state can never be consumed silently.
-        """
+        # Get session's target.
         if self.session_manager is not None:
             state_file = self.session_manager.get_task_state_file()
             if state_file:
                 return state_file
+        # Otherwise, create a new one.
+
+        # @todo here
         print("[-] Warning: PromptBuilder has no session manager; falling back "
               "to the legacy global state file (llm/task/task_state.json).")
         return os.path.join(self.workspace_dir, "llm/task", "task_state.json")
@@ -158,3 +174,4 @@ class PromptBuilder:
                 print(f"[-] Warning: Failed to load task state from {state_file}: {e}")
 
         return "\n\n".join(sections)
+#End-def
