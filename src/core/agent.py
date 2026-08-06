@@ -482,10 +482,10 @@ class MyAgent:
      #
 
     ##
-     # @brief Tool-Iterate Function.
+     # @brief LLM Round-Trip Step. A tools iterator.
      #
      # @note This function only one round chat:
-     # Request LLM -> Execute All Tools -> Return.
+     # Compact Context -> Inject Memory -> Request LLM -> Execute All Tools -> Return.
      #
      # @note Agent-loop is held by CLI:
      # CLI -> agent.step() -> Request LLM -> Execute All Tools -> Return ->
@@ -493,8 +493,8 @@ class MyAgent:
      #
      # @see src/utils/cli/interactive_cli.py
      #
-     # @return Stop or not (in-loop).
-     # @retval True This round executed a tool call, need feed back result to LLM. Continue.
+     # @return True: continue the loop; False: stop.
+     # @retval True This round executed a tool call (or unexpected), need to feed back result to LLM. Continue.
      # @retval False This round is a plain text reply (or an API error). Breakout.
      #
     def step(self):
@@ -606,7 +606,7 @@ class MyAgent:
     # End-def
 
     ##
-     # @brief Inject test to usr's msg.
+     # @brief Append a user text message to history and run a context budget check.
      #
     def inject_user_message(self, text):
         self.history.append({"role": "user", "content": text})
