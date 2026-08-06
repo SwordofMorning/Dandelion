@@ -21,7 +21,7 @@ class SkillManager:
     ##
      # @brief Constructor.
      #
-     # @param skill_dir Path to load skill, default as `llm/skill/`.
+     # @param skill_dir Path to load skill.
      #
     def __init__(self, skill_dir):
         self.skill_dir = skill_dir
