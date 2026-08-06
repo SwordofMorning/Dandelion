@@ -1,18 +1,42 @@
-# src/core/memory.py
-
-# Two-tier memory storage:
-# - Global tier  (llm/memory/): durable project/user knowledge that must
-#   survive across sessions (coding style, architectural decisions, ...).
-# - Session tier (.log/sess_<id>/memory/): facts that only apply to the
-#   current session branch and must not leak into other branches.
-# Retrieval combines both tiers; session memory is ranked first because it
-# is the current attention anchor.
+##
+ # @file src/core/memory.py
+ # @date 2026/08/05
+ # 
+ # @brief Agent's Memory Management.
+ #
+ # Two-tier memory storage:
+ # - Global tier (llm/memory/): durable project/user knowledge that must
+ #   survive across sessions (coding style, architectural decisions, ...).
+ # - Session tier (.log/sess_<id>/memory/): facts that only apply to the
+ #   current session branch and must not leak into other branches.
+ #
+ # @note Retrieval combines **both** tiers;
+ # session memory is ranked first, because it is the current attention anchor.
 
 import os
 import json
 import re
 
+##
+ # @brief Memory Management Class.
+ #
 class MemoryManager:
+    ##
+     # ========================================
+     # @section I. Constructor.
+     # Construct and tier path resolution.
+     # ========================================
+     #
+
+    ##
+     # @brief Constructor.
+     #
+     # @param memory_dir Global memory path.
+     # @param session_memory_dir Session tier memory path.
+     # @param session_manager Used to call session's functions.
+     # @param client @todo What is this?
+     # @param logger Save logs.
+     #
     def __init__(self, memory_dir="./llm/memory", session_memory_dir=None,
                  session_manager=None, safe_client=None, logger=None):
         self.memory_dir = memory_dir
@@ -30,25 +54,29 @@ class MemoryManager:
         session_dir = self.session_memory_dir()
         if session_dir and not os.path.exists(session_dir):
             os.makedirs(session_dir)
+    # End-def
 
-    # ------------------------------------------------------------------
-    # Tier path resolution
-    # ------------------------------------------------------------------
+    ##
+     # @brief Resolve the session tier directory dynamically.
+     #
     def session_memory_dir(self):
-        """Resolve the session tier directory dynamically."""
         if self.session_manager is not None:
             return self.session_manager.get_session_memory_dir()
         return self._static_session_memory_dir
+    # End-def
 
+    ##
+     # @brief Resolve the tier directory for a WRITE operation.
+     #
+     # @note Raises ValueError
+     # when a session-scoped write is requested but no session tier is configured.
+     # Silently falling back to the global tier
+     # would leak session-local facts across branches (data-isolation bug). 
+     #
+     # @note Reads are unaffected (list_memories/get_index_text resolve tiers via 
+     # session_memory_dir() and safely skip a missing session tier).
+     #
     def _dir_for_scope(self, scope):
-        """Resolve the tier directory for a WRITE operation.
-
-        Raises ValueError when a session-scoped write is requested but no
-        session tier is configured: silently falling back to the global tier
-        would leak session-local facts across branches (data-isolation bug).
-        Reads are unaffected (list_memories/get_index_text resolve tiers via
-        session_memory_dir() and safely skip a missing session tier).
-        """
         scope = (scope or "global").lower()
         if scope in ("session", "local"):
             session_dir = self.session_memory_dir()
@@ -60,6 +88,7 @@ class MemoryManager:
                 )
             return session_dir
         return self.memory_dir
+    # End-def
 
     def _index_file(self, tier_dir):
         return os.path.join(tier_dir, "MEMORY.md")
@@ -333,3 +362,5 @@ class MemoryManager:
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.writelines(index_lines)
         os.replace(tmp_path, index_file)
+    # End-def
+# End-class
