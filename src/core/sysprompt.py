@@ -44,18 +44,20 @@ class PromptBuilder:
     ##
      # @brief Resolve the current session's task_state.json. i.e. "target".
      #
+     # @note Task state is session-scoped only: the legacy global task state
+     # (llm/task/task_state.json) was removed, so there is NO fallback here.
+     # When the file does not exist yet, ask the SessionManager to create a
+     # blank one (ensure_task_state_file); returns None when no active
+     # session is bound so callers can skip the section.
+     #
+     # @return Absolute path of task_state.json (created blank if missing);
+     #         None if no session manager / no active session.
+     #
     def _resolve_state_file(self):
-        # Get session's target.
         if self.session_manager is not None:
-            state_file = self.session_manager.get_task_state_file()
-            if state_file:
-                return state_file
-        # Otherwise, create a new one.
-
-        # @todo here
-        print("[-] Warning: PromptBuilder has no session manager; falling back "
-              "to the legacy global state file (llm/task/task_state.json).")
-        return os.path.join(self.workspace_dir, "llm/task", "task_state.json")
+            return self.session_manager.ensure_task_state_file()
+        return None
+    # End-def
 
     def build(self):
         sections = []
@@ -141,7 +143,7 @@ class PromptBuilder:
 
         # 7. Target/Task State and Attention Management
         state_file = self._resolve_state_file()
-        if os.path.exists(state_file):
+        if state_file and os.path.exists(state_file):
             try:
                 with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
