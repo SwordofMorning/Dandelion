@@ -110,11 +110,7 @@ class MemoryManager:
      #
 
     ##
-     # @brief Parse memory file, which look like:
-     #
-     # @param text @todo Original file output string.
-     #
-     # @return [meta, what?] @todo
+     # @brief Parse memory file frontmatter (YAML-like header) from raw file text.
      #
      # ---
      # name: terminal_reply_format
@@ -123,6 +119,21 @@ class MemoryManager:
      # updated_at: 2026-08-06 14:24:34
      # scope: global
      # ---
+     # User prefers terminal/CLI responses formatted with numbered/list structure (e.g. '1. xxx' with '  - xxx' sub-bullets) instead of Markdown tables. Use this format for chat replies, especially when answering questions about code; tables are less preferred in terminal context (also applies to user-facing summaries).
+     #
+     # @param text Raw content of a memory file (frontmatter + body).
+     #
+     # @return [meta, body].
+     # @retval meta Dict format header, like: 
+     #        {
+     #          "name": "terminal_reply_format", 
+     #          "description": "User preference: ...", 
+     #          "tags": "[preference, format, terminal, cli, reply-style]", 
+     #          "updated_at": "2026-08-06 14:24:34", 
+     #          "scope": "global"
+     #        }
+     # @retval body Memory's description paragraph, like:
+     #              User prefers terminal/CLI responses.....
      #
     def _parse_frontmatter(self, text):
         if not text.startswith("---"): return {}, text
