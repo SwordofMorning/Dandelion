@@ -346,28 +346,35 @@ class MemoryManager:
      # ========================================
      #
 
+    ##
+     # @brief Keep frontmatter values single-line and unable to inject keys or
+     # split the '---' delimiters (protects _parse_frontmatter).
+     #
     @staticmethod
     def _frontmatter_clean(value):
-        """Keep frontmatter values single-line and unable to inject keys or
-        split the '---' delimiters (protects _parse_frontmatter)."""
         return str(value or "").replace("\r", " ").replace("\n", " ").replace("---", "-")
+    # End-def
 
+    ##
+     # @brief Deterministic filename sanitization.
+     # two distinct original names must never map to the same sanitized filename.
+     #
+     # @note Replaces whitespace/CR/LF, path separators and Windows-reserved chars with '_'.
+     # The mapping is deterministic so re-writing the SAME memory (update semantics) resolves to the same file,
+     # while distinct names that would collide after sanitization are rejected later by the collision check in write_memory().
+     #
     @staticmethod
     def _sanitize_filename(name):
-        """Deterministic filename sanitization: two distinct original names must
-        never map to the same sanitized filename.
-
-        Replaces whitespace/CR/LF, path separators and Windows-reserved chars
-        with '_'. The mapping is deterministic so re-writing the SAME memory
-        (update semantics) resolves to the same file, while distinct names that
-        would collide after sanitization are rejected later by the collision
-        check in write_memory()."""
         return (name.replace(" ", "_").replace("/", "_").replace("\\", "_")
                 .replace("\r", "_").replace("\n", "_")
                 .replace(":", "_").replace("?", "_").replace("*", "_")
                 .replace('"', "_").replace("<", "_").replace(">", "_")
                 .replace("|", "_"))
+    # End-def
 
+    ##
+     # @brief Write memory.
+     #
     def write_memory(self, name, description, tags, content, scope="global"):
         import datetime
         target_dir = self._dir_for_scope(scope)
@@ -382,6 +389,8 @@ class MemoryManager:
                 f"sanitization, got '{safe_name or ''}' ({len(safe_name)} chars). "
                 "Please choose a shorter name."
             )
+        # End-if
+
         # Reserve the tier index filename (case-insensitive): a memory named
         # "MEMORY" must never resolve to MEMORY.md, which would overwrite the
         # per-tier index file.
@@ -416,6 +425,7 @@ class MemoryManager:
                 raise ValueError(
                     f"Error: cannot verify existing memory file {filename}: {e}"
                 )
+            # End-try
             # _parse_frontmatter strips surrounding quotes, mirror that here so
             # names with leading/trailing quotes never false-positive.
             if existing_name and existing_name != clean_name.strip().strip('"').strip("'"):
@@ -424,6 +434,8 @@ class MemoryManager:
                     f"which is already used by memory '{existing_name}'. Please "
                     "choose a distinct name."
                 )
+            # End-if
+        # End-if
 
         frontmatter = (
             "---\n"
@@ -444,13 +456,18 @@ class MemoryManager:
 
         self._update_index(target_dir, clean_name, clean_desc, clean_tags, now)
         return True
+    # End-def
 
+    ##
+     # @brief Update MEMORY.md file.
+     #
     def _update_index(self, tier_dir, name, description, tags, updated_at):
         index_file = self._index_file(tier_dir)
         index_lines = []
         if os.path.exists(index_file):
             with open(index_file, "r", encoding="utf-8") as f:
                 index_lines = f.readlines()
+        # End-if
 
         # Remove old entry if it exists to avoid duplicates
         index_lines = [l for l in index_lines if not l.startswith(f"- [{name}]")]
