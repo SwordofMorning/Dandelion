@@ -5,6 +5,12 @@
  # @brief Skill Package.
  # Provides agent (LLM request), memory, skill and prompt builder.
  #
+ # @note Skill call chain:
+ #   load_skill tool / PromptBuilder.build()
+ #     -> SkillManager.get_catalog()     # list (name: description)
+ #     -> get_skill_content(name)        # full content on demand
+ #     -> _scan_skills() at init         # registry from skill_dir/*.md
+ #
 
 import os
 
@@ -30,6 +36,11 @@ class SkillManager:
     ##
      # @brief Skill header (yaml style) extract.
      #
+     # @param text Raw skill file content (BOM/whitespace stripped first).
+     #
+     # @return tuple (meta, body): frontmatter dict + markdown body;
+     #         ({}, text) when no valid frontmatter.
+     #
     def _parse_frontmatter(self, text):
         # Strip UTF-8 BOM and leading whitespaces
         text = text.lstrip("\ufeff").lstrip()
@@ -50,6 +61,7 @@ class SkillManager:
 
     ##
      # @brief Scan all skill file and register.
+     # Scans skill_dir/*.md and fills self.registry (name -> {name, description, content}).
      #
     def _scan_skills(self):
         for fname in sorted(os.listdir(self.skill_dir)):
@@ -79,6 +91,9 @@ class SkillManager:
     ##
      # @brief Return all skills [name, description], used for prompt builder.
      #
+     # @return "- name: description" lines joined by newline;
+     #         "(No specific skills loaded)" when registry is empty.
+     #
     def get_catalog(self):
         if not self.registry:
             return "(No specific skills loaded)"
@@ -90,7 +105,11 @@ class SkillManager:
     # End-def
 
     ##
-     # @brief Return all skill content.
+     # @brief Return one skill's content by name.
+     #
+     # @param name Skill name (frontmatter "name" field).
+     #
+     # @return Skill content string; None if not found.
      #
     def get_skill_content(self, name):
         skill = self.registry.get(name)

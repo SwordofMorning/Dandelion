@@ -4,6 +4,15 @@
  # 
  # @brief Agent-Loop and others helper functions.
  #
+ # @note Agent runtime call chain:
+ #   CLI interactive loop
+ #     -> MyAgent.step()                 # LLM Round-Trip Step (tools iterator)
+ #     -> _compact_context()             # token budget check + LLM summary
+ #     -> _get_memories()                # memory injection (cached)
+ #     -> SafeLLMClient.safe_stream_request()
+ #     -> tool handlers (memory/state/fs/...)
+ #     -> history append (tool_result)   # loop continues until stop_reason != tool_use
+ #
 
 import os
 import re
@@ -238,6 +247,11 @@ class MyAgent:
      # The trimmed tool_use message stays in middle (summarized) together with its
      # matching tool_result, so the summary insertion can never split a pair.
      #
+     # @param history Full message history.
+     # @param head_size Desired head size before trimming.
+     #
+     # @return Trimmed head list (never ends with an assistant tool_use).
+     #
     @staticmethod
     def _trim_head_for_tool_use(history, head_size):
         head = history[:head_size]
@@ -250,6 +264,11 @@ class MyAgent:
      # @brief Append-only archive filename: history length + timestamp,
      # so a second compaction at the same history length never overwrites the first.
      #
+     # @param archive_dir Session archives directory.
+     # @param history_len History length at compaction time.
+     #
+     # @return Absolute path like <archive_dir>/history_<len>_<timestamp>.json.
+     #
     @staticmethod
     def _archive_path(archive_dir, history_len):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -259,6 +278,11 @@ class MyAgent:
     ##
      # @brief Absolute artifact path (resolvable by read_file
      # even when the process CWD differs from the workspace/session directory).
+     #
+     # @param session_dir Current session directory.
+     # @param block_id Tool_use block id (sanitized into the filename).
+     #
+     # @return Absolute path of the offloaded artifact file.
      #
     @staticmethod
     def _artifact_path(session_dir, block_id):
@@ -305,6 +329,10 @@ class MyAgent:
      # @note Compaction triggered at this limit keeps the COMBINED provider request
      # within MAX_CONTEXT_TOKENS instead of silently overflowing it.
      #
+     # @param history Message list to estimate; defaults to self.history.
+     #
+     # @return Estimated token count (float).
+     #
     def _soft_token_limit(self):
         base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
         overhead = self._estimate_tokens([
@@ -316,7 +344,9 @@ class MyAgent:
 
     ##
      # @brief Compact context and memory save.
-     # 
+     #
+     # @return int: MAX_CONTEXT_TOKENS minus request overhead (>= 1).
+     #
     def _compact_context(self):
         est_tokens = self._estimate_tokens()
         soft_limit = self._soft_token_limit()
@@ -451,6 +481,9 @@ class MyAgent:
     ##
      # @brief Drop both memory cache fields so the next _get_memories() call
      # reloads persisted memories instead of returning a stale value.
+     #
+     # @return Memory string cached until the last plain user message changes;
+     #          ""(empty) when no relevant memory found.
      #
     def _invalidate_memories_cache(self):
         self._memories_key = None
@@ -607,6 +640,8 @@ class MyAgent:
 
     ##
      # @brief Append a user text message to history and run a context budget check.
+     #
+     # @param text User input text to append to history.
      #
     def inject_user_message(self, text):
         self.history.append({"role": "user", "content": text})

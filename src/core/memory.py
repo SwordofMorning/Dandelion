@@ -12,6 +12,24 @@
  #
  # @note Retrieval combines **both** tiers;
  # session memory is ranked first, because it is the current attention anchor.
+ #
+ # @note Memory read/write call chain:
+ #   read:  agent._get_memories()
+ #            -> MemoryManager.load_memories_string(messages)
+ #            -> select_relevant_memories()      # keyword match, session first
+ #            -> list_memories(scope="all")
+ #            -> _list_tier(dir, "global"/"session")
+ #            -> _parse_frontmatter(text)        # split meta/body
+ #
+ #   write: MemoryTool.execute()
+ #            -> MemoryManager.write_memory(...)  # scope resolved by _dir_for_scope
+ #            -> _sanitize_filename() + _frontmatter_clean()
+ #            -> _update_index()                  # append to MEMORY.md (<=200 lines)
+ #
+ #   index: sysprompt.build()
+ #            -> MemoryManager.get_index_text()
+ #            -> _read_index(tier_dir)            # per-tier MEMORY.md
+ #
 
 import os
 import json
@@ -59,6 +77,9 @@ class MemoryManager:
     ##
      # @brief Resolve the session tier directory dynamically.
      #
+     # @return Session tier directory path;
+     #         None when no active session and no static override configured.
+     #
     def session_memory_dir(self):
         if self.session_manager is not None:
             return self.session_manager.get_session_memory_dir()
@@ -98,6 +119,10 @@ class MemoryManager:
 
     ##
      # @brief index to memory content.
+     #
+     # @param tier_dir Global or session tier directory.
+     #
+     # @return Path to the tier's MEMORY.md index file.
      #
     def _index_file(self, tier_dir):
         return os.path.join(tier_dir, "MEMORY.md")
@@ -240,6 +265,9 @@ class MemoryManager:
     ##
      # @brief Combined index of 2 tiers (injected into 1 system prompt).
      #
+     # @return Combined index text of both tiers (global first, then session);
+     #         ""(empty) when neither tier has an index.
+     #
     def get_index_text(self):
         sections = []
         global_index = self._read_index(self.memory_dir)
@@ -262,6 +290,11 @@ class MemoryManager:
      # 2. perform substring matching within the remembered name+description;
      # 3. prioritizing session-level matching;
      # 4. with a maximum of 5 messages.
+     #
+     # @param messages Message history for keyword extraction.
+     # @param max_items Max selected memories (session tier ranked first).
+     #
+     # @return List of memory dicts (name/description/body/scope/filename).
      #
     def select_relevant_memories(self, messages, max_items=5):
         files = self.list_memories(scope="all")
@@ -375,6 +408,16 @@ class MemoryManager:
     ##
      # @brief Write memory.
      #
+     # @param name Unique memory name (sanitized to filename).
+     # @param description One-sentence summary (used by keyword matching).
+     # @param tags Comma-separated tags.
+     # @param content Full memory body.
+     # @param scope "global" or "session" (session requires active session).
+     #
+     # @return True on success.
+     # @raise ValueError When name invalid/reserved/colliding, 
+     # or scope='session' with no session configured.
+     #
     def write_memory(self, name, description, tags, content, scope="global"):
         import datetime
         target_dir = self._dir_for_scope(scope)
@@ -460,6 +503,12 @@ class MemoryManager:
 
     ##
      # @brief Update MEMORY.md file.
+     #
+     # @param tier_dir Tier directory holding MEMORY.md.
+     # @param name Memory name (index key).
+     # @param description One-line description.
+     # @param tags Comma-separated tags.
+     # @param updated_at Timestamp string.
      #
     def _update_index(self, tier_dir, name, description, tags, updated_at):
         index_file = self._index_file(tier_dir)

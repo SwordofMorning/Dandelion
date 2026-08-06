@@ -1,9 +1,18 @@
 ##
  # @file src/core/sysprompt.py
  # @date 2026/08/05
- # 
- # @brief Skill Package.
- # Provides agent (LLM request), memory, skill and prompt builder.
+ #
+ # @brief System Prompt Builder.
+ # Dynamically assembles the system prompt: identity, sub-agent rules,
+ # skills catalog, security/language policies, memories and session task state.
+ #
+ # @note Prompt assembly call chain:
+ #   MyAgent.step()
+ #     -> PromptBuilder.build()
+ #     -> skill.get_catalog()            # Available Skills
+ #     -> memory.get_index_text()        # Relevant Memories (both tiers)
+ #     -> _resolve_state_file()          # Current Task State (session-scoped)
+ #     -> _get_memories() tail injection # dynamic memories appended by agent
  #
 
 import os
@@ -18,6 +27,12 @@ import datetime
 class PromptBuilder:
     ##
      # @brief Constructor.
+     #
+     # @param memory_manager MemoryManager (memories index + injection).
+     # @param skill_manager SkillManager (skills catalog).
+     # @param config Flat config dict from load_api_config.
+     # @param workspace_dir Workspace root (path confinement).
+     # @param session_manager SessionManager (session-scoped task state), optional.
      #
     def __init__(self, memory_manager, skill_manager, config, workspace_dir=".", session_manager=None):
         # Members Init.
