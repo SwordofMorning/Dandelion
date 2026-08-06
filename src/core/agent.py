@@ -300,6 +300,10 @@ class MyAgent:
     ##
      # @brief Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token.
      #
+     # @param history Message list to estimate; defaults to self.history.
+     #
+     # @return Estimated token count (float).
+     #
     def _estimate_tokens(self, history=None):
         history = history if history is not None else self.history
         ascii_chars = 0
@@ -329,9 +333,7 @@ class MyAgent:
      # @note Compaction triggered at this limit keeps the COMBINED provider request
      # within MAX_CONTEXT_TOKENS instead of silently overflowing it.
      #
-     # @param history Message list to estimate; defaults to self.history.
-     #
-     # @return Estimated token count (float).
+     # @return int: MAX_CONTEXT_TOKENS minus request overhead (>= 1).
      #
     def _soft_token_limit(self):
         base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
@@ -344,8 +346,6 @@ class MyAgent:
 
     ##
      # @brief Compact context and memory save.
-     #
-     # @return int: MAX_CONTEXT_TOKENS minus request overhead (>= 1).
      #
     def _compact_context(self):
         est_tokens = self._estimate_tokens()
@@ -482,9 +482,6 @@ class MyAgent:
      # @brief Drop both memory cache fields so the next _get_memories() call
      # reloads persisted memories instead of returning a stale value.
      #
-     # @return Memory string cached until the last plain user message changes;
-     #          ""(empty) when no relevant memory found.
-     #
     def _invalidate_memories_cache(self):
         self._memories_key = None
         self._memories_cache = ""
@@ -492,6 +489,9 @@ class MyAgent:
 
     ##
      # @brief Load relevant memories, cached until the last plain-text user message changes.
+     #
+     # @return Memory string cached until the last plain user message changes;
+     #          ""(empty) when no relevant memory found.
      #
     def _get_memories(self):
         key = None
