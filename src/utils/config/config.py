@@ -226,8 +226,8 @@ def load_api_config(file_path):
         "ANTHROPIC_API_KEY": active_profile["api_key"],
         "MODEL_ID": active_profile["model_id"],
         "MAX_TOKENS": active_profile.get("max_token", 8192),
-        # Context window / compaction threshold (per-model), Limit to 16K
-        "MAX_CONTEXT_TOKENS": active_profile.get("max_context_tokens", 16000),
+        # Context window / compaction threshold (per-model)
+        "MAX_CONTEXT_TOKENS": active_profile.get("max_context_tokens", 128000),
         "SUB_LIST": sub_list,
         "ALL_MODELS": all_models,
         # Search api key
