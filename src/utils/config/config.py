@@ -9,12 +9,16 @@
  #     "model_id": "deepseek-v4-pro",
  #     "conditions": ["reasoning", "long_context", "complex"],
  #     "max_token": 819200,
+ #     "max_context_tokens": 819200,
  #     "TPM": 0,
  #     "RPM": 10,
  #     "RPD": 500,
  #     "thinking": "enabled",
  #     "effort": "max"
  # }
+ # max_token:          Provider output limit (payload "max_tokens").
+ # max_context_tokens: Context window size; compaction threshold
+ #                     (read by agent.py _soft_token_limit via MAX_CONTEXT_TOKENS).
  #
 
 import os
@@ -222,6 +226,8 @@ def load_api_config(file_path):
         "ANTHROPIC_API_KEY": active_profile["api_key"],
         "MODEL_ID": active_profile["model_id"],
         "MAX_TOKENS": active_profile.get("max_token", 8192),
+        # Context window / compaction threshold (per-model)
+        "MAX_CONTEXT_TOKENS": active_profile.get("max_context_tokens", 128000),
         "SUB_LIST": sub_list,
         "ALL_MODELS": all_models,
         # Search api key

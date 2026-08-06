@@ -1,4 +1,18 @@
-# src/core/agent.py
+##
+ # @file src/core/agent.py
+ # @date 2026/08/06
+ # 
+ # @brief Agent-Loop and others helper functions.
+ #
+ # @note Agent runtime call chain:
+ #   CLI interactive loop
+ #     -> MyAgent.step()                 # LLM Round-Trip Step (tools iterator)
+ #     -> _compact_context()             # token budget check + LLM summary
+ #     -> _get_memories()                # memory injection (cached)
+ #     -> SafeLLMClient.safe_stream_request()
+ #     -> tool handlers (memory/state/fs/...)
+ #     -> history append (tool_result)   # loop continues until stop_reason != tool_use
+ #
 
 import os
 import re
@@ -24,19 +38,43 @@ from src.tool import (
 # Create a module-level CLIPrinter instance for convenience
 cli = CLIPrinter()
 
+##
+ # @brief Agent Loop Wrapper Class.
+ #
 class MyAgent:
+    ##
+     # ========================================
+     # @section I. Constructor and Init.
+     # Construct MyAgent obj, and init all tools.
+     # ========================================
+     #
+
+    ##
+     # @brief Constructor.
+     #
+     # @param config api.cfg loaded from .env/.
+     # @param session_manager SessionManager object.
+     # @param workspace_dir current pwd, used to avoid agent(llm) escape.
+     #
     def __init__(self, config, session_manager, workspace_dir):
+        # ----- @par 1. Init members -----
+
+        # Alignment members.
         self.config = config
         self.session = session_manager
         self.workspace_dir = workspace_dir
+        # Clear error counts.
         self.error_count = 0
+        # Inject thinking level.
         self.thinking = str(config.get("THINKING", "disabled")).strip().lower()
         self.effort = str(config.get("EFFORT", "medium")).strip().lower()
 
-        # 1. Load history from the current session
+        # Load history from the current session
         self.history = self.session.load_history()
 
-        # 2. Init Sub-Systems with absolute paths
+        # ----- @par 2. Init Subsystem -----
+
+        # Init request client with absolute paths.
         self.client = SafeLLMClient(
             api_key=self.config["ANTHROPIC_API_KEY"],
             base_url=self.config["ANTHROPIC_BASE_URL"],
@@ -49,10 +87,9 @@ class MyAgent:
             logger=self.session
         )
 
-        # In passing session_manager as logger to maintain compatibility with legacy code
-        # Memory is two-tier: global (llm/memory/) + current session
-        # (.log/sess_<id>/memory/). The session tier resolves dynamically via
-        # session_manager so `checkout` switches memory scope without a rebuild.
+        # In passing session_manager as logger to maintain compatibility with legacy code.
+        # Memory is two-tier: global (llm/memory/) + current session (.log/sess_<id>/memory/).
+        # The session tier resolves dynamically via session_manager so `checkout` switches memory scope without a rebuild.
         self.memory = MemoryManager(
             memory_dir=os.path.join(self.workspace_dir, "llm", "memory"),
             session_manager=self.session,
@@ -73,10 +110,18 @@ class MyAgent:
         # budget accounts for the real request overhead without rebuilding.
         self._last_system_prompt = ""
 
-        # 3. Load Tools
-        self._init_tools()
+        # ----- @par 3. Load Tools -----
 
+        # Init tools for Main Agent.
+        self._init_tools()
+    # End-def
+
+    ##
+     # @brief Init tools for Main Agent and Subagents (pool).
+     #
     def _init_tools(self):
+        # ----- @par 1. Create Tools Object -----
+
         self.tools = {}
         # Pass BASE_DIR to all file-system related tools
         # Bash maintains its own command checking
@@ -113,6 +158,8 @@ class MyAgent:
             write_excel_tool.get_name(): write_excel_tool
         }
 
+        # ----- @par 2. Subagent Pool and Tools -----
+
         self.pool = SubAgentPool(
             safe_client=self.client,
             logger=self.session,
@@ -121,8 +168,12 @@ class MyAgent:
             max_depth=int(self.config.get("MAX_SUBAGENT_DEPTH", 3))
         )
 
+        # Decompose one descriptions to multi (or one) tasks.
         plan_tool = PlanTool(self.client, self.config)
+        # Spawn a new subagent.
         spawn_subagent = SpawnSubagentTool(self.pool)
+
+        # ----- @par 3. Register Tools  -----
 
         # Added all tools to the registration list
         tool_list = [
@@ -143,13 +194,23 @@ class MyAgent:
                 "input_schema": t.get_schema()
             } for t in self.tools.values()
         ]
+    # End-def
 
-    # ------------------------------------------------------------------
-    # Context compaction: token-aware, LLM-summarized, pair-safe
-    # ------------------------------------------------------------------
+    ##
+     # ========================================
+     # @section II. Message Helper Functions.
+     # ========================================
+     #
+
+    ##
+     # @brief A user message that is plain text (not a tool_result payload).
+     #
+     # @return True or False.
+     # @retval True is user input msg;.
+     # @retval False is not user input msg.
+     #
     @staticmethod
     def _is_plain_user_msg(msg):
-        """A user message that is plain text (not a tool_result payload)."""
         if msg.get("role") != "user":
             return False
         content = msg.get("content", "")
@@ -158,11 +219,18 @@ class MyAgent:
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in content
             )
         return True
+    # End-def
 
+    ##
+     # @brief True if an assistant message ends with a tool_use block (handles both
+     # dict blocks loaded from history.log and SDK objects in memory).
+     #
+     # @return True of False.
+     # @retval True is end with tool_use.
+     # @retval False is not end with tool_use.
+     #
     @staticmethod
     def _msg_ends_with_tool_use(msg):
-        """True if an assistant message ends with a tool_use block (handles both
-        dict blocks loaded from history.log and SDK objects in memory)."""
         if msg.get("role") != "assistant":
             return False
         content = msg.get("content", "")
@@ -172,33 +240,71 @@ class MyAgent:
         if isinstance(last, dict):
             return last.get("type") == "tool_use"
         return getattr(last, "type", None) == "tool_use"
+    # End-def
 
+    ##
+     # @brief Trim head so it never ends with an assistant tool_use message.
+     # The trimmed tool_use message stays in middle (summarized) together with its
+     # matching tool_result, so the summary insertion can never split a pair.
+     #
+     # @param history Full message history.
+     # @param head_size Desired head size before trimming.
+     #
+     # @return Trimmed head list (never ends with an assistant tool_use).
+     #
     @staticmethod
     def _trim_head_for_tool_use(history, head_size):
-        """Trim head so it never ends with an assistant tool_use message. The
-        trimmed tool_use message stays in middle (summarized) together with its
-        matching tool_result, so the summary insertion can never split a pair."""
         head = history[:head_size]
         while head and MyAgent._msg_ends_with_tool_use(head[-1]):
             head = head[:-1]
         return head
+    # End-def
 
+    ##
+     # @brief Append-only archive filename: history length + timestamp,
+     # so a second compaction at the same history length never overwrites the first.
+     #
+     # @param archive_dir Session archives directory.
+     # @param history_len History length at compaction time.
+     #
+     # @return Absolute path like <archive_dir>/history_<len>_<timestamp>.json.
+     #
     @staticmethod
     def _archive_path(archive_dir, history_len):
-        """Append-only archive filename: history length + timestamp, so a second
-        compaction at the same history length never overwrites the first."""
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return os.path.join(archive_dir, f"history_{history_len}_{ts}.json")
+    # End-def
 
+    ##
+     # @brief Absolute artifact path (resolvable by read_file
+     # even when the process CWD differs from the workspace/session directory).
+     #
+     # @param session_dir Current session directory.
+     # @param block_id Tool_use block id (sanitized into the filename).
+     #
+     # @return Absolute path of the offloaded artifact file.
+     #
     @staticmethod
     def _artifact_path(session_dir, block_id):
-        """Absolute artifact path (resolvable by read_file even when the process
-        CWD differs from the workspace/session directory)."""
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(block_id))
         return os.path.abspath(os.path.join(session_dir, "artifacts", f"{safe_id}.txt"))
+    # End-def
 
+    ##
+     # ========================================
+     # @section III. Context Compaction.
+     # token-aware, LLM-summarized, pair-safe
+     # ========================================
+     #
+
+    ##
+     # @brief Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token.
+     #
+     # @param history Message list to estimate; defaults to self.history.
+     #
+     # @return Estimated token count (float).
+     #
     def _estimate_tokens(self, history=None):
-        """Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token."""
         history = history if history is not None else self.history
         ascii_chars = 0
         non_ascii_chars = 0
@@ -211,39 +317,58 @@ class MyAgent:
                     ascii_chars += 1
                 else:
                     non_ascii_chars += 1
+                # End-if
+            # End-for
+        # End-for
         return ascii_chars / 4.0 + non_ascii_chars / 1.5
+    # End-def
 
+    ##
+     # @brief History-only token budget: MAX_CONTEXT_TOKENS minus 
+     # the fixed request overhead (system prompt + tool schemas).
+     #
+     # @note The system prompt already includes the memories tail
+     # (_last_system_prompt is built by appending memories_content in step()),
+     # so memories must NOT be counted twice here.
+     # @note Compaction triggered at this limit keeps the COMBINED provider request
+     # within MAX_CONTEXT_TOKENS instead of silently overflowing it.
+     #
+     # @return int: MAX_CONTEXT_TOKENS minus request overhead (>= 1).
+     #
     def _soft_token_limit(self):
-        """History-only token budget: MAX_CONTEXT_TOKENS minus the fixed request
-        overhead (system prompt + tool schemas). The system prompt already
-        includes the memories tail (_last_system_prompt is built by appending
-        memories_content in step()), so memories must NOT be counted twice here.
-        Compaction triggered at this limit keeps the COMBINED provider request
-        within MAX_CONTEXT_TOKENS instead of silently overflowing it."""
         base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
         overhead = self._estimate_tokens([
             {"role": "user", "content": self._last_system_prompt or self.prompt_builder.build()},
             {"role": "user", "content": json.dumps(self.tool_schemas, ensure_ascii=False)},
         ])
         return max(int(base - overhead), 1)
+    # End-def
 
+    ##
+     # @brief Compact context and memory save.
+     #
     def _compact_context(self):
         est_tokens = self._estimate_tokens()
         soft_limit = self._soft_token_limit()
 
-        # The token budget is the SINGLE compaction switch: when history alone
-        # is already at/over the soft limit, compaction must run regardless of
-        # history length. A short-history bypass here (e.g. len < 20) would let
-        # the request overflow MAX_CONTEXT_TOKENS (and provider rejection) in
-        # setups with a large system prompt + tool schemas. Short-history
-        # handling lives INSIDE the compaction flow below (head+summary-only
-        # fallback), never before the budget check.
+        ## 
+         # @brief The token budget is the SINGLE compaction switch: 
+         # when history alone is already at/over the soft limit,
+         # compaction must run regardless of history length (chat turns).
+         #
+         # @note A short-history bypass here (e.g. len < 20) would let
+         # the request overflow MAX_CONTEXT_TOKENS (and provider rejection) in
+         # setups with a large system prompt + tool schemas. Short-history
+         # handling lives INSIDE the compaction flow below (head+summary-only
+         # fallback), never before the budget check.
         if est_tokens < soft_limit:
             return
 
         print(f"[*] Context limit reached (~{int(est_tokens)} tokens), compacting history via LLM...")
 
-        # 1. Full archive backup (append-only, restorable)
+        # ----- @par 1. Backup -----
+
+        # Full archive backup (append-only, restorable)
         archive_dir = os.path.join(self.session.current_session_dir, "archives")
         os.makedirs(archive_dir, exist_ok=True)
         archive_path = self._archive_path(archive_dir, len(self.history))
@@ -254,21 +379,28 @@ class MyAgent:
         head_size = 5
         recent_size = 15
 
-        # Trim head so it never ends with an assistant tool_use message; the
-        # summary (role=user) is inserted right after head, and a trailing
-        # tool_use with no matching tool_result would corrupt the pairing.
+        ## 
+         # @brief Trim head so it never ends with an assistant tool_use message.
+         #
+         # @note The summary (role=user) is inserted right after head, and a trailing
+         # tool_use with no matching tool_result would corrupt the pairing.
+         #
         head = self._trim_head_for_tool_use(self.history, head_size)
         trimmed_head_size = len(head)
 
-        # 2. Find a safe start for the recent window: the latest plain-text user
-        #    message within the look-back limit. Starting at a plain-text user
-        #    message guarantees tool_use/tool_result pairs are never split.
+        # ----- @par 2. Context Window -----
+
+        ## @note Find a safe start for the recent window: the latest plain-text user
+         # @note message within the look-back limit. Starting at a plain-text user;
+         # @note message guarantees tool_use/tool_result pairs are never split.
         max_lookback = min(len(self.history) - trimmed_head_size, recent_size * 2)
         start_idx = None
         for i in range(len(self.history) - 1, len(self.history) - 1 - max_lookback, -1):
             if self._is_plain_user_msg(self.history[i]):
                 start_idx = i
                 break
+            # End-if
+        # End-for
 
         if start_idx is None or start_idx < trimmed_head_size:
             # Fallback: no usable plain-text user message outside the head
@@ -276,11 +408,14 @@ class MyAgent:
             # tool_result blocks.
             print("[-] No safe compaction breakpoint found; keeping head + summary only.")
             start_idx = len(self.history)
+        # End-if
 
         recent = self.history[start_idx:]
         middle = self.history[trimmed_head_size:start_idx]
 
-        # 3. Summarize head + middle (early goals are the most drift-prone part).
+        # ----- @par 3. Summarize -----
+
+        # Summarize head + middle (early goals are the most drift-prone part)
         summary_src = head + middle
         summary_text = json.dumps(summary_src, ensure_ascii=False, indent=2,
                                   default=self.session._default_serializer)
@@ -289,6 +424,7 @@ class MyAgent:
             summary_text = (summary_text[:50000]
                             + "\n...[middle omitted from summarization input]...\n"
                             + summary_text[-150000:])
+        # End-if
 
         summary_prompt = (
             "Please summarize the following conversation history.\n"
@@ -306,6 +442,8 @@ class MyAgent:
             "max_tokens": 2000,
             "system": "You are a concise memory summarization AI."
         }
+
+        # ----- @par 4. Request -----
 
         resp, err = self.client.safe_request(summary_payload, log_tag="COMPRESSION SUMMARY")
         if err:
@@ -327,6 +465,8 @@ class MyAgent:
         self._invalidate_memories_cache()
         print("[+] Context compacted successfully.")
 
+        # ----- @par 5. Post -----
+
         # Post-compaction guard: if the budget is still exceeded (e.g. the
         # configured MAX_CONTEXT_TOKENS is below the system-prompt + tools
         # overhead), warn loudly once per compaction instead of letting every
@@ -336,27 +476,60 @@ class MyAgent:
             print(f"[-] Warning: history still ~{int(remaining)} tokens after "
                   f"compaction (soft limit ~{int(soft_limit)}). Consider raising "
                   "MAX_CONTEXT_TOKENS or reducing system-prompt/tool overhead.")
+    # End-def _compact_context
 
+    ##
+     # @brief Drop both memory cache fields so the next _get_memories() call
+     # reloads persisted memories instead of returning a stale value.
+     #
     def _invalidate_memories_cache(self):
-        """Drop both memory cache fields so the next _get_memories() call
-        reloads persisted memories instead of returning a stale value."""
         self._memories_key = None
         self._memories_cache = ""
+    # End-def
 
+    ##
+     # @brief Load relevant memories, cached until the last plain-text user message changes.
+     #
+     # @return Memory string cached until the last plain user message changes;
+     #          ""(empty) when no relevant memory found.
+     #
     def _get_memories(self):
-        """Load relevant memories, cached until the last plain-text user message changes."""
         key = None
         for i in range(len(self.history) - 1, -1, -1):
             msg = self.history[i]
             if self._is_plain_user_msg(msg):
                 key = (i, hash(str(msg.get("content", ""))[:2000]))
                 break
+        # End-for
         if key is not None and key == self._memories_key:
             return self._memories_cache
         self._memories_key = key
         self._memories_cache = self.memory.load_memories_string(self.history)
         return self._memories_cache
+    # End-def
 
+    ##
+     # ========================================
+     # @section IV. Agent-Loop
+     # ========================================
+     #
+
+    ##
+     # @brief LLM Round-Trip Step. A tools iterator.
+     #
+     # @note This function only one round chat:
+     # Compact Context -> Inject Memory -> Request LLM -> Execute All Tools -> Return.
+     #
+     # @note Agent-loop is held by CLI:
+     # CLI -> agent.step() -> Request LLM -> Execute All Tools -> Return ->
+     # CLI (continue? or stop?) -> agent.step() | Stop in CLI
+     #
+     # @see src/utils/cli/interactive_cli.py
+     #
+     # @return True: continue the loop; False: stop.
+     # @retval True This round executed a tool call (or unexpected), need to feed back result to LLM. Continue.
+     # @retval False This round is a plain text reply (or an API error). Breakout.
+     #
     def step(self):
         # 0. Check context budget every turn (not only on user messages).
         self._compact_context()
@@ -408,6 +581,8 @@ class MyAgent:
 
         # Handle Tools
         results = []
+
+        # Tools Iterator.
         for block in resp.content:
             if block.type != "tool_use":
                 continue
@@ -452,6 +627,7 @@ class MyAgent:
                 output_str = trunc_output
 
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": output_str})
+        # End-for Agent-Loop
 
         if results:
             self.history.append({"role": "user", "content": results})
@@ -460,12 +636,22 @@ class MyAgent:
 
         self.session.save_history(self.history)
         return True
+    # End-def
 
+    ##
+     # @brief Append a user text message to history and run a context budget check.
+     #
+     # @param text User input text to append to history.
+     #
     def inject_user_message(self, text):
         self.history.append({"role": "user", "content": text})
         self.session.save_history(self.history)
         self._compact_context()
+    # End-def
 
+    ##
+     # @brief Reload history when session changed.
+     #
     def reload_history(self):
         self.history = self.session.load_history()
         # Session switched: memory relevance cache must be recomputed because
@@ -477,3 +663,5 @@ class MyAgent:
         # (_soft_token_limit) rebuilds from the new session instead of
         # reusing stale overhead from the old branch.
         self._last_system_prompt = ""
+    # End-def
+# End-class

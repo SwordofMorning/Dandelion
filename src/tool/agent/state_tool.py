@@ -8,39 +8,20 @@ class StateTool(BaseTool):
     def __init__(self, workspace_dir=None, session_manager=None):
         super().__init__(workspace_dir)
         self.session_manager = session_manager
-        # Legacy global path kept as a fallback for setups without a
-        # session manager (e.g. standalone usage or tests).
-        self.legacy_state_dir = os.path.join(self.workspace_dir, "llm/task")
-        self.legacy_state_file = os.path.join(self.legacy_state_dir, "task_state.json")
 
     def _get_state_file(self):
         """Resolve the active session's task_state.json dynamically, so
         `checkout` (session switch) works without rebuilding the agent.
 
-        Falls back to the legacy global file (llm/task/task_state.json) ONLY
-        when no session manager is attached (standalone usage / tests). The
-        fallback is loud on purpose: a global task_state must never be read
-        or written silently, and production runs (main.py) always bind task
-        state to a session via SessionManager.
+        Session-scoped only: the legacy global state file
+        (llm/task/task_state.json) was removed, so there is NO fallback.
+        The session manager creates a blank file on demand
+        (ensure_task_state_file); None means no active session, and callers
+        must fail loudly instead of touching any global file.
         """
         if self.session_manager is not None:
-            state_file = self.session_manager.get_task_state_file()
-            if state_file:
-                return state_file
-        print("[-] Warning: StateTool has no session manager; using the legacy "
-              "global state file (llm/task/task_state.json). Production runs "
-              "(main.py) always bind task state to a session.")
-        return self.legacy_state_file
-
-    def _ensure_state_file(self):
-        state_file = self._get_state_file()
-        os.makedirs(os.path.dirname(state_file), exist_ok=True)
-        if not os.path.exists(state_file):
-            self._atomic_write_json(
-                state_file,
-                {"target": "No specific target set.", "todos": [], "completed": []}
-            )
-        return state_file
+            return self.session_manager.ensure_task_state_file()
+        return None
 
     def get_name(self):
         return "update_state"
@@ -76,6 +57,10 @@ class StateTool(BaseTool):
     def _load(self):
         state = {"target": "No specific target set.", "todos": [], "completed": []}
         state_file = self._get_state_file()
+        if state_file is None:
+            # No active session: execute() reports the error before writing;
+            # nothing to read here.
+            return state
         if os.path.exists(state_file):
             try:
                 with open(state_file, "r", encoding="utf-8") as f:
@@ -112,6 +97,12 @@ class StateTool(BaseTool):
         return any(ord(ch) > 127 for ch in str(value or ""))
 
     def execute(self, **kwargs):
+        # Session-scoped only: without an active session there is no place to
+        # persist task state. Fail loudly instead of writing a global file
+        # (the legacy llm/task fallback was removed).
+        if self.session_manager is None:
+            return False, "Error: 'update_state' requires an active session (no session manager attached)."
+
         # Merge semantics: only provided fields are updated, so partial
         # updates never wipe out the rest of the task state.
         state = self._load()
@@ -135,7 +126,7 @@ class StateTool(BaseTool):
             state["completed"] = kwargs.get("completed")
 
         try:
-            state_file = self._ensure_state_file()
+            state_file = self._get_state_file()  # ensures the blank file exists
             self._atomic_write_json(state_file, state)
         except OSError as e:
             # Disk-level failures (state path corrupted into a directory, full

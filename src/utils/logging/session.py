@@ -84,6 +84,22 @@ class SessionManager:
     # End-def
 
     ##
+     # @brief Ensure the current session's task_state.json exists.
+     #
+     # Creates a blank task state (DEFAULT_TASK_STATE) via _ensure_session_layout
+     # when the file is missing. Session-scoped only: there is no global task
+     # state fallback anymore.
+     #
+     # @return Absolute path of task_state.json; None if no active session.
+     #
+    def ensure_task_state_file(self):
+        if not self.current_session_dir:
+            return None
+        self._ensure_session_layout(self.current_session_dir)
+        return self.get_task_state_file()
+    # End-def
+
+    ##
      # @brief Path of the current session's memory/ dir (None if no active session).
      #
     def get_session_memory_dir(self):
