@@ -448,25 +448,32 @@ class MyAgent:
                   "MAX_CONTEXT_TOKENS or reducing system-prompt/tool overhead.")
     # End-def _compact_context
 
+    ##
+     # @brief Drop both memory cache fields so the next _get_memories() call
+     # reloads persisted memories instead of returning a stale value.
+     #
     def _invalidate_memories_cache(self):
-        """Drop both memory cache fields so the next _get_memories() call
-        reloads persisted memories instead of returning a stale value."""
         self._memories_key = None
         self._memories_cache = ""
+    # End-def
 
+    ##
+     # @brief Load relevant memories, cached until the last plain-text user message changes.
+     #
     def _get_memories(self):
-        """Load relevant memories, cached until the last plain-text user message changes."""
         key = None
         for i in range(len(self.history) - 1, -1, -1):
             msg = self.history[i]
             if self._is_plain_user_msg(msg):
                 key = (i, hash(str(msg.get("content", ""))[:2000]))
                 break
+        # End-for
         if key is not None and key == self._memories_key:
             return self._memories_cache
         self._memories_key = key
         self._memories_cache = self.memory.load_memories_string(self.history)
         return self._memories_cache
+    # End-def
 
     ##
      # ========================================
@@ -474,6 +481,11 @@ class MyAgent:
      # ========================================
      #
 
+    ##
+     # @brief Agent-Loop Function.
+     #
+     # @see src/utils/cli/interactive_cli.py 
+     #
     def step(self):
         # 0. Check context budget every turn (not only on user messages).
         self._compact_context()
@@ -569,6 +581,7 @@ class MyAgent:
                 output_str = trunc_output
 
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": output_str})
+        # End-for Agent-Loop
 
         if results:
             self.history.append({"role": "user", "content": results})
@@ -577,12 +590,20 @@ class MyAgent:
 
         self.session.save_history(self.history)
         return True
+    # End-def
 
+    ##
+     # @brief Inject test to usr's msg.
+     #
     def inject_user_message(self, text):
         self.history.append({"role": "user", "content": text})
         self.session.save_history(self.history)
         self._compact_context()
+    # End-def
 
+    ##
+     # @brief Reload history when session changed.
+     #
     def reload_history(self):
         self.history = self.session.load_history()
         # Session switched: memory relevance cache must be recomputed because
@@ -594,3 +615,5 @@ class MyAgent:
         # (_soft_token_limit) rebuilds from the new session instead of
         # reusing stale overhead from the old branch.
         self._last_system_prompt = ""
+    # End-def
+# End-class
