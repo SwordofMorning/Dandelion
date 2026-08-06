@@ -150,13 +150,19 @@ class MemoryManager:
     # End-def
 
     ##
+     # @brief Listing single tier (global/local) memory file.
      #
+     # @param tier_dir Memory Scan path.
+     # @param scope_label Global or local/session.
+     #
+     # @return List of single tier memory.
      #
     def _list_tier(self, tier_dir, scope_label):
         result = []
         if not tier_dir or not os.path.exists(tier_dir):
             return result
 
+        # Iterate scope.
         for fname in sorted(os.listdir(tier_dir)):
             if not fname.endswith(".md") or fname == "MEMORY.md":
                 continue
@@ -170,6 +176,7 @@ class MemoryManager:
                 # whole memory scan (and the system prompt build).
                 print(f"[-] Warning: skipping unreadable memory file {fname}: {e}")
                 continue
+            # End-try
 
             meta, body = self._parse_frontmatter(raw)
             name = meta.get("name", fname.replace(".md", ""))
@@ -180,18 +187,40 @@ class MemoryManager:
                 "body": body,
                 "scope": scope_label
             })
+        # End-for
+        # Return all memory.
         return result
     # End-def
 
+    ##
+     # @brief Listing memories.
+     #
+     # @param scope == 'all' | 'global' | 'session'
+     #
+     # @note if scope == all, then listing both global and local memory file.
+     # @see _list_tier(), list_memories() -> _list_tier()
+     #
+     # @return List of (all) memory.
+     #
     def list_memories(self, scope="all"):
-        """List memories: scope='all' | 'global' | 'session'."""
         result = []
         if scope in ("all", "global"):
             result += self._list_tier(self.memory_dir, "global")
         if scope in ("all", "session"):
             result += self._list_tier(self.session_memory_dir(), "session")
         return result
+    # End-def
 
+    ##
+     # @brief read index memory file (MEMORY.md), looks like:
+     #
+     # - [name a] description (tags) [updated: time]
+     # - [name b] description (tags) [updated: time]
+     #
+     # @param tier_dir Memory Scan path.
+     #
+     # @return string of MEMORY.md.
+     #
     def _read_index(self, tier_dir):
         if not tier_dir:
             return ""
@@ -206,9 +235,12 @@ class MemoryManager:
             # build; get_index_text() naturally skips this tier's section.
             print(f"[-] Warning: skipping unreadable memory index {index_file}: {e}")
             return ""
+    # End-def
 
+    ##
+     # @brief Combined index of 2 tiers (injected into 1 system prompt).
+     #
     def get_index_text(self):
-        """Combined index of both tiers (injected into the system prompt)."""
         sections = []
         global_index = self._read_index(self.memory_dir)
         if global_index:
@@ -221,7 +253,16 @@ class MemoryManager:
                 "## Current Session Memories (session-scoped)\n" + session_index
             )
         return "\n\n".join(sections)
+    # End-def
 
+    ##
+     #
+     # @brief Keyword matching.
+     # 1. Extract keywords from recent user messages;
+     # 2. perform substring matching within the remembered name+description;
+     # 3. prioritizing session-level matching;
+     # 4. with a maximum of 5 messages.
+     #
     def select_relevant_memories(self, messages, max_items=5):
         files = self.list_memories(scope="all")
         if not files: return []
@@ -242,11 +283,15 @@ class MemoryManager:
                         else:
                             if getattr(b, "type", None) == "text":
                                 texts.append(str(getattr(b, "text", "")))
+                        # End-if
+                    # End-for
                     content = " ".join(texts)
                 if isinstance(content, str):
                     recent_texts.append(content)
                 if len(recent_texts) >= 3:
                     break
+            # End-if
+        # End-for
 
         recent = " ".join(reversed(recent_texts))[:2000]
         if not recent.strip(): return []
@@ -266,9 +311,19 @@ class MemoryManager:
                     selected.append(f)
                     if len(selected) >= max_items:
                         break
+                    # End-if
+                # End-if
+            # End-for
+        # End-for
 
         return selected
+    # End-def
 
+    ##
+     # @brief Formatting selected into <relevant_memories> style.
+     #
+     # @return Prompt string.
+     #
     def load_memories_string(self, messages):
         selected = self.select_relevant_memories(messages)
         if not selected: return ""
@@ -283,6 +338,7 @@ class MemoryManager:
             parts.append(f"--- Memory: {mem['name']}{scope_tag} ---\n{mem['body']}")
         parts.append("</relevant_memories>")
         return "\n\n".join(parts)
+    # End-def
 
     ##
      # ========================================
