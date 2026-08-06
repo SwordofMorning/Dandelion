@@ -59,6 +59,11 @@ class PromptBuilder:
         return None
     # End-def
 
+    ##
+     # @brief Dynamic build system prompt.
+     #
+     # @return System prompt string.
+     #
     def build(self):
         sections = []
         
@@ -94,6 +99,7 @@ class PromptBuilder:
                 "- 'data_processing': read_weekly_report, write_file, markdown_editor\n"
                 "- 'full': bash, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file"
             )
+        # End-if
         
         # 3. Skills Catalog (Layer 1)
         catalog = self.skill.get_catalog()
@@ -112,8 +118,8 @@ class PromptBuilder:
         )
 
         # 5. Language Policy (static, cache-friendly)
-        # User-facing output may be in the user's language; internal storage
-        # must stay ASCII-only so keyword retrieval (space-split) keeps working.
+        #    User-facing output may be in the user's language; internal storage
+        #    must stay ASCII-only so keyword retrieval (space-split) keeps working.
         sections.append(
             "Language Policy:\n"
             "1. User-facing replies and final deliverables (documents, reports) MAY use the user's language (e.g., Chinese).\n"
@@ -140,6 +146,7 @@ class PromptBuilder:
                 "scope='global' for project-wide facts, or scope='session' for facts "
                 "that only apply to the current session branch."
             )
+        # End-if
 
         # 7. Target/Task State and Attention Management
         state_file = self._resolve_state_file()
@@ -174,6 +181,8 @@ class PromptBuilder:
             except Exception as e:
                 # Log failure details instead of silently dropping the section.
                 print(f"[-] Warning: Failed to load task state from {state_file}: {e}")
+        # End-if
 
         return "\n\n".join(sections)
-#End-def
+    # End-def build
+#End-class
