@@ -289,7 +289,7 @@ class MemoryManager:
      # 1. Extract keywords from recent user messages;
      # 2. perform substring matching within the remembered name+description;
      # 3. prioritizing session-level matching;
-     # 4. with a maximum of 5 messages.
+     # 4. with a maximum of max_items messages.
      #
      # @param messages Message history for keyword extraction.
      # @param max_items Max selected memories (session tier ranked first).
