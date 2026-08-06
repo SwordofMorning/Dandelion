@@ -34,6 +34,13 @@ cli = CLIPrinter()
  #
 class MyAgent:
     ##
+     # ========================================
+     # @section I. Constructor and Init.
+     # Construct MyAgent obj, and init all tools.
+     # ========================================
+     #
+
+    ##
      # @brief Constructor.
      #
      # @param config api.cfg loaded from .env/.
@@ -100,7 +107,12 @@ class MyAgent:
         self._init_tools()
     # End-def
 
+    ##
+     # @brief Init tools for Main Agent and Subagents (pool).
+     #
     def _init_tools(self):
+        # ----- @par 1. Create Tools Object -----
+
         self.tools = {}
         # Pass BASE_DIR to all file-system related tools
         # Bash maintains its own command checking
@@ -137,6 +149,8 @@ class MyAgent:
             write_excel_tool.get_name(): write_excel_tool
         }
 
+        # ----- @par 2. Subagent Pool and Tools -----
+
         self.pool = SubAgentPool(
             safe_client=self.client,
             logger=self.session,
@@ -145,8 +159,12 @@ class MyAgent:
             max_depth=int(self.config.get("MAX_SUBAGENT_DEPTH", 3))
         )
 
+        # Decompose one descriptions to multi (or one) tasks.
         plan_tool = PlanTool(self.client, self.config)
+        # Spawn a new subagent.
         spawn_subagent = SpawnSubagentTool(self.pool)
+
+        # ----- @par 3. Register Tools  -----
 
         # Added all tools to the registration list
         tool_list = [
@@ -167,13 +185,23 @@ class MyAgent:
                 "input_schema": t.get_schema()
             } for t in self.tools.values()
         ]
+    # End-def
 
-    # ------------------------------------------------------------------
-    # Context compaction: token-aware, LLM-summarized, pair-safe
-    # ------------------------------------------------------------------
+    ##
+     # ========================================
+     # @section II. Message Helper Functions.
+     # ========================================
+     #
+
+    ##
+     # @brief A user message that is plain text (not a tool_result payload).
+     #
+     # @return True or False.
+     # @retval True is user input msg;.
+     # @retval False is not user input msg.
+     #
     @staticmethod
     def _is_plain_user_msg(msg):
-        """A user message that is plain text (not a tool_result payload)."""
         if msg.get("role") != "user":
             return False
         content = msg.get("content", "")
@@ -182,11 +210,18 @@ class MyAgent:
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in content
             )
         return True
+    # End-def
 
+    ##
+     # @brief True if an assistant message ends with a tool_use block (handles both
+     # dict blocks loaded from history.log and SDK objects in memory).
+     #
+     # @return True of False.
+     # @retval True is end with tool_use.
+     # @retval False is not end with tool_use.
+     #
     @staticmethod
     def _msg_ends_with_tool_use(msg):
-        """True if an assistant message ends with a tool_use block (handles both
-        dict blocks loaded from history.log and SDK objects in memory)."""
         if msg.get("role") != "assistant":
             return False
         content = msg.get("content", "")
@@ -196,16 +231,20 @@ class MyAgent:
         if isinstance(last, dict):
             return last.get("type") == "tool_use"
         return getattr(last, "type", None) == "tool_use"
+    # End-def
 
+    ##
+     # @brief Trim head so it never ends with an assistant tool_use message.
+     # The trimmed tool_use message stays in middle (summarized) together with its
+     # matching tool_result, so the summary insertion can never split a pair.
+     #
     @staticmethod
     def _trim_head_for_tool_use(history, head_size):
-        """Trim head so it never ends with an assistant tool_use message. The
-        trimmed tool_use message stays in middle (summarized) together with its
-        matching tool_result, so the summary insertion can never split a pair."""
         head = history[:head_size]
         while head and MyAgent._msg_ends_with_tool_use(head[-1]):
             head = head[:-1]
         return head
+    # End-def
 
     @staticmethod
     def _archive_path(archive_dir, history_len):
@@ -220,6 +259,13 @@ class MyAgent:
         CWD differs from the workspace/session directory)."""
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(block_id))
         return os.path.abspath(os.path.join(session_dir, "artifacts", f"{safe_id}.txt"))
+
+    ##
+     # ========================================
+     # @section III. Context Compaction.
+     # token-aware, LLM-summarized, pair-safe
+     # ========================================
+     #
 
     def _estimate_tokens(self, history=None):
         """Heuristic token estimate: ASCII ~4 chars/token, CJK ~1.5 chars/token."""
@@ -380,6 +426,12 @@ class MyAgent:
         self._memories_key = key
         self._memories_cache = self.memory.load_memories_string(self.history)
         return self._memories_cache
+
+    ##
+     # ========================================
+     # @section IV. Agent-Loop
+     # ========================================
+     #
 
     def step(self):
         # 0. Check context budget every turn (not only on user messages).
