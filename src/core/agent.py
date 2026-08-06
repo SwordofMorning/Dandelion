@@ -390,9 +390,9 @@ class MyAgent:
 
         # ----- @par 2. Context Window -----
 
-        # Find a safe start for the recent window: the latest plain-text user
-        # @note message within the look-back limit. Starting at a plain-text user;
-        # @note message guarantees tool_use/tool_result pairs are never split.
+        ## @note Find a safe start for the recent window: the latest plain-text user
+         # @note message within the look-back limit. Starting at a plain-text user;
+         # @note message guarantees tool_use/tool_result pairs are never split.
         max_lookback = min(len(self.history) - trimmed_head_size, recent_size * 2)
         start_idx = None
         for i in range(len(self.history) - 1, len(self.history) - 1 - max_lookback, -1):
