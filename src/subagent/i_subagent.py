@@ -1,6 +1,19 @@
-# src/subagent/i_subagent.py
+##
+ # @file src/subagent/i_subagent.py
+ # @date 2026/08/06
+ # 
+ # @brief Subagent virtual base class.
+ #
 
+##
+ # @brief Subagent virtual base class.
+ #
 class ISubAgent:
+    ##
+     # @brief COnstructor.
+     #
+     # @param self_client
+     #
     def __init__(self, safe_client, logger, tools, config):
         self.client = safe_client
         self.logger = logger
@@ -19,6 +32,7 @@ class ISubAgent:
                 "input_schema": t.get_schema()
             } for t in self.tools.values()
         ]
+    # End-f
 
     def run(self, task_description):
         print(f"\n[*] [SubAgent] Spawned for task: {task_description[:50]}...")
@@ -71,3 +85,4 @@ class ISubAgent:
                     
         print("[*] [SubAgent] Finished task.")
         return result_text if result_text else "Subagent stopped without final answer."
+# End-class
