@@ -7,7 +7,7 @@
 
 import sys
 
-from mk.aux.paths import base_dir, config_dir, config_path, log_dir
+from mk.lib.paths import base_dir, config_dir, config_path, log_dir
 
 from src.utils import load_api_config
 from src.utils import SessionManager
@@ -16,7 +16,7 @@ from src.core.agent import MyAgent
 
 # Build metadata
 try:
-    from mk.aux import build_info as _build_info
+    from mk.lib import build_info as _build_info
 except ImportError:
     _build_info = None
 

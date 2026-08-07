@@ -26,4 +26,4 @@ playground/
 # Build artifacts
 build/
 .nuitka-cache/
-mk/aux/build_info.py
+mk/lib/build_info.py

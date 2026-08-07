@@ -1,5 +1,5 @@
 ##
- # @file mk/aux/paths.py
+ # @file mk/lib/paths.py
  # @date 2026/08/07
  # 
  # @brief Runtime path resolution helpers for Dandelion (frozen/dev aware).
@@ -37,7 +37,7 @@ def base_dir():
         return os.path.dirname(os.path.abspath(sys.executable))
     # End-if
 
-    # mk/aux/paths.py -> <root>/mk/aux -> <root>/mk -> <root>
+    # mk/lib/paths.py -> <root>/mk/lib -> <root>/mk -> <root>
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # End-def
 
