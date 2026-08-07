@@ -1,6 +1,6 @@
 ##
  # @file src/subagent/i_subagent.py
- # @date 2026/08/06
+ # @date 2026/08/07
  # 
  # @brief Subagent virtual base class.
  # subagent.py provided a generic subagent class derivative from virtual parent,
@@ -16,6 +16,7 @@ class ISubAgent:
      # @brief COnstructor.
      #
      # @param safe_client llm_request client.
+     # @param logger log management.
      # @param tools toolset.
      # @param config environment config.
      #

@@ -1,6 +1,6 @@
 ##
  # @file src/subagent/__init__.py
- # @date 2026/08/06
+ # @date 2026/08/07
  # 
  # @brief Core Package.
  # Provides agent (LLM request), memory, skill and prompt builder.
