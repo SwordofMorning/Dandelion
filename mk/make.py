@@ -298,6 +298,28 @@ def _postprocess(cfg, name, version):
     # End-for
     print("  [+] Created directories: .env, llm, .log")
 
+    # ----- @par 3. Create fake entry (symlink / cmd wrapper) -----
+    print("[*] Creating fake entry at package root...")
+    if sys.platform == "win32":
+        entry_cmd = os.path.join(target_dir, "dandelion.cmd")
+        with open(entry_cmd, "w", encoding="ascii", newline="\r\n") as f:
+            f.write('@echo off\n"%~dp0bin\\' + name + '.exe" %*\n')
+        # End-with
+        print("  [+] Created: " + entry_cmd)
+    else:
+        entry_link = os.path.join(target_dir, name)
+        link_target = os.path.join("bin", name)
+        try:
+            if os.path.lexists(entry_link):
+                os.remove(entry_link)
+            # End-if
+            os.symlink(link_target, entry_link)
+            print("  [+] Created: " + entry_link + " -> " + link_target)
+        except OSError as e:
+            print("  [-] Warning: failed to create symlink: " + str(e))
+        # End-try
+    # End-if
+
     # Write version file.
     with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
