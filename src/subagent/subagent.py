@@ -115,6 +115,11 @@ class SubAgent(ISubAgent):
     ##
      # @brief SubAgent's loop.
      #
+     # @param task_description SubAgent's task prompt.
+     #
+     # @return SubAgentResult to parentAgent.
+     # @see src/subagent/result.py
+     #
     def run(self, task_description) -> SubAgentResult:
         start_time = time.time()
         tool_calls_made = 0

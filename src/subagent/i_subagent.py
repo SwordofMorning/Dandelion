@@ -43,6 +43,11 @@ class ISubAgent:
     ##
      # @brief SubAgent's loop.
      #
+     # @param task_description SubAgent's task prompt.
+     #
+     # @return SubAgentResult to parentAgent.
+     # @see src/subagent/result.py
+     #
     def run(self, task_description):
         print(f"\n[*] [SubAgent] Spawned for task: {task_description[:50]}...")
         messages = [{"role": "user", "content": task_description}]
