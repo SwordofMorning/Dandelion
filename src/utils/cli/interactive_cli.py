@@ -99,7 +99,7 @@ class InteractiveCLI:
      #
     def _print_help(self):
         help_text = (
-            f"{self.cli.C_CYAN}\n================= REGENT WORKSPACE ================={self.cli.C_RESET}\n"
+            f"{self.cli.C_CYAN}\n================= WORKSPACE ================={self.cli.C_RESET}\n"
             " Git-Style Session Management:\n"
             "   branch -a             : List all available sessions.\n"
             "   branch -d <name/id>   : Delete one session.\n"
@@ -386,7 +386,7 @@ class InteractiveCLI:
      # Send message to LLM.
      #
     def run(self):
-        self.cli.raw(f"\n{self.cli.C_CYAN}================ REGENT SHELL READY ================{self.cli.C_RESET}")
+        self.cli.raw(f"\n{self.cli.C_CYAN}================ SHELL READY ================{self.cli.C_RESET}")
 
         # Try to load HAS_PTK (tab completion)
         if HAS_PTK:
