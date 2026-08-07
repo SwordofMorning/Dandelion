@@ -19,7 +19,6 @@ import os
 import json
 import platform
 import shutil
-import datetime
 
 ##
  # @brief System Prompt Builder.
@@ -83,6 +82,7 @@ class PromptBuilder:
         sections = []
         # 1. Identity
         sections.append("You are a professional coding and management agent running locally.")
+        sections.append(f"Environment Info:\n{self.terminal_hint}")
 
         # 2. SubAgent, if enable SUB_LIST, must palnt first
         sub_list = self.config.get("SUB_LIST", [])
