@@ -30,4 +30,5 @@ dev = [
     "zstandard",
     "ordered-set",
     "pytest",
+    "tzdata",
 ]

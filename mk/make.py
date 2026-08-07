@@ -216,6 +216,212 @@ def _run_nuitka(cfg, name, version):
 # End-def
 
 ##
+ # @brief Copy a single python package/module and its dist-info metadata.
+ #
+ # @param import_name Top-level import name (e.g. 'pydantic_core').
+ # @param dist_name   Canonical distribution name (e.g. 'pydantic-core').
+ # @param dst_dir     Destination directory (bin/).
+ # @param copied      Set of already-copied import names (dedup).
+ #
+def _copy_package(import_name, dist_name, dst_dir, copied):
+    if import_name in copied:
+        return
+    # End-if
+
+    spec = importlib.util.find_spec(import_name)
+    if spec is None:
+        return
+    # End-if
+
+    if spec.submodule_search_locations:
+        src_dir = spec.submodule_search_locations[0]
+        dst = os.path.join(dst_dir, import_name)
+        # Ignore raw pyc caches to keep size small, Python will re-generate them at runtime if needed
+        shutil.copytree(src_dir, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    elif spec.origin:
+        dst = os.path.join(dst_dir, os.path.basename(spec.origin))
+        shutil.copy2(spec.origin, dst)
+    else:
+        return
+    # End-if
+    copied.add(import_name)
+    print("  [+] Copied package: " + import_name)
+
+    # Also copy the .dist-info metadata so importlib.metadata lookups
+    # (e.g. requests version checks) work at runtime.
+    try:
+        import importlib.metadata as imeta
+        dist = imeta.distribution(dist_name)
+        dst_info = os.path.join(dst_dir, os.path.basename(str(dist._path)))
+        if not os.path.exists(dst_info):
+            shutil.copytree(str(dist._path), dst_info, ignore=shutil.ignore_patterns("__pycache__"))
+        # End-if
+    except Exception:
+        pass
+    # End-try
+# End-def
+
+##
+ # @brief Recursively copy a dependency closure from the current python env.
+ #
+ # @param roots   Root import names (e.g. 'anthropic', 'google').
+ # @param dst_dir Destination directory (bin/).
+ #
+def _copy_dependency_closure(roots, dst_dir):
+    import importlib.metadata as imeta
+    import re
+
+    # Reverse index: import name -> canonical dist names.
+    import_to_dists = {}
+    for imp, dists in imeta.packages_distributions().items():
+        for d in dists:
+            import_to_dists.setdefault(imp, []).append(d.replace("_", "-").lower())
+        # End-for
+    # End-for
+
+    # BFS over distribution dependencies, starting from the root import names.
+    queue = []
+    for imp in roots:
+        dists = import_to_dists.get(imp)
+        if dists:
+            queue.extend(dists)
+        else:
+            queue.append(imp.replace("_", "-").lower())
+        # End-if
+    # End-for
+
+    seen = set()
+    copied = set()
+    while queue:
+        dist = queue.pop(0)
+        if dist in seen:
+            continue
+        # End-if
+        seen.add(dist)
+
+        try:
+            reqs = imeta.requires(dist)
+        except imeta.PackageNotFoundError:
+            reqs = []
+        # End-try
+
+        for req in reqs or []:
+            marker = req.split(";", 1)[1] if ";" in req else ""
+            if "extra" in marker:
+                continue
+            # End-if
+            name = re.split(r"[<>=!\[; ]", req)[0].strip()
+            if name:
+                queue.append(name.replace("_", "-").lower())
+            # End-if
+        # End-for
+
+        # Copy every top-level import name provided by this distribution.
+        imps = [imp for imp, dists in import_to_dists.items() if dist in dists]
+        for imp in imps:
+            _copy_package(imp, dist, dst_dir, copied)
+        # End-for
+    # End-for
+
+    # Fallback: ensure the roots themselves were copied (e.g. single modules).
+    for imp in roots:
+        if imp not in copied:
+            _copy_package(imp, imp.replace("_", "-").lower(), dst_dir, copied)
+        # End-if
+    # End-for
+# End-def
+
+##
+ # @brief Copy stdlib modules imported by the bypassed packages into bin/.
+ #
+ # Bypassed packages are not analyzed by Nuitka, so stdlib modules they
+ # import (e.g. zoneinfo) may be missing from the artifact. Scan the copied
+ # sources and copy the needed stdlib modules as an on-disk fallback.
+ # Iterates to fixpoint so transitive stdlib imports (e.g. ssl -> _ssl)
+ # are covered as well.
+ #
+ # @param bin_dir Destination directory (bin/).
+ #
+def _copy_stdlib_fallback(bin_dir):
+    import ast
+    import sys as _sys
+
+    stdlib_names = set(_sys.stdlib_module_names)
+    copied = set()
+    changed = True
+    rounds = 0
+
+    while changed and rounds < 10:
+        changed = False
+        rounds += 1
+        found = set()
+
+        # Collect stdlib top-level imports from all copied .py sources.
+        for dirpath, dirnames, filenames in os.walk(bin_dir):
+            if "__pycache__" in dirnames:
+                dirnames.remove("__pycache__")
+            # End-if
+            for fn in filenames:
+                if not fn.endswith(".py"):
+                    continue
+                # End-if
+                path = os.path.join(dirpath, fn)
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        tree = ast.parse(f.read())
+                    # End-with
+                except Exception:
+                    continue
+                # End-try
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            top = alias.name.split(".")[0]
+                            if top in stdlib_names:
+                                found.add(top)
+                            # End-if
+                        # End-for
+                    elif isinstance(node, ast.ImportFrom) and node.module:
+                        top = node.module.split(".")[0]
+                        if top in stdlib_names:
+                            found.add(top)
+                        # End-if
+                    # End-if
+                # End-for
+            # End-for
+        # End-for
+
+        # Copy newly discovered stdlib modules.
+        for mod in sorted(found):
+            if mod in copied:
+                continue
+            # End-if
+            spec = importlib.util.find_spec(mod)
+            if spec is None:
+                continue
+            # End-if
+            if spec.submodule_search_locations:
+                src = spec.submodule_search_locations[0]
+                dst = os.path.join(bin_dir, mod)
+                shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+            elif spec.origin and spec.origin not in ("built-in", "frozen"):
+                dst = os.path.join(bin_dir, os.path.basename(spec.origin))
+                if os.path.exists(dst):
+                    copied.add(mod)
+                    continue
+                # End-if
+                shutil.copy2(spec.origin, dst)
+            else:
+                continue
+            # End-if
+            copied.add(mod)
+            changed = True
+            print("  [+] Stdlib fallback: " + mod)
+        # End-for
+    # End-while
+# End-def
+
+##
  # @brief Post-process Nuitka output into build/<name>/ layout.
  #
  # @param cfg     Build config (ConfigParser).
@@ -262,28 +468,15 @@ def _postprocess(cfg, name, version):
     bin_dir = os.path.join(target_dir, "bin")
     os.rename(dist_dir, bin_dir)
 
-    # ----- @par 1. Copy bypassed heavy packages from venv to bin/ -----
+    # ----- @par 1. Copy bypassed heavy packages (recursive dependency closure) -----
     copy_pkgs_str = cfg.get("nuitka", "copy_packages", fallback="")
     if copy_pkgs_str:
-        print("[*] Copying bypassed python packages directly to bin/...")
-        for pkg_name in [p.strip() for p in copy_pkgs_str.split(",") if p.strip()]:
-            spec = importlib.util.find_spec(pkg_name)
-            if spec and spec.submodule_search_locations:
-                src_dir = spec.submodule_search_locations[0]
-                dst_dir = os.path.join(bin_dir, pkg_name)
-                # Ignore raw pyc caches to keep size small, Python will re-generate them at runtime if needed
-                shutil.copytree(src_dir, dst_dir, ignore=shutil.ignore_patterns("__pycache__"))
-                print("  [+] Copied package: " + pkg_name)
-            elif spec and spec.origin:
-                src_file = spec.origin
-                dst_file = os.path.join(bin_dir, os.path.basename(src_file))
-                shutil.copy2(src_file, dst_file)
-                print("  [+] Copied module: " + pkg_name)
-            else:
-                print("  [-] Warning: Could not find package '" + pkg_name + "' in current python environment.")
-            # End-if
-        # End-for
+        roots = [p.strip() for p in copy_pkgs_str.split(",") if p.strip()]
+        _copy_dependency_closure(roots, bin_dir)
     # End-if
+
+    # ----- @par 1b. Stdlib fallback for bypassed packages -----
+    _copy_stdlib_fallback(bin_dir)
 
     # ----- @par 2. Create required workspace directories -----
     print("[*] Creating workspace layout...")
@@ -318,12 +511,38 @@ def _postprocess(cfg, name, version):
         except OSError as e:
             print("  [-] Warning: failed to create symlink: " + str(e))
         # End-try
+
+        # Extend the exe RPATH so the dynamic loader finds libpython etc. in
+        # bin/ even when invoked through the root symlink (then $ORIGIN
+        # resolves to the package root instead of bin/).
+        patchelf = shutil.which("patchelf")
+        if patchelf:
+            exe_path = os.path.join(bin_dir, name)
+            result = subprocess.run(
+                [patchelf, "--set-rpath", "$ORIGIN:$ORIGIN/bin", exe_path],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                print("  [+] RPATH updated on " + exe_path + ": $ORIGIN:$ORIGIN/bin")
+            else:
+                print("  [-] Warning: patchelf failed: " + result.stderr.strip())
+            # End-if
+        else:
+            print("  [-] Warning: patchelf not found; root entry needs: bin/" + name)
+        # End-if
     # End-if
 
     # Write version file.
     with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
     # End-with
+
+    # ----- @par 4. Strip pyc caches from the artifact -----
+    for dirpath, dirnames, filenames in os.walk(target_dir):
+        if "__pycache__" in dirnames:
+            shutil.rmtree(os.path.join(dirpath, "__pycache__"), ignore_errors=True)
+        # End-if
+    # End-for
 
     exe_name = name + ".exe" if sys.platform == "win32" else name
     print("[+] Build success: " + os.path.join(bin_dir, exe_name))
