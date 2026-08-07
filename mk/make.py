@@ -141,7 +141,7 @@ def _run_nuitka(cfg, name, version):
         "--include-module=mk.aux.build_info",
         "--assume-yes-for-downloads",
         "--jobs=" + jobs,
-        "--cache-dir=" + cache_dir,
+        "--static-libpython=no",
     ]
 
     # ----- @par Windows-only options (PE version resource + icon) -----
@@ -174,8 +174,12 @@ def _run_nuitka(cfg, name, version):
     # ----- @par Entry script -----
     cmd.append(entry)
 
+    env = os.environ.copy()
+    env["NUITKA_CACHE_DIR"] = cache_dir
+
     print("[*] Executing: " + " ".join(cmd))
-    result = subprocess.run(cmd, cwd=ROOT_DIR)
+    print("[*] Nuitka Cache Dir: " + cache_dir)
+    result = subprocess.run(cmd, cwd=ROOT_DIR, env=env)
     if result.returncode != 0:
         print("[-] Build failed with exit code " + str(result.returncode))
         sys.exit(result.returncode)

@@ -108,6 +108,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      # === Install System Dependencies for Linux ===
+      - name: Install System Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+
       # === Cache Mechanism for Nuitka Compilation ===
       - name: Cache Nuitka Build
         uses: actions/cache@v4
