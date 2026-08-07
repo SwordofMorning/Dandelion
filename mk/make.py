@@ -129,6 +129,11 @@ def _run_nuitka(cfg, name, version):
     output_dir = os.path.join(ROOT_DIR, cfg.get("build", "output_dir", fallback="build"))
     cache_dir = os.path.join(ROOT_DIR, cfg.get("build", "cache_dir", fallback=".nuitka-cache"))
     jobs = cfg.get("nuitka", "jobs", fallback="4")
+    if sys.platform == "win32":
+        # MSVC consumes large heap per compile unit; reduce parallelism to
+        # avoid "C1002: compiler is out of heap space in pass 2".
+        jobs = cfg.get("nuitka", "windows_jobs", fallback="2")
+    # End-if
     extra_args = shlex.split(cfg.get("nuitka", "extra_args", fallback=""))
 
     cmd = [
@@ -195,15 +200,35 @@ def _run_nuitka(cfg, name, version):
  #
 def _postprocess(cfg, name, version):
     output_dir = os.path.join(ROOT_DIR, cfg.get("build", "output_dir", fallback="build"))
-    dist_dir = os.path.join(output_dir, name + ".dist")
-    target_dir = os.path.join(output_dir, name)
+    entry = os.path.join(ROOT_DIR, cfg.get("build", "entry", fallback="main.py"))
+    entry_base = os.path.splitext(os.path.basename(entry))[0]
+
+    # Nuitka names the dist folder after the entry script (e.g. main.dist),
+    # while --output-filename only controls the executable name inside it.
+    dist_dir = os.path.join(output_dir, entry_base + ".dist")
+    if not os.path.isdir(dist_dir):
+        # Fallback: scan for a single *.dist folder in the output dir.
+        if os.path.isdir(output_dir):
+            candidates = [
+                d for d in os.listdir(output_dir)
+                if d.endswith(".dist") and os.path.isdir(os.path.join(output_dir, d))
+            ]
+            if len(candidates) == 1:
+                dist_dir = os.path.join(output_dir, candidates[0])
+            elif len(candidates) > 1:
+                print("[-] Ambiguous Nuitka outputs: " + ", ".join(candidates))
+                sys.exit(1)
+            # End-if
+        # End-if
+    # End-if
 
     if not os.path.isdir(dist_dir):
         print("[-] Expected Nuitka output not found: " + dist_dir)
         sys.exit(1)
     # End-if
 
-    # Rename <name>.dist -> <name> (C-style output layout).
+    # Rename <entry>.dist -> <name> (C-style output layout).
+    target_dir = os.path.join(output_dir, name)
     if os.path.isdir(target_dir):
         shutil.rmtree(target_dir)
     # End-if
@@ -217,7 +242,7 @@ def _postprocess(cfg, name, version):
     exe_name = name + ".exe" if sys.platform == "win32" else name
     print("[+] Build success: " + os.path.join(target_dir, exe_name))
     print("[+] Version file: " + os.path.join(target_dir, "version.txt"))
-    print("[+] Nuitka intermediate kept at: " + os.path.join(output_dir, name + ".build"))
+    print("[+] Nuitka intermediate kept at: " + os.path.join(output_dir, entry_base + ".build"))
 # End-def
 
 ##
