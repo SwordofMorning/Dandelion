@@ -28,14 +28,26 @@ class SubAgentResult:
     # ----- @par 2. Type Convert -----
 
     ##
-     # @todo 在哪里被调用的？返回json给谁？
+     # @brief Serialize this result into a JSON string.
+     #
+     # @note No current caller (reserved for debugging / persistence);
+     # the production path is to_context_string() via spawn_tool.
+     #
+     # @return JSON string with ensure_ascii=True.
      #
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=True, indent=2)
     # End-def
 
     ##
-     # @todo 在哪里被调用的？返回string给谁？
+     # @brief Render a compact multi-line text summary for the parent agent.
+     #
+     # @note Called by SpawnSubagentTool / RestrictedSpawnTool
+     # (src/tool/agent/spawn_tool.py) as the tool output fed back into the
+     # parent agent's context (tool_result).
+     #
+     # @return Multi-line string: id / status / task / summary / artifacts /
+     #         error / tool calls / depth reached.
      #
     def to_context_string(self) -> str:
         lines = [

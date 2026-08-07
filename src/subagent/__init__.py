@@ -2,8 +2,9 @@
  # @file src/subagent/__init__.py
  # @date 2026/08/07
  # 
- # @brief Core Package.
- # Provides agent (LLM request), memory, skill and prompt builder.
+ # @brief Subagent Package.
+ # Provides the sub-agent pool (orchestrator), virtual/derived agent classes,
+ # toolset registry and result types.
  #
 
 from .registry import TOOLSET_REGISTRY, resolve_toolset
