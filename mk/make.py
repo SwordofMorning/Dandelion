@@ -505,7 +505,7 @@ def _postprocess(cfg, name, version):
         print("  [-] Note: .env/api.cfg.example not found; .env kept as .keep")
     # End-if
 
-    # ----- @par 3. Create fake entry (symlink / cmd wrapper) -----
+    # ----- @par 3. Create fake entry (shell script / cmd wrapper) -----
     print("[*] Creating fake entry at package root...")
     if sys.platform == "win32":
         entry_cmd = os.path.join(target_dir, "dandelion.cmd")
@@ -514,36 +514,20 @@ def _postprocess(cfg, name, version):
         # End-with
         print("  [+] Created: " + entry_cmd)
     else:
-        entry_link = os.path.join(target_dir, name)
-        link_target = os.path.join("bin", name)
-        try:
-            if os.path.lexists(entry_link):
-                os.remove(entry_link)
-            # End-if
-            os.symlink(link_target, entry_link)
-            print("  [+] Created: " + entry_link + " -> " + link_target)
-        except OSError as e:
-            print("  [-] Warning: failed to create symlink: " + str(e))
-        # End-try
-
-        # Extend the exe RPATH so the dynamic loader finds libpython etc. in
-        # bin/ even when invoked through the root symlink (then $ORIGIN
-        # resolves to the package root instead of bin/).
-        patchelf = shutil.which("patchelf")
-        if patchelf:
-            exe_path = os.path.join(bin_dir, name)
-            result = subprocess.run(
-                [patchelf, "--set-rpath", "$ORIGIN:$ORIGIN/bin", exe_path],
-                capture_output=True, text=True
-            )
-            if result.returncode == 0:
-                print("  [+] RPATH updated on " + exe_path + ": $ORIGIN:$ORIGIN/bin")
-            else:
-                print("  [-] Warning: patchelf failed: " + result.stderr.strip())
-            # End-if
-        else:
-            print("  [-] Warning: patchelf not found; root entry needs: bin/" + name)
-        # End-if
+        # Wrapper script: exec the real binary from bin/ directly.
+        # Unlike a symlink, this avoids dual path resolution ($ORIGIN vs
+        # Nuitka module dir) which proved unreliable on Linux.
+        entry_sh = os.path.join(target_dir, "dandelion.sh")
+        content = (
+            "#!/bin/sh\n"
+            "SCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+            "exec \"$SCRIPT_DIR/bin/" + name + "\" \"$@\"\n"
+        )
+        with open(entry_sh, "w", encoding="ascii", newline="\n") as f:
+            f.write(content)
+        # End-with
+        os.chmod(entry_sh, 0o755)
+        print("  [+] Created: " + entry_sh)
     # End-if
 
     # Write version file.
