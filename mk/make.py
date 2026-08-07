@@ -149,18 +149,46 @@ def _run_nuitka(cfg, name, version):
         "--static-libpython=no",
     ]
 
-    # ----- @par Windows-only options (PE version resource + icon) -----
+    # ----- @par Anti-Bloat Plugins -----
+    cmd.append("--enable-plugin=anti-bloat")
+    cmd.append("--noinclude-pytest-mode=nofollow")
+    cmd.append("--noinclude-setuptools-mode=nofollow")
+    cmd.append("--noinclude-unittest-mode=nofollow")
+    cmd.append("--no-deployment-flag=excluded-module-usage")
+    cmd.append("--no-deployment-flag=error-on-failed-import")
+
+    # ----- @par Selective Compilation (Bypass C-Compilation) -----
+    nofollow_str = cfg.get("nuitka", "nofollow_imports", fallback="")
+    if nofollow_str:
+        for pkg in [p.strip() for p in nofollow_str.split(",") if p.strip()]:
+            cmd.append("--nofollow-import-to=" + pkg)
+        # End-for
+    # End-if
+
+    # ----- @par 3. Selective Compilation (Bypass C-Compilation) -----
+    nofollow_str = cfg.get("nuitka", "nofollow_imports", fallback="")
+    if nofollow_str:
+        for pkg in [p.strip() for p in nofollow_str.split(",") if p.strip()]:
+            cmd.append("--nofollow-import-to=" + pkg)
+        # End-for
+    # End-if
+
+    # ----- @par 4. Force Include Standard Libraries -----
+    std_pkgs_str = cfg.get("nuitka", "include_std_packages", fallback="")
+    if std_pkgs_str:
+        for pkg in [p.strip() for p in std_pkgs_str.split(",") if p.strip()]:
+            cmd.append("--include-package=" + pkg)
+        # End-for
+    # End-if
+
+    # Note: We purposely DO NOT parse 'copy_packages' here to avoid Nuitka Warnings.
+    # It will be handled in _postprocess.
+
     if sys.platform == "win32":
         company = cfg.get("build", "company", fallback="").strip()
         description = cfg.get("build", "description", fallback="").strip()
-
-        if company:
-            cmd.append("--company-name=" + company)
-        # End-if
-        if description:
-            cmd.append("--file-description=" + description)
-        # End-if
-
+        if company: cmd.append("--company-name=" + company)
+        if description: cmd.append("--file-description=" + description)
         cmd += [
             "--product-name=" + name,
             "--product-version=" + version,
@@ -173,10 +201,10 @@ def _run_nuitka(cfg, name, version):
         # End-if
     # End-if
 
-    # ----- @par Extra user args -----
+    # ----- @par 5. Extra user args -----
     cmd += extra_args
 
-    # ----- @par Entry script -----
+    # ----- @par 6. Entry script -----
     cmd.append(entry)
 
     env = os.environ.copy()
@@ -234,7 +262,43 @@ def _postprocess(cfg, name, version):
     # End-if
     os.rename(dist_dir, target_dir)
 
-    # Write version file.
+    # ----- @par 1. Copy bypassed heavy packages from venv -----
+    copy_pkgs_str = cfg.get("nuitka", "copy_packages", fallback="")
+    if copy_pkgs_str:
+        print("[*] Copying bypassed python packages directly to dist...")
+        for pkg_name in [p.strip() for p in copy_pkgs_str.split(",") if p.strip()]:
+            spec = importlib.util.find_spec(pkg_name)
+            if spec and spec.submodule_search_locations:
+                src_dir = spec.submodule_search_locations[0]
+                dst_dir = os.path.join(target_dir, pkg_name)
+                # Ignore raw pyc caches to keep size small, Python will re-generate them at runtime if needed
+                shutil.copytree(src_dir, dst_dir, ignore=shutil.ignore_patterns("__pycache__"))
+                print("  [+] Copied package: " + pkg_name)
+            elif spec and spec.origin:
+                src_file = spec.origin
+                dst_file = os.path.join(target_dir, os.path.basename(src_file))
+                shutil.copy2(src_file, dst_file)
+                print("  [+] Copied module: " + pkg_name)
+            else:
+                print("  [-] Warning: Could not find package '" + pkg_name + "' in current python environment.")
+            # End-if
+        # End-for
+    # End-if
+
+    # ----- @par 2. Create required workspace directories -----
+    print("[*] Creating workspace layout...")
+    workspace_dirs = [".env", "llm/memory", "llm/skill", ".log"]
+    for d in workspace_dirs:
+        d_path = os.path.join(target_dir, d.replace("/", os.sep))
+        os.makedirs(d_path, exist_ok=True)
+        # Create a tiny .keep file so Git or ZIP archives preserve the empty folders
+        with open(os.path.join(d_path, ".keep"), "w") as f:
+            f.write("")
+        # End-with
+    # End-for
+    print("  [+] Created directories: .env, llm, .log")
+
+    # ----- @par 3. Write version file -----
     with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
     # End-with
