@@ -108,20 +108,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      # === Install System Dependencies for Linux ===
+      # === Install System Dependencies for Linux (patchelf + ccache) ===
       - name: Install System Dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y patchelf
+          sudo apt-get install -y patchelf ccache
 
-      # === Cache Mechanism for Nuitka Compilation ===
-      - name: Cache Nuitka Build
+      # === Cache Mechanism for Nuitka PASS & GCC/Clang Compilation ===
+      - name: Cache Nuitka & Compiler Artifacts
         uses: actions/cache@v4
         with:
-          path: .nuitka-cache
-          key: nuitka-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}
+          path: |
+            .nuitka-cache
+            ~/.cache/ccache
+          key: nuitka-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.sha }}
+          restore-keys: |
+            nuitka-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
+            nuitka-${{ matrix.os_name }}-${{ matrix.arch }}-
 
+      # 5. Make
       - name: Build with Nuitka
         shell: bash
         run: |
