@@ -81,18 +81,9 @@ class PromptBuilder:
      #
     def build(self):
         sections = []
-        
-        # 0. Generate timezone-aware current time to ground the LLM's knowledge
-        # Get aware datetime using UTC then convert to local timezone
-        now = datetime.datetime.now(datetime.timezone.utc).astimezone()
-        # Format example: "Friday, July 31, 2026 at 09:35 AM SGT (UTC+0800)"
-        time_str = now.strftime("%A, %B %d, %Y at %I:%M %p %Z (UTC%z)")
-
-        # 1. Identity & Environment
+        # 1. Identity
         sections.append("You are a professional coding and management agent running locally.")
-        sections.append(f"Current System Time: {time_str}. Please base any time-sensitive reasoning on this date.")
-        sections.append(f"Environment Info:\n{self.terminal_hint}")
-        
+
         # 2. SubAgent, if enable SUB_LIST, must palnt first
         sub_list = self.config.get("SUB_LIST", [])
         if sub_list:
