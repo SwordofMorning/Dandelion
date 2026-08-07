@@ -528,6 +528,26 @@ def _postprocess(cfg, name, version):
         # End-with
         os.chmod(entry_sh, 0o755)
         print("  [+] Created: " + entry_sh)
+
+        # Force DT_RPATH (instead of DT_RUNPATH) so the bundled libs in bin/
+        # (libpython etc.) are searched BEFORE LD_LIBRARY_PATH. Without this,
+        # a foreign libpython from the environment can be loaded and crash
+        # the binary (SystemError in codeobject).
+        patchelf = shutil.which("patchelf")
+        if patchelf:
+            exe_path = os.path.join(bin_dir, name)
+            result = subprocess.run(
+                [patchelf, "--force-rpath", "--set-rpath", "$ORIGIN", exe_path],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                print("  [+] RPATH forced on " + exe_path + ": $ORIGIN (before LD_LIBRARY_PATH)")
+            else:
+                print("  [-] Warning: patchelf failed: " + result.stderr.strip())
+            # End-if
+        else:
+            print("  [-] Warning: patchelf not found; binary may be affected by LD_LIBRARY_PATH")
+        # End-if
     # End-if
 
     # Write version file.

@@ -126,10 +126,10 @@ jobs:
           path: |
             .nuitka-cache
             ${{ github.workspace }}/.sccache
-          key: build-cache-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.sha }}
+          key: build-cache-v2-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.sha }}
           restore-keys: |
-            build-cache-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
-            build-cache-${{ matrix.os_name }}-${{ matrix.arch }}-
+            build-cache-v2-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
+            build-cache-v2-${{ matrix.os_name }}-${{ matrix.arch }}-
 
       # === Make ===
       - name: Build with Nuitka
@@ -176,11 +176,13 @@ jobs:
           if [ "$RUNNER_OS" == "Windows" ]; then
             OUT=$(timeout 60 cmd //c dandelion.cmd < /dev/null 2>&1 || true)
           else
-            OUT=$(timeout 60 ./dandelion.sh < /dev/null 2>&1 || true)
+            # Unset LD_LIBRARY_PATH etc.: a foreign libpython from the runner
+            # environment would be loaded before the bundled one and crash.
+            OUT=$(env -u LD_LIBRARY_PATH -u PYTHONHOME -u PYTHONPATH timeout 60 ./dandelion.sh < /dev/null 2>&1 || true)
           fi
           echo "$OUT" | head -5
-          echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed: entry did not start"; exit 1; }
-          echo "$OUT" | grep -qE "Agent Initialization Successful|Failed to load config" || { echo "[-] Smoke failed: unexpected runtime output"; exit 1; }
+          echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed: entry did not start"; echo "$OUT"; exit 1; }
+          echo "$OUT" | grep -qE "Agent Initialization Successful|Failed to load config" || { echo "[-] Smoke failed: unexpected runtime output"; echo "$OUT"; exit 1; }
           echo "[+] Smoke OK: fake entry works, runtime path resolved"
 
       - name: Upload Artifact
