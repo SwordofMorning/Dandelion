@@ -149,7 +149,7 @@ def _run_nuitka(cfg, name, version):
         "--static-libpython=no",
     ]
 
-    # ----- @par Anti-Bloat Plugins -----
+    # ----- @par Anti-Bloat Plugins & Deployment Flags -----
     cmd.append("--enable-plugin=anti-bloat")
     cmd.append("--noinclude-pytest-mode=nofollow")
     cmd.append("--noinclude-setuptools-mode=nofollow")
@@ -165,30 +165,26 @@ def _run_nuitka(cfg, name, version):
         # End-for
     # End-if
 
-    # ----- @par 3. Selective Compilation (Bypass C-Compilation) -----
-    nofollow_str = cfg.get("nuitka", "nofollow_imports", fallback="")
-    if nofollow_str:
-        for pkg in [p.strip() for p in nofollow_str.split(",") if p.strip()]:
-            cmd.append("--nofollow-import-to=" + pkg)
+    # ----- @par Force Include Standard Modules -----
+    std_mods_str = cfg.get("nuitka", "include_std_modules", fallback="")
+    if std_mods_str:
+        for mod in [m.strip() for m in std_mods_str.split(",") if m.strip()]:
+            cmd.append("--include-module=" + mod)
         # End-for
     # End-if
 
-    # ----- @par 4. Force Include Standard Libraries -----
-    std_pkgs_str = cfg.get("nuitka", "include_std_packages", fallback="")
-    if std_pkgs_str:
-        for pkg in [p.strip() for p in std_pkgs_str.split(",") if p.strip()]:
-            cmd.append("--include-package=" + pkg)
-        # End-for
-    # End-if
-
-    # Note: We purposely DO NOT parse 'copy_packages' here to avoid Nuitka Warnings.
-    # It will be handled in _postprocess.
-
+    # ----- @par Windows-only options (PE version resource + icon) -----
     if sys.platform == "win32":
         company = cfg.get("build", "company", fallback="").strip()
         description = cfg.get("build", "description", fallback="").strip()
-        if company: cmd.append("--company-name=" + company)
-        if description: cmd.append("--file-description=" + description)
+
+        if company:
+            cmd.append("--company-name=" + company)
+        # End-if
+        if description:
+            cmd.append("--file-description=" + description)
+        # End-if
+
         cmd += [
             "--product-name=" + name,
             "--product-version=" + version,
@@ -201,10 +197,10 @@ def _run_nuitka(cfg, name, version):
         # End-if
     # End-if
 
-    # ----- @par 5. Extra user args -----
+    # ----- @par Extra user args -----
     cmd += extra_args
 
-    # ----- @par 6. Entry script -----
+    # ----- @par Entry script -----
     cmd.append(entry)
 
     env = os.environ.copy()
@@ -255,28 +251,32 @@ def _postprocess(cfg, name, version):
         sys.exit(1)
     # End-if
 
-    # Rename <entry>.dist -> <name> (C-style output layout).
+    # Rename <entry>.dist -> <name>/bin (C-style output layout).
     target_dir = os.path.join(output_dir, name)
     if os.path.isdir(target_dir):
         shutil.rmtree(target_dir)
     # End-if
-    os.rename(dist_dir, target_dir)
+    os.makedirs(target_dir)
+    
+    # Move the entire dist directory into the bin/ subfolder
+    bin_dir = os.path.join(target_dir, "bin")
+    os.rename(dist_dir, bin_dir)
 
-    # ----- @par 1. Copy bypassed heavy packages from venv -----
+    # ----- @par 1. Copy bypassed heavy packages from venv to bin/ -----
     copy_pkgs_str = cfg.get("nuitka", "copy_packages", fallback="")
     if copy_pkgs_str:
-        print("[*] Copying bypassed python packages directly to dist...")
+        print("[*] Copying bypassed python packages directly to bin/...")
         for pkg_name in [p.strip() for p in copy_pkgs_str.split(",") if p.strip()]:
             spec = importlib.util.find_spec(pkg_name)
             if spec and spec.submodule_search_locations:
                 src_dir = spec.submodule_search_locations[0]
-                dst_dir = os.path.join(target_dir, pkg_name)
+                dst_dir = os.path.join(bin_dir, pkg_name)
                 # Ignore raw pyc caches to keep size small, Python will re-generate them at runtime if needed
                 shutil.copytree(src_dir, dst_dir, ignore=shutil.ignore_patterns("__pycache__"))
                 print("  [+] Copied package: " + pkg_name)
             elif spec and spec.origin:
                 src_file = spec.origin
-                dst_file = os.path.join(target_dir, os.path.basename(src_file))
+                dst_file = os.path.join(bin_dir, os.path.basename(src_file))
                 shutil.copy2(src_file, dst_file)
                 print("  [+] Copied module: " + pkg_name)
             else:
@@ -298,13 +298,13 @@ def _postprocess(cfg, name, version):
     # End-for
     print("  [+] Created directories: .env, llm, .log")
 
-    # ----- @par 3. Write version file -----
+    # Write version file.
     with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
     # End-with
 
     exe_name = name + ".exe" if sys.platform == "win32" else name
-    print("[+] Build success: " + os.path.join(target_dir, exe_name))
+    print("[+] Build success: " + os.path.join(bin_dir, exe_name))
     print("[+] Version file: " + os.path.join(target_dir, "version.txt"))
     print("[+] Nuitka intermediate kept at: " + os.path.join(output_dir, entry_base + ".build"))
 # End-def

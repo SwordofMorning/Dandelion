@@ -34,10 +34,12 @@ def base_dir():
     # End-if
 
     if is_compiled():
-        return os.path.dirname(os.path.abspath(sys.executable))
+        # Layout: <root>/bin/dandelion.exe
+        # Return parent of bin/ to reach the actual workspace root
+        return os.path.dirname(os.path.dirname(os.path.abspath(sys.executable)))
     # End-if
 
-    # mk/lib/paths.py -> <root>/mk/lib -> <root>/mk -> <root>
+    # Source run: <root>/mk/lib/paths.py -> <root>/mk/lib -> <root>/mk -> <root>
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # End-def
 

@@ -135,6 +135,7 @@ jobs:
       - name: Build with Nuitka
         shell: bash
         run: |
+          export NUITKA_CCACHE_BINARY=$SCCACHE_PATH
           python mk/make.py all
 
       # === Print SCCACHE Stats ===
