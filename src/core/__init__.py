@@ -1,8 +1,6 @@
-# src/core/__init__.py
-
 ##
  # @file src/core/__init__.py
- # @date 2026/08/05
+ # @date 2026/08/06
  # 
  # @brief Core Package.
  # Provides agent (LLM request), memory, skill and prompt builder.
