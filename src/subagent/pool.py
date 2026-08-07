@@ -1,16 +1,31 @@
-# src/subagent/pool.py
-
-# Brief: Control all subagent.py
-# A global singleton, held by MyAgent, used to maintaining and managing all derived SubAgents. 
-# When you need to create a new SubAgent, this scheduler assigns an ID, mounts specific toolsets,
-# and tracks their execution status.
+##
+ # @file src/subagent/pool.py
+ # @date 2026/08/07
+ # 
+ # @brief Control all subagent.py
+ # A global singleton, held by MyAgent, used to maintaining and managing all derived SubAgents. 
+ # When you need to create a new SubAgent, this scheduler assigns an ID, mounts specific toolset,
+ # and tracks their execution status.
+ #
 
 import uuid
 from .subagent import SubAgent
 from .result import SubAgentResult
 from .registry import resolve_toolset
 
+##
+ # @brief Subagent Pool.
+ #
 class SubAgentPool:
+    ##
+     # @brief Constructor.
+     #
+     # @param safe_client llm_request client.
+     # @param logger log management.
+     # @param config environment config.
+     # @param all_tools all tools, used to resolve toolset to subagents.
+     # @param max_depth subagent's max recursion depth.
+     #
     def __init__(self, safe_client, logger, config, all_tools, max_depth=3):
         self.safe_client = safe_client
         self.logger = logger
@@ -18,7 +33,11 @@ class SubAgentPool:
         self.all_tools = all_tools
         self.max_depth = max_depth
         self.completed_results = []
-        
+    # End-def
+
+    ##
+     # @todo 需要补充描述，以及被spawn_tool调用的逻辑。
+     #
     def create_and_run(
         self,
         role_prompt: str,
@@ -28,7 +47,7 @@ class SubAgentPool:
         parent_tools: set = None
     ) -> SubAgentResult:
         subagent_id = f"sa-{uuid.uuid4().hex[:8]}"
-        
+
         # Tool Error
         try:
             tools = resolve_toolset(toolset_name, self.all_tools, parent_tools)
@@ -45,8 +64,8 @@ class SubAgentPool:
             )
             self.completed_results.append(result)
             return result
-        
-        # [核心修复处] 确保 subagent 变量被正确声明和赋值
+        # End-except
+
         subagent = SubAgent(
             safe_client=self.safe_client,
             logger=self.logger,
@@ -63,21 +82,21 @@ class SubAgentPool:
                 "depth": depth,
             }
         )
-        
+
         # Runtime Error (Fallback)
         try:
             result = subagent.run(task_description)
         except Exception as e:
             err_msg = f"Unexpected error during execution: {e!s}"
             self.logger.log_api_call(f"SUBAGENT:{subagent_id} EXEC ERROR", {"error": err_msg})
-            
+
             subagent_instance = locals().get('subagent')
             sub_res = getattr(subagent_instance, 'sub_results', []) if subagent_instance else []
-            
+
             max_depth_reached = depth
             if sub_res:
                 max_depth_reached = max([depth] + [r.depth_reached for r in sub_res])
-                
+
             result = SubAgentResult(
                 subagent_id=subagent_id,
                 task_description=task_description,
@@ -87,14 +106,19 @@ class SubAgentPool:
                 error_message=err_msg,
                 sub_results=sub_res
             )
-            
+        # End-except
+
         self.completed_results.append(result)
         return result
-        
+    # End-def
+
+    ##
+     # @todo 帮我补充
+     #
     def get_summary(self) -> str:
         if not self.completed_results:
             return "(No SubAgents executed)"
-            
+
         lines = ["=== SubAgent Execution Summary ==="]
         for r in self.completed_results:
             status_mark = "+" if r.status == "success" else "!"
@@ -103,3 +127,5 @@ class SubAgentPool:
                 f"({r.tool_calls_made} calls, depth={r.depth_reached})"
             )
         return "\n".join(lines)
+    # End-def
+# End-class
