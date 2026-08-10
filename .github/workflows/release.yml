@@ -25,9 +25,13 @@ jobs:
         with:
           fetch-depth: 0
       - id: set_tag
+        env:
+          # Pass untrusted ref through env to avoid shell injection via
+          # direct expression interpolation (ref names may contain $(), etc.)
+          GITHUB_REF_VALUE: ${{ github.ref }}
         run: |
           is_release=${{ startsWith(github.ref, 'refs/tags/v') }}
-          tag=$(git describe --tags --match "v*" ${{ github.ref }} || true)
+          tag=$(git describe --tags --match "v*" "$GITHUB_REF_VALUE" || true)
 
           # If no tag is provided, generate a date-based development version number.
           if [[ $tag != v* ]]; then
@@ -35,7 +39,7 @@ jobs:
           fi
 
           # If it is not triggered by a formal release, add the ci suffix.
-          if ! $is_release ; then
+          if [ "$is_release" != "true" ]; then
              tag="${tag}-ci"
           fi
 
