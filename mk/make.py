@@ -75,7 +75,18 @@ def _load_pyproject():
  #
 def _project_meta():
     meta = _load_pyproject()["project"]
-    return meta["name"], meta["version"]
+    name = meta["name"]
+    version = meta["version"]
+
+    # Allow CI to override the version (e.g. computed tag with dev/ci suffix).
+    # The tag carries a leading "v" (e.g. v0.0.0-dev-...-ci) which main.py
+    # re-adds when displaying, so strip it here for a bare machine format.
+    env_version = os.environ.get("DANDELION_VERSION", "").strip()
+    if env_version:
+        version = env_version.lstrip("v")
+    # End-if
+
+    return name, version
 # End-def
 
 ##
@@ -185,10 +196,14 @@ def _run_nuitka(cfg, name, version):
             cmd.append("--file-description=" + description)
         # End-if
 
+        # PE version resources must stay numeric (x.y.z); use the static
+        # pyproject version, not the CI tag override (e.g. 0.0.0-dev-...).
+        pe_version = _load_pyproject()["project"]["version"]
+
         cmd += [
             "--product-name=" + name,
-            "--product-version=" + version,
-            "--file-version=" + version,
+            "--product-version=" + pe_version,
+            "--file-version=" + pe_version,
         ]
 
         icon = os.path.join(ROOT_DIR, cfg.get("build", "icon", fallback="mk/config/dandelion.ico"))

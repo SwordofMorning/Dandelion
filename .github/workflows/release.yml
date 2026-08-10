@@ -138,6 +138,10 @@ jobs:
       # === Make ===
       - name: Build with Nuitka
         shell: bash
+        env:
+          # Full computed tag (with dev/ci suffix) becomes the build version:
+          # binary build_info, version.txt and artifact naming all use it.
+          DANDELION_VERSION: ${{ needs.meta.outputs.tag }}
         run: |
           export NUITKA_CCACHE_BINARY=$SCCACHE_PATH
           python mk/make.py all
@@ -163,8 +167,7 @@ jobs:
             exit 1
           fi
 
-          # Add version info
-          echo "Version: ${{ needs.meta.outputs.tag }}" > "upload_stage/$ARTIFACT_NAME/version.txt"
+          # version.txt is written by mk/make.py with the DANDELION_VERSION tag.
 
           # Verify top-level layout (hidden dirs and fake entry must survive)
           echo "=== Top-level layout ==="
