@@ -5,9 +5,12 @@
  # @brief Runtime path resolution helpers for Dandelion (frozen/dev aware).
  #
  # @note Path priority for base_dir():
- #   1. $DANDELION_HOME (explicit override)
- #   2. Executable directory (frozen/Nuitka standalone build)
- #   3. Repository root (source run)
+ #   1. Executable directory (frozen/Nuitka standalone build)
+ #   2. Repository root (source run)
+ #
+ # @note The workspace root is intentionally NOT overridable at runtime
+ #   (no env/config channel): an agent-modifiable override would allow
+ #   escaping the sandbox by pointing the root at "/" and restarting.
  #
 
 import os
@@ -28,11 +31,6 @@ def is_compiled():
  # @return Absolute base directory path (str).
  #
 def base_dir():
-    env_home = os.environ.get("DANDELION_HOME")
-    if env_home:
-        return env_home
-    # End-if
-
     if is_compiled():
         # Layout: <root>/bin/dandelion.exe
         # Return parent of bin/ to reach the actual workspace root
