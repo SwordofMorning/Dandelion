@@ -38,15 +38,15 @@ from src.tool import (
 # Create a module-level CLIPrinter instance for convenience
 cli = CLIPrinter()
 
-# Dynamic Context injection markers: the [System: Dynamic Context] block is
+# Dynamic Context injection markers: the [Dandelion Context] block is
 # appended to the newest plain-text user message (fresh region) instead of the
 # system prompt, so the system prompt stays byte-identical for the whole
 # session and DeepSeek's prefix cache keeps hitting across tool-loop iterations.
-_DYN_CTX_START = "[System: Dynamic Context"
-_DYN_CTX_END = "[System: Dynamic Context End]"
+_DYN_CTX_START = "[Dandelion Context"
+_DYN_CTX_END = "[Dandelion Context End]"
 
 ##
- # @brief Strip a previously injected [System: Dynamic Context] block from a
+ # @brief Strip a previously injected [Dandelion Context] block from a
  #        user message content string.
  #
  # @note Defensive: normally the target message is brand new (just added by
@@ -358,9 +358,9 @@ class MyAgent:
      # @brief History-only token budget: MAX_CONTEXT_TOKENS minus 
      # the fixed request overhead (system prompt + tool schemas).
      #
-     # @note The system prompt already includes the memories tail
-     # (_last_system_prompt is built by appending memories_content in step()),
-     # so memories must NOT be counted twice here.
+     # @note The static system prompt + tool schemas are fixed overhead;
+     # dynamic context (memory/task state) lives in history and is counted
+     # by _estimate_tokens (injected before _compact_context in step()).
      # @note Compaction triggered at this limit keeps the COMBINED provider request
      # within MAX_CONTEXT_TOKENS instead of silently overflowing it.
      #
@@ -540,7 +540,7 @@ class MyAgent:
     # End-def
 
     ##
-     # @brief Render the [System: Dynamic Context] block: memory index +
+     # @brief Render the [Dandelion Context] block: memory index +
      #        relevant memories digest + task state (Attention Anchor).
      #
      # @note The block is appended to the newest plain-text user message
@@ -587,7 +587,7 @@ class MyAgent:
 
         if not sections:
             return ""
-        return (f"{_DYN_CTX_START} (auto-injected, not user input)]\n"
+        return (f"{_DYN_CTX_START} (auto-injected reference data)]\n"
                 + "\n\n".join(sections)
                 + f"\n{_DYN_CTX_END}")
     # End-def
@@ -638,12 +638,9 @@ class MyAgent:
      # @retval False This round is a plain text reply (or an API error). Breakout.
      #
     def step(self):
-        # 0. Check context budget every turn (not only on user messages).
-        self._compact_context()
-
         # 1. Build System Prompt (STATIC)
         # Dynamic content (task state / memories) is injected as a
-        # [System: Dynamic Context] block appended to the newest plain-text
+        # [Dandelion Context] block appended to the newest plain-text
         # user message (see _inject_dynamic_context), so the system prompt
         # stays byte-identical for the whole session -> prefix cache hits.
         system_prompt = self.prompt_builder.build()
@@ -658,6 +655,10 @@ class MyAgent:
         if self.history and self._is_plain_user_msg(self.history[-1]):
             self._inject_dynamic_context()
         # End-if
+
+        # 1.2 Check context budget EVERY turn, AFTER injection so the dynamic
+        #     block (memory + task state) is counted in the token budget.
+        self._compact_context()
 
         # Pure append-only copy, ZERO mutations.
         req_messages = self.history.copy()
@@ -774,7 +775,7 @@ class MyAgent:
         # (_soft_token_limit) rebuilds from the new session instead of
         # reusing stale overhead from the old branch.
         self._last_system_prompt = ""
-        # NOTE: previously injected [System: Dynamic Context] blocks inside
+        # NOTE: previously injected [Dandelion Context] blocks inside
         # history are intentionally NOT stripped here: keeping the messages
         # prefix byte-identical lets the server-side prefix cache survive a
         # session resume. Stale blocks are harmless (the newest injected

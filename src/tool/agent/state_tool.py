@@ -31,7 +31,7 @@ class StateTool(BaseTool):
             "Update the current task state, including the main target and TODO lists. "
             "This state is scoped to the current session branch "
             "(stored at .log/sess_<id>/task_state.json) and is injected into the "
-            "conversation as part of the [System: Dynamic Context] block appended "
+            "conversation as part of the [Dandelion Context] block appended "
             "to the latest user message, to keep you focused on the current task."
         )
 
@@ -146,7 +146,7 @@ class StateTool(BaseTool):
             return False, f"Error: failed to write task state: {e}"
         # Echo the merged state back so the model sees it immediately in the
         # tool result (fresh region, cache-friendly). Mid-tool-loop the
-        # [System: Dynamic Context] block is only refreshed at user turns, so
+        # [Dandelion Context] block is only refreshed at user turns, so
         # this echo is what keeps the updated anchor visible right after
         # update_state() without re-injecting into the messages prefix.
         return True, (

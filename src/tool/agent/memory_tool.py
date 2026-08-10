@@ -76,16 +76,13 @@ class MemoryTool(BaseTool):
             # full disk) must never crash the agent turn.
             return False, f"Error: failed to write memory file: {e}"
         if success:
-            # Echo the stored memory back (content truncated) so the model
-            # sees it immediately in the tool result. Mid-tool-loop the
-            # [System: Dynamic Context] block is only refreshed at user turns,
-            # so this echo keeps the new memory visible without re-injecting
-            # into the messages prefix (cache-friendly).
-            content_preview = content[:500] + ("..." if len(content) > 500 else "")
+            # No content echo: the model just generated this content and the
+            # [Dandelion Context] block refreshes at the next user turn, so
+            # echoing description/tags/content would only duplicate sensitive
+            # memory data into the persisted history.
             return True, (
-                f"Successfully saved {scope} memory topic '{name}'.\n"
-                f"Description: {description}\n"
-                f"Tags: {tags}\n"
-                f"Content: {content_preview}"
+                f"Successfully saved {scope} memory topic '{name}' "
+                f"({len(content)} chars). It will appear in the dynamic "
+                f"context on the next user turn."
             )
         return False, "Failed to save memory."
