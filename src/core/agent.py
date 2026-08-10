@@ -1,5 +1,5 @@
 ##
- # @file src/core/agent.py
+ # @file playground/fix2/agent.py (working copy of src/core/agent.py)
  # @date 2026/08/06
  # 
  # @brief Agent-Loop and others helper functions.
@@ -46,8 +46,8 @@ _DYN_CTX_START = "[Dandelion Context"
 _DYN_CTX_END = "[Dandelion Context End]"
 
 ##
- # @brief Strip a previously injected [Dandelion Context] block from a
- #        user message content string.
+ # @brief Strip previously injected [Dandelion Context] blocks from a user
+ #        message content string (all complete blocks, stacked included).
  #
  # @note Defensive: normally the target message is brand new (just added by
  #       inject_user_message) and contains no block. Used on resume/re-run
@@ -56,17 +56,25 @@ _DYN_CTX_END = "[Dandelion Context End]"
  #
  # @param content User message content string.
  #
- # @return Content with the injected block removed (trailing whitespace kept).
+ # @return Content with all injected blocks removed.
  #
 def strip_dynamic_context(content):
-    start = content.find(_DYN_CTX_START)
-    if start == -1:
-        return content
-    end = content.find(_DYN_CTX_END, start)
-    if end == -1:
-        # Unterminated block (e.g. manually truncated history): drop the tail.
-        return content[:start].rstrip()
-    return content[:start].rstrip() + content[end + len(_DYN_CTX_END):]
+    # Remove EVERY complete [Dandelion Context] block, including adjacent or
+    # repeated (stacked) ones; only the tail of an unterminated final block
+    # is dropped. All user content before the first marker is preserved
+    # (only the injected "\n\n" separator whitespace is stripped).
+    while True:
+        start = content.find(_DYN_CTX_START)
+        if start == -1:
+            return content
+        end = content.find(_DYN_CTX_END, start)
+        if end == -1:
+            # Unterminated block (e.g. manually truncated history): drop the tail.
+            return content[:start].rstrip()
+        # Complete block: keep the prefix, drop the block, then keep scanning
+        # the suffix so stacked/adjacent blocks are removed as well.
+        content = content[:start].rstrip() + content[end + len(_DYN_CTX_END):]
+    # End-while
 # End-def
 
 ##
@@ -605,20 +613,40 @@ class MyAgent:
      #
      # @note The target message has just been added by inject_user_message()
      #       and has never been sent, so mutating it costs zero cache.
+     # @note A stale block is stripped FIRST (also when rendering produces no
+     #       replacement block), so resume/re-run never leaves stale
+     #       reference data inside the provider-visible history.
+     # @note inject = strip(ole context) -> render(new memory/task_state) -> append(to user) -> save.
      #
     def _inject_dynamic_context(self):
-        block = self._render_dynamic_context()
-        if not block:
-            return
         msg = self.history[-1]
         content = msg.get("content", "")
+        changed = False
+
+        # 1. Strip any stale block first, so the cleaned message is what
+        #    _render_dynamic_context (memory retrieval) and the provider see;
+        #    a fresh block replaces (never stacks on) the old one.
         if isinstance(content, str) and _DYN_CTX_START in content:
-            # Defensive: replace a stale block (resume/re-run) instead of
-            # stacking a second one on the same message.
             content = strip_dynamic_context(content)
+            msg["content"] = content
+            changed = True
         # End-if
-        msg["content"] = content + "\n\n" + block
-        self.session.save_history(self.history)
+
+        # 2. Render the fresh block AFTER cleaning.
+        block = self._render_dynamic_context()
+
+        # 3. Append only for string content; non-string/list content
+        #    (multimodal messages) is left untouched - concatenating a str
+        #    block onto a list would raise TypeError.
+        if block and isinstance(content, str):
+            msg["content"] = content + "\n\n" + block
+            changed = True
+        # End-if
+
+        # Persist even when rendering produced no replacement block, so a
+        # stale block never survives a resume/re-run.
+        if changed:
+            self.session.save_history(self.history)
     # End-def
 
     ##
