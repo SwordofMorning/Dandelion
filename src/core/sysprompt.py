@@ -139,9 +139,12 @@ class PromptBuilder:
             "Reply Format:\n"
             "1. Use numbered lists / bullets in terminal replies "
             "(e.g. '1. xxx' with '  - xxx' sub-bullets).\n"
-            "2. Avoid Markdown tables in chat responses; they are hard to read "
+            "2. Do NOT use Markdown decoration markers: no **bold**, "
+            "no *italic*, no __underline__, no ~~strikethrough~~; "
+            "emphasis must be plain text only.\n"
+            "3. Avoid Markdown tables in chat responses; they are hard to read "
             "in a terminal/CLI context.\n"
-            "3. Applies to user-facing summaries and code-explanation answers."
+            "4. Applies to user-facing summaries and code-explanation answers."
         )
 
         # 7. Memory System Guide (static, cache-friendly)
