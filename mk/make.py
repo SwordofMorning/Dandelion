@@ -274,12 +274,35 @@ def _copy_package(import_name, dist_name, dst_dir, copied):
     try:
         import importlib.metadata as imeta
         dist = imeta.distribution(dist_name)
-        dst_info = os.path.join(dst_dir, os.path.basename(str(dist._path)))
-        if not os.path.exists(dst_info):
-            shutil.copytree(str(dist._path), dst_info, ignore=shutil.ignore_patterns("__pycache__"))
-        # End-if
-    except Exception:
-        pass
+        # Public API: distribution root (site-packages dir).
+        root = str(dist.locate_file(""))
+        # Keep the installed dir name as-is. Renaming to a hyphen-canonical
+        # form breaks runtime lookups: path-derived name matching splits on
+        # '-' (e.g. charset-normalizer -> "charset"), so we locate the actual
+        # *.dist-info dir and copy it under its own name.
+        name = dist.metadata["Name"].replace("_", "-").lower()
+        version = dist.version
+        for entry in sorted(os.listdir(root)):
+            if not entry.endswith(".dist-info"):
+                continue
+            # End-if
+            stem = entry[: -len(".dist-info")]
+            if not stem.endswith("-" + version):
+                continue
+            # End-if
+            stem_name = stem[: -(len(version) + 1)].replace("_", "-").lower()
+            if stem_name != name:
+                continue
+            # End-if
+            dst_info = os.path.join(dst_dir, entry)
+            if not os.path.exists(dst_info):
+                shutil.copytree(os.path.join(root, entry), dst_info,
+                                ignore=shutil.ignore_patterns("__pycache__"))
+            # End-if
+            break
+        # End-for
+    except Exception as e:
+        print("  [-] Warning: failed to copy .dist-info for " + dist_name + ": " + str(e))
     # End-try
 # End-def
 
