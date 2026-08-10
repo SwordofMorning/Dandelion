@@ -165,7 +165,6 @@ def _run_nuitka(cfg, name, version):
         "--assume-yes-for-downloads",
         "--jobs=" + jobs,
         "--static-libpython=no",
-        "--runtime-hook=" + os.path.join(MK_DIR, "lib", "runtime_hook.py"),
     ]
 
     # ----- @par Anti-Bloat Plugins & Deployment Flags -----
@@ -387,9 +386,10 @@ def _copy_dependency_closure(roots, dst_dir):
  # Iterates to fixpoint so transitive stdlib imports (e.g. ssl -> _ssl)
  # are covered as well.
  #
- # The fallback dir is appended to sys.path LAST at runtime (runtime_hook.py),
- # so these plain-source copies never shadow Nuitka-compiled modules.
- # Parsing is incremental: each .py file is ast-parsed at most once.
+ # The fallback dir is appended to sys.path LAST at runtime (see the module
+ # level block in mk/lib/paths.py), so these plain-source copies never shadow
+ # Nuitka-compiled modules. Parsing is incremental: each .py file is
+ # ast-parsed at most once.
  #
  # @param bin_dir Destination directory (bin/).
  #

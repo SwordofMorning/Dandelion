@@ -16,6 +16,15 @@
 import os
 import sys
 
+# Stdlib fallback dir: appended LAST to sys.path so on-disk fallback copies
+# (bin/_stdlib_fallback) never shadow Nuitka-compiled modules. This module is
+# the first import in main.py, so it runs before any bypass package triggers
+# on-disk stdlib imports (compiled modules > exe dir files > fallback).
+_fallback_dir = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "_stdlib_fallback")
+if os.path.isdir(_fallback_dir) and _fallback_dir not in sys.path:
+    sys.path.append(_fallback_dir)
+# End-if
+
 ##
  # @brief Detect frozen (compiled) runtime.
  #
