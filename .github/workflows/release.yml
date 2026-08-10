@@ -71,11 +71,9 @@ jobs:
             os_name: win
             arch: x86_64
 
-    # Set up cross-platform sccache directory
-    env:
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "2G"
-      NUITKA_CCACHE_BINARY: sccache
+    # Nuitka C compilation cache: built-in clcache (default). sccache was
+    # removed: Linux incremental builds served by sccache crashed with
+    # codeobject.c:250, while Windows (clcache) never did.
 
     steps:
       - uses: actions/checkout@v4
@@ -118,22 +116,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      # === Install and configure SCCACHE (Cross-Platform) ===
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.6
-        with:
-          version: "v0.8.1"
-      
-      - name: Cache SCCACHE & Nuitka Artifacts
+      # === Cache Nuitka artifacts (analysis + clcache objects) ===
+      - name: Cache Nuitka Artifacts
         uses: actions/cache@v4
         with:
-          path: |
-            .nuitka-cache
-            ${{ github.workspace }}/.sccache
-          key: build-cache-v3-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.sha }}
+          path: .nuitka-cache
+          key: build-cache-v4-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.sha }}
           restore-keys: |
-            build-cache-v3-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
-            build-cache-v3-${{ matrix.os_name }}-${{ matrix.arch }}-
+            build-cache-v4-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
+            build-cache-v4-${{ matrix.os_name }}-${{ matrix.arch }}-
 
       # === Make ===
       - name: Build with Nuitka
@@ -143,13 +134,7 @@ jobs:
           # binary build_info, version.txt and artifact naming all use it.
           DANDELION_VERSION: ${{ needs.meta.outputs.tag }}
         run: |
-          export NUITKA_CCACHE_BINARY=$SCCACHE_PATH
           python mk/make.py all
-
-      # === Print SCCACHE Stats ===
-      - name: SCCACHE Stats
-        shell: bash
-        run: sccache --show-stats
 
       # === Prepare Artifact ===
       - name: Prepare Artifact
