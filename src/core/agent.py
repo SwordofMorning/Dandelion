@@ -1,5 +1,5 @@
 ##
- # @file src/core/agent.py
+ # @file playground/fix2/agent.py (working copy of src/core/agent.py)
  # @date 2026/08/06
  # 
  # @brief Agent-Loop and others helper functions.
@@ -37,6 +37,45 @@ from src.tool import (
 
 # Create a module-level CLIPrinter instance for convenience
 cli = CLIPrinter()
+
+# Dynamic Context injection markers: the [Dandelion Context] block is
+# appended to the newest plain-text user message (fresh region) instead of the
+# system prompt, so the system prompt stays byte-identical for the whole
+# session and DeepSeek's prefix cache keeps hitting across tool-loop iterations.
+_DYN_CTX_START = "[Dandelion Context"
+_DYN_CTX_END = "[Dandelion Context End]"
+
+##
+ # @brief Strip previously injected [Dandelion Context] blocks from a user
+ #        message content string (all complete blocks, stacked included).
+ #
+ # @note Defensive: normally the target message is brand new (just added by
+ #       inject_user_message) and contains no block. Used on resume/re-run
+ #       when the same message may already carry a stale block, so a new
+ #       injection replaces (instead of stacking on) the old one.
+ #
+ # @param content User message content string.
+ #
+ # @return Content with all injected blocks removed.
+ #
+def strip_dynamic_context(content):
+    # Remove EVERY complete [Dandelion Context] block, including adjacent or
+    # repeated (stacked) ones; only the tail of an unterminated final block
+    # is dropped. All user content before the first marker is preserved
+    # (only the injected "\n\n" separator whitespace is stripped).
+    while True:
+        start = content.find(_DYN_CTX_START)
+        if start == -1:
+            return content
+        end = content.find(_DYN_CTX_END, start)
+        if end == -1:
+            # Unterminated block (e.g. manually truncated history): drop the tail.
+            return content[:start].rstrip()
+        # Complete block: keep the prefix, drop the block, then keep scanning
+        # the suffix so stacked/adjacent blocks are removed as well.
+        content = content[:start].rstrip() + content[end + len(_DYN_CTX_END):]
+    # End-while
+# End-def
 
 ##
  # @brief Agent Loop Wrapper Class.
@@ -324,24 +363,30 @@ class MyAgent:
     # End-def
 
     ##
-     # @brief History-only token budget: MAX_CONTEXT_TOKENS minus 
-     # the fixed request overhead (system prompt + tool schemas).
+     # @brief History-only token budget: MAX_CONTEXT_TOKENS minus the
+     # output budget (max_tokens) and the fixed request overhead
+     # (system prompt + tool schemas).
      #
-     # @note The system prompt already includes the memories tail
-     # (_last_system_prompt is built by appending memories_content in step()),
-     # so memories must NOT be counted twice here.
-     # @note Compaction triggered at this limit keeps the COMBINED provider request
-     # within MAX_CONTEXT_TOKENS instead of silently overflowing it.
+     # @note The static system prompt + tool schemas are fixed overhead;
+     # dynamic context (memory/task state) lives in history and is counted
+     # by _estimate_tokens (injected before _compact_context in step()).
+     # @note The provider context window is SHARED: history + max_tokens +
+     # overhead must fit inside MAX_CONTEXT_TOKENS. The output budget is
+     # therefore reserved here; compaction at this limit keeps the COMBINED
+     # provider request within MAX_CONTEXT_TOKENS instead of silently
+     # overflowing it (which providers reject with a 400 context-length error).
      #
-     # @return int: MAX_CONTEXT_TOKENS minus request overhead (>= 1).
+     # @return int: MAX_CONTEXT_TOKENS minus max_tokens minus request
+     # overhead (>= 1).
      #
     def _soft_token_limit(self):
         base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
+        max_tokens = int(self.config.get("MAX_TOKENS", 8192))
         overhead = self._estimate_tokens([
             {"role": "user", "content": self._last_system_prompt or self.prompt_builder.build()},
             {"role": "user", "content": json.dumps(self.tool_schemas, ensure_ascii=False)},
         ])
-        return max(int(base - overhead), 1)
+        return max(int(base - max_tokens - overhead), 1)
     # End-def
 
     ##
@@ -509,6 +554,102 @@ class MyAgent:
     # End-def
 
     ##
+     # @brief Render the [Dandelion Context] block: memory index +
+     #        relevant memories digest + task state (Attention Anchor).
+     #
+     # @note The block is appended to the newest plain-text user message
+     #       (fresh region) instead of the system prompt, so the system prompt
+     #       stays byte-identical for the whole session (prefix caching).
+     #
+     # @return Block text starting with the [System: ...] header, or "" when
+     #         there is nothing dynamic to inject (no state file & no memories).
+     #
+    def _render_dynamic_context(self):
+        sections = []
+
+        # 1. Memory index (global + session tiers).
+        index = self.memory.get_index_text()
+        if index:
+            sections.append(f"Relevant Memories:\n{index}")
+
+        # 2. Relevant memories digest (<relevant_memories> style).
+        memories_content = self._get_memories()
+        if memories_content:
+            sections.append(memories_content)
+
+        # 3. Task State (Attention Anchor), session-scoped. Kept LAST so the
+        #    anchor sits closest to the model's next output position.
+        state_file = None
+        if self.session is not None:
+            state_file = self.session.ensure_task_state_file()
+        if state_file and os.path.exists(state_file):
+            try:
+                with open(state_file, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                if isinstance(state, dict):
+                    session_hint = ""
+                    if getattr(self.session, "current_session_id", None):
+                        session_hint = f" (session: {self.session.current_session_id})"
+                    sections.append(
+                        PromptBuilder.render_task_state_text(state, session_hint))
+                # End-if
+            except Exception as e:
+                # Log failure details instead of silently dropping the section.
+                print(f"[-] Warning: Failed to load task state from {state_file}: {e}")
+            # End-try
+        # End-if
+
+        if not sections:
+            return ""
+        return (f"{_DYN_CTX_START} (auto-injected reference data)]\n"
+                + "\n\n".join(sections)
+                + f"\n{_DYN_CTX_END}")
+    # End-def
+
+    ##
+     # @brief Append the dynamic context block to the newest plain-text user
+     #        message and persist it, so tool-loop iterations (which only read
+     #        history) keep seeing it inside the stable messages prefix.
+     #
+     # @note The target message has just been added by inject_user_message()
+     #       and has never been sent, so mutating it costs zero cache.
+     # @note A stale block is stripped FIRST (also when rendering produces no
+     #       replacement block), so resume/re-run never leaves stale
+     #       reference data inside the provider-visible history.
+     # @note inject = strip(ole context) -> render(new memory/task_state) -> append(to user) -> save.
+     #
+    def _inject_dynamic_context(self):
+        msg = self.history[-1]
+        content = msg.get("content", "")
+        changed = False
+
+        # 1. Strip any stale block first, so the cleaned message is what
+        #    _render_dynamic_context (memory retrieval) and the provider see;
+        #    a fresh block replaces (never stacks on) the old one.
+        if isinstance(content, str) and _DYN_CTX_START in content:
+            content = strip_dynamic_context(content)
+            msg["content"] = content
+            changed = True
+        # End-if
+
+        # 2. Render the fresh block AFTER cleaning.
+        block = self._render_dynamic_context()
+
+        # 3. Append only for string content; non-string/list content
+        #    (multimodal messages) is left untouched - concatenating a str
+        #    block onto a list would raise TypeError.
+        if block and isinstance(content, str):
+            msg["content"] = content + "\n\n" + block
+            changed = True
+        # End-if
+
+        # Persist even when rendering produced no replacement block, so a
+        # stale block never survives a resume/re-run.
+        if changed:
+            self.session.save_history(self.history)
+    # End-def
+
+    ##
      # ========================================
      # @section IV. Agent-Loop
      # ========================================
@@ -531,31 +672,46 @@ class MyAgent:
      # @retval False This round is a plain text reply (or an API error). Breakout.
      #
     def step(self):
-        # 0. Check context budget every turn (not only on user messages).
-        self._compact_context()
-
-        # 1. Inject Memory & Build System Prompt
-        # Memories are cached during tool loops so the system tail stays stable.
-        memories_content = self._get_memories()
-        # Dynamic System Prompt injection
+        # 1. Build System Prompt (STATIC)
+        # Dynamic content (task state / memories) is injected as a
+        # [Dandelion Context] block appended to the newest plain-text
+        # user message (see _inject_dynamic_context), so the system prompt
+        # stays byte-identical for the whole session -> prefix cache hits.
         system_prompt = self.prompt_builder.build()
-
-        # --- Memory ---
-        # Append dynamic memories to system_prompt instead of mutating req_messages.
-        # Since 'system' is the last field in the payload, this preserves the 
-        # entire prefix cache of 'tools' + 'messages'.
-        if memories_content:
-            system_prompt += f"\n\n{memories_content}"
         self._last_system_prompt = system_prompt
+
+        # 1.1 Dynamic Context Injection
+        # Only at a new user turn: the newest history message is a plain-text
+        # user message that has never been sent, so appending the block costs
+        # zero cache. Tool-loop iterations (newest message = tool_result)
+        # never re-inject; the block persists in history and stays inside the
+        # stable messages prefix.
+        if self.history and self._is_plain_user_msg(self.history[-1]):
+            self._inject_dynamic_context()
+        # End-if
+
+        # 1.2 Check context budget EVERY turn, AFTER injection so the dynamic
+        #     block (memory + task state) is counted in the token budget.
+        self._compact_context()
 
         # Pure append-only copy, ZERO mutations.
         req_messages = self.history.copy()
 
         # 2. Main LLM API Call
+        # Send-time safety clamp: even if the heuristic estimate undershoots
+        # (or compaction was skipped), never let history + output + overhead
+        # exceed MAX_CONTEXT_TOKENS — degrade the output size instead of
+        # getting a provider 400 context-length rejection.
+        max_tokens = int(self.config["MAX_TOKENS"])
+        remaining_budget = (self._soft_token_limit()
+                            - self._estimate_tokens() + max_tokens)
+        if remaining_budget < max_tokens:
+            max_tokens = max(int(remaining_budget), 1)
+        # End-if
         payload = {
             "tools": self.tool_schemas,
             "messages": req_messages,
-            "max_tokens": int(self.config["MAX_TOKENS"]),
+            "max_tokens": max_tokens,
             "system": system_prompt
         }
 
@@ -663,5 +819,10 @@ class MyAgent:
         # (_soft_token_limit) rebuilds from the new session instead of
         # reusing stale overhead from the old branch.
         self._last_system_prompt = ""
+        # NOTE: previously injected [Dandelion Context] blocks inside
+        # history are intentionally NOT stripped here: keeping the messages
+        # prefix byte-identical lets the server-side prefix cache survive a
+        # session resume. Stale blocks are harmless (the newest injected
+        # block always carries the latest state) and compaction removes them.
     # End-def
 # End-class

@@ -17,6 +17,9 @@
  #     "effort": "max"
  # }
  # max_token:          Provider output limit (payload "max_tokens").
+ #                     Reserved inside the compaction threshold so that
+ #                     history + output + overhead never overflow the
+ #                     provider context window.
  # max_context_tokens: Context window size; compaction threshold
  #                     (read by agent.py _soft_token_limit via MAX_CONTEXT_TOKENS).
  #

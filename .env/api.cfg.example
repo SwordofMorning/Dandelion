@@ -23,7 +23,7 @@ MODEL_LIST = [
     {
         "model_id": "deepseek-v4-pro",
         "conditions": ["reasoning", "long_context", "complex"],
-        "max_token": 819200,
+        "max_token": 160000,
         "max_context_tokens": 819200,
         "TPM": 0,
         "RPM": 10,
@@ -34,7 +34,7 @@ MODEL_LIST = [
     {
         "model_id": "deepseek-v4-flash",
         "conditions": ["tool_heavy", "long_context", "simple"],
-        "max_token": 819200,
+        "max_token": 160000,
         "max_context_tokens": 819200,
         "TPM": 1000000,
         "RPM": 10,
@@ -52,7 +52,7 @@ MODEL_LIST = [
     {
         "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "conditions": ["long_context", "tool_heavy", "complex"],
-        "max_token": 819200,
+        "max_token": 160000,
         "max_context_tokens": 819200,
         "TPM": 1000000,
         "RPM": 10,
@@ -70,7 +70,7 @@ MODEL_LIST = [
     {
         "model_id": "gemma-4-31b-it",
         "conditions": ["reasoning", "tool_heavy", "long_context", "complex"],
-        "max_token": 16000,
+        "max_token": 8000,
         "max_context_tokens": 16000,
         "TPM": 16000,
         "RPM": 30,
@@ -97,7 +97,7 @@ MODEL_LIST = [
     {
         "model_id": "z-ai/glm-5.2",
         "conditions": ["complex"],
-        "max_token": 819200,
+        "max_token": 160000,
         "max_context_tokens": 819200,
         "TPM": 1000000,
         "RPM": 40,

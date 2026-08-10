@@ -76,5 +76,13 @@ class MemoryTool(BaseTool):
             # full disk) must never crash the agent turn.
             return False, f"Error: failed to write memory file: {e}"
         if success:
-            return True, f"Successfully saved {scope} memory topic '{name}'."
+            # No content echo: the model just generated this content and the
+            # [Dandelion Context] block refreshes at the next user turn, so
+            # echoing description/tags/content would only duplicate sensitive
+            # memory data into the persisted history.
+            return True, (
+                f"Successfully saved {scope} memory topic '{name}' "
+                f"({len(content)} chars). It will appear in the dynamic "
+                f"context on the next user turn."
+            )
         return False, "Failed to save memory."
