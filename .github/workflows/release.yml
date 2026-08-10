@@ -130,10 +130,10 @@ jobs:
           path: |
             .nuitka-cache
             ${{ github.workspace }}/.sccache
-          key: build-cache-v2-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.sha }}
+          key: build-cache-v3-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.sha }}
           restore-keys: |
-            build-cache-v2-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
-            build-cache-v2-${{ matrix.os_name }}-${{ matrix.arch }}-
+            build-cache-v3-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
+            build-cache-v3-${{ matrix.os_name }}-${{ matrix.arch }}-
 
       # === Make ===
       - name: Build with Nuitka

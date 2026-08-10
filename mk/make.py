@@ -169,6 +169,7 @@ def _run_nuitka(cfg, name, version):
 
     # ----- @par Anti-Bloat Plugins & Deployment Flags -----
     cmd.append("--enable-plugin=anti-bloat")
+    cmd.append("--enable-plugin=faulthandler")
     cmd.append("--noinclude-pytest-mode=nofollow")
     cmd.append("--noinclude-setuptools-mode=nofollow")
     cmd.append("--noinclude-unittest-mode=nofollow")
@@ -539,7 +540,11 @@ def _postprocess(cfg, name, version):
     # End-if
 
     # ----- @par 1b. Stdlib fallback for bypassed packages -----
-    _copy_stdlib_fallback(bin_dir)
+    if cfg.getboolean("nuitka", "stdlib_fallback", fallback=True):
+        _copy_stdlib_fallback(bin_dir)
+    else:
+        print("  [-] Stdlib fallback disabled (nuitka.stdlib_fallback=false)")
+    # End-if
 
     # ----- @par 2. Create required workspace directories -----
     print("[*] Creating workspace layout...")
