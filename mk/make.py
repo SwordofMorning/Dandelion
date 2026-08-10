@@ -165,6 +165,7 @@ def _run_nuitka(cfg, name, version):
         "--assume-yes-for-downloads",
         "--jobs=" + jobs,
         "--static-libpython=no",
+        "--runtime-hook=" + os.path.join(MK_DIR, "lib", "runtime_hook.py"),
     ]
 
     # ----- @par Anti-Bloat Plugins & Deployment Flags -----
@@ -377,13 +378,18 @@ def _copy_dependency_closure(roots, dst_dir):
 # End-def
 
 ##
- # @brief Copy stdlib modules imported by the bypassed packages into bin/.
+ # @brief Copy stdlib modules imported by the bypassed packages into a
+ #   dedicated fallback directory (bin/_stdlib_fallback).
  #
  # Bypassed packages are not analyzed by Nuitka, so stdlib modules they
  # import (e.g. zoneinfo) may be missing from the artifact. Scan the copied
  # sources and copy the needed stdlib modules as an on-disk fallback.
  # Iterates to fixpoint so transitive stdlib imports (e.g. ssl -> _ssl)
  # are covered as well.
+ #
+ # The fallback dir is appended to sys.path LAST at runtime (runtime_hook.py),
+ # so these plain-source copies never shadow Nuitka-compiled modules.
+ # Parsing is incremental: each .py file is ast-parsed at most once.
  #
  # @param bin_dir Destination directory (bin/).
  #
@@ -392,7 +398,11 @@ def _copy_stdlib_fallback(bin_dir):
     import sys as _sys
 
     stdlib_names = set(_sys.stdlib_module_names)
+    fallback_dir = os.path.join(bin_dir, "_stdlib_fallback")
+    os.makedirs(fallback_dir, exist_ok=True)
+
     copied = set()
+    scanned_files = set()
     changed = True
     rounds = 0
 
@@ -401,7 +411,9 @@ def _copy_stdlib_fallback(bin_dir):
         rounds += 1
         found = set()
 
-        # Collect stdlib top-level imports from all copied .py sources.
+        # Collect stdlib top-level imports from copied .py sources.
+        # Incremental: parse each file at most once; newly copied fallback
+        # files are discovered by the next round (transitive dependencies).
         for dirpath, dirnames, filenames in os.walk(bin_dir):
             if "__pycache__" in dirnames:
                 dirnames.remove("__pycache__")
@@ -411,6 +423,10 @@ def _copy_stdlib_fallback(bin_dir):
                     continue
                 # End-if
                 path = os.path.join(dirpath, fn)
+                if path in scanned_files:
+                    continue
+                # End-if
+                scanned_files.add(path)
                 try:
                     with open(path, "r", encoding="utf-8", errors="ignore") as f:
                         tree = ast.parse(f.read())
@@ -436,7 +452,7 @@ def _copy_stdlib_fallback(bin_dir):
             # End-for
         # End-for
 
-        # Copy newly discovered stdlib modules.
+        # Copy newly discovered stdlib modules into the fallback dir.
         for mod in sorted(found):
             if mod in copied:
                 continue
@@ -447,10 +463,10 @@ def _copy_stdlib_fallback(bin_dir):
             # End-if
             if spec.submodule_search_locations:
                 src = spec.submodule_search_locations[0]
-                dst = os.path.join(bin_dir, mod)
+                dst = os.path.join(fallback_dir, mod)
                 shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
             elif spec.origin and spec.origin not in ("built-in", "frozen"):
-                dst = os.path.join(bin_dir, os.path.basename(spec.origin))
+                dst = os.path.join(fallback_dir, os.path.basename(spec.origin))
                 if os.path.exists(dst):
                     copied.add(mod)
                     continue
@@ -464,6 +480,8 @@ def _copy_stdlib_fallback(bin_dir):
             print("  [+] Stdlib fallback: " + mod)
         # End-for
     # End-while
+
+    print("  [+] Stdlib fallbacks in: " + fallback_dir)
 # End-def
 
 ##
