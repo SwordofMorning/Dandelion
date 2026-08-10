@@ -54,7 +54,14 @@ Targets:
  #
 def _load_config():
     cfg = configparser.ConfigParser()
-    cfg.read(os.path.join(MK_DIR, "config", "build.config"))
+    config_path = os.path.join(MK_DIR, "config", "build.config")
+    read_files = cfg.read(config_path)
+    if not read_files:
+        raise FileNotFoundError("Build config not found: " + config_path)
+    # End-if
+    if not cfg.sections():
+        raise RuntimeError("Build config missing or empty: " + config_path)
+    # End-if
     return cfg
 # End-def
 
