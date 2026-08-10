@@ -176,8 +176,12 @@ jobs:
           ls "upload_stage/$ARTIFACT_NAME/bin"
 
       # === Smoke Test (fake entry + path resolution) ===
+      # PYTHONFAULTHANDLER=1: if the binary crashes (SIGSEGV/SIGABRT), dump
+      # the Python stack so the crashing import is visible in the log.
       - name: Smoke Test
         shell: bash
+        env:
+          PYTHONFAULTHANDLER: "1"
         run: |
           cd "upload_stage/dandelion-${{ matrix.os_name }}-${{ matrix.arch }}"
           if [ "$RUNNER_OS" == "Windows" ]; then

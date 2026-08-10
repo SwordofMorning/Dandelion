@@ -169,7 +169,6 @@ def _run_nuitka(cfg, name, version):
 
     # ----- @par Anti-Bloat Plugins & Deployment Flags -----
     cmd.append("--enable-plugin=anti-bloat")
-    cmd.append("--enable-plugin=faulthandler")
     cmd.append("--noinclude-pytest-mode=nofollow")
     cmd.append("--noinclude-setuptools-mode=nofollow")
     cmd.append("--noinclude-unittest-mode=nofollow")
