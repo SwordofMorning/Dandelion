@@ -43,6 +43,7 @@ def main():
 
     print(f"[+] Agent Initialization Successful. Model: {config['MODEL_ID']}")
     print(f"[+] MAX_TOKENS={config['MAX_TOKENS']}, MAX_CONTEXT_TOKENS={config['MAX_CONTEXT_TOKENS']}")
+    
 
     # 4. Start CLI
     cli = InteractiveCLI(agent_instance=agent, session_manager=session_mgr)
