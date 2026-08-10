@@ -355,24 +355,30 @@ class MyAgent:
     # End-def
 
     ##
-     # @brief History-only token budget: MAX_CONTEXT_TOKENS minus 
-     # the fixed request overhead (system prompt + tool schemas).
+     # @brief History-only token budget: MAX_CONTEXT_TOKENS minus the
+     # output budget (max_tokens) and the fixed request overhead
+     # (system prompt + tool schemas).
      #
      # @note The static system prompt + tool schemas are fixed overhead;
      # dynamic context (memory/task state) lives in history and is counted
      # by _estimate_tokens (injected before _compact_context in step()).
-     # @note Compaction triggered at this limit keeps the COMBINED provider request
-     # within MAX_CONTEXT_TOKENS instead of silently overflowing it.
+     # @note The provider context window is SHARED: history + max_tokens +
+     # overhead must fit inside MAX_CONTEXT_TOKENS. The output budget is
+     # therefore reserved here; compaction at this limit keeps the COMBINED
+     # provider request within MAX_CONTEXT_TOKENS instead of silently
+     # overflowing it (which providers reject with a 400 context-length error).
      #
-     # @return int: MAX_CONTEXT_TOKENS minus request overhead (>= 1).
+     # @return int: MAX_CONTEXT_TOKENS minus max_tokens minus request
+     # overhead (>= 1).
      #
     def _soft_token_limit(self):
         base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
+        max_tokens = int(self.config.get("MAX_TOKENS", 8192))
         overhead = self._estimate_tokens([
             {"role": "user", "content": self._last_system_prompt or self.prompt_builder.build()},
             {"role": "user", "content": json.dumps(self.tool_schemas, ensure_ascii=False)},
         ])
-        return max(int(base - overhead), 1)
+        return max(int(base - max_tokens - overhead), 1)
     # End-def
 
     ##
@@ -664,10 +670,20 @@ class MyAgent:
         req_messages = self.history.copy()
 
         # 2. Main LLM API Call
+        # Send-time safety clamp: even if the heuristic estimate undershoots
+        # (or compaction was skipped), never let history + output + overhead
+        # exceed MAX_CONTEXT_TOKENS — degrade the output size instead of
+        # getting a provider 400 context-length rejection.
+        max_tokens = int(self.config["MAX_TOKENS"])
+        remaining_budget = (self._soft_token_limit()
+                            - self._estimate_tokens() + max_tokens)
+        if remaining_budget < max_tokens:
+            max_tokens = max(int(remaining_budget), 1)
+        # End-if
         payload = {
             "tools": self.tool_schemas,
             "messages": req_messages,
-            "max_tokens": int(self.config["MAX_TOKENS"]),
+            "max_tokens": max_tokens,
             "system": system_prompt
         }
 
