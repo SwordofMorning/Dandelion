@@ -1,5 +1,5 @@
 ##
- # @file playground/fix2/agent.py (working copy of src/core/agent.py)
+ # @file src/core/agent.py
  # @date 2026/08/06
  # 
  # @brief Agent-Loop and others helper functions.

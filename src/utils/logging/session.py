@@ -1,6 +1,6 @@
 ##
  # @file src/utils/logging/session.py
- # @date 2026/08/05
+ # @date 2026/08/11
  # 
  # @brief Session Management.
  # Provides session interface include target and memory.
@@ -21,6 +21,46 @@ TASK_STATE_FILENAME = "task_state.json"
 SESSION_MEMORY_DIRNAME = "memory"
 
 DEFAULT_TASK_STATE = {"target": "No specific target set.", "todos": [], "completed": []}
+
+##
+ # @brief Parse an ISO-8601 string into a naive local datetime.
+ #
+ # Normalizes timezone-aware values to naive local time so that all
+ # recency keys stay comparable across platforms.
+ #
+ # @param value ISO string (e.g. datetime.now().isoformat()).
+ #
+ # @return naive datetime, or None if unparseable.
+ #
+def _parse_iso_time(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(value)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except (ValueError, TypeError):
+        return None
+# End-def
+
+##
+ # @brief Parse the creation timestamp embedded in a session ID.
+ #
+ # Session IDs look like `sess_YYYYMMDD_HHMMSS_ffffff`.
+ #
+ # @param session_id Session ID string.
+ #
+ # @return naive datetime, or None if the ID has no parseable stamp.
+ #
+def _parse_session_id_time(session_id):
+    if not isinstance(session_id, str) or not session_id.startswith("sess_"):
+        return None
+    try:
+        return datetime.datetime.strptime(session_id[len("sess_"):], "%Y%m%d_%H%M%S_%f")
+    except (ValueError, TypeError):
+        return None
+# End-def
 
 ##
  # @brief Session class, provides all session control for CLI.
@@ -159,12 +199,83 @@ class SessionManager:
      # @brief If no session, create default_session.
      #
     def _ensure_default_session(self):
-        sessions = self.list_sessions()
-        if not sessions:
+        # Auto-load the most recently used (last checked-out) session.
+        latest = self.get_most_recent_session()
+        latest_id = latest.get("id") if latest else None
+        if not latest_id:
             self.create_session("default_session")
         else:
-            # Auto-load the most recent session
-            self.switch_session(sessions[-1]["id"])
+            self.switch_session(latest_id)
+    # End-def
+
+    ##
+     # @brief Atomically write a session's meta.log.
+     #
+     # `tmp + os.replace`: a crash mid-write must never leave a truncated
+     # meta.log, because `list_sessions()` skips sessions whose meta fails
+     # to parse (a truncated meta would hide the session from listing).
+     #
+     # @param session_dir Session directory.
+     # @param meta Session metadata dict.
+     #
+    def _write_meta(self, session_dir, meta):
+        meta_file = os.path.join(session_dir, "meta.log")
+        tmp_path = meta_file + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        os.replace(tmp_path, meta_file)
+    # End-def
+
+    ##
+     # @brief Get the most recently used session's metadata.
+     #
+     # Recency key (git-style "last checkout"):
+     #  1. meta.last_used_at (stamped on every switch_session);
+     #  2. meta.created_at (legacy fallback, preserves old behavior);
+     #  3. creation timestamp embedded in the session ID;
+     #  4. epoch minimum (malformed data sorts last).
+     # Ties are broken by session ID descending for determinism.
+     #
+     # @return Most recent session meta, or None if there are no sessions.
+     #
+    def get_most_recent_session(self):
+        # Only metadata that is a dict with a non-empty string id is a valid
+        # session. meta.log is normally written by us, but a hand-edited or
+        # corrupt file may still parse as valid JSON (e.g. a JSON array, or a
+        # dict missing `id`): _recency_key() calls .get() and compares the id,
+        # so such entries must be filtered out BEFORE max() to avoid
+        # AttributeError/TypeError crashing startup.
+        sessions = [
+            s for s in self.list_sessions()
+            if isinstance(s, dict)
+            and isinstance(s.get("id"), str)
+            and s.get("id")
+        ]
+        if not sessions:
+            return None
+        return max(sessions, key=self._recency_key)
+    # End-def
+
+    ##
+     # @brief Recency key (datetime, session_id) of one session meta.
+     #
+     # @param meta Session metadata dict.
+     #
+     # @return Tuple (datetime, session_id), always comparable.
+     #
+    def _recency_key(self, meta):
+        # 1. last_used_at (primary).
+        dt = _parse_iso_time(meta.get("last_used_at"))
+        # 2. created_at (legacy fallback).
+        if dt is None:
+            dt = _parse_iso_time(meta.get("created_at"))
+        # 3. Creation timestamp embedded in the session ID.
+        if dt is None:
+            dt = _parse_session_id_time(meta.get("id"))
+        # 4. Malformed data sorts last.
+        if dt is None:
+            dt = datetime.datetime.min
+        return (dt, meta.get("id", ""))
     # End-def
 
     ##
@@ -184,15 +295,17 @@ class SessionManager:
         # Make dir.
         session_dir = os.path.join(self.log_dir, session_id)
         os.makedirs(session_dir, exist_ok=True)
-        # Session meta.log.
+        # Session meta.log. `last_used_at` = git-style checkout stamp:
+        # a fresh session counts as just-used at creation.
+        now_iso = datetime.datetime.now().isoformat()
         meta = {
             "id": session_id,
             "name": name,
-            "created_at": datetime.datetime.now().isoformat()
+            "created_at": now_iso,
+            "last_used_at": now_iso
         }
-        # Write metadata.
-        with open(os.path.join(session_dir, "meta.log"), "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
+        # Write metadata (atomic).
+        self._write_meta(session_dir, meta)
 
         # Post check and switch.
         self.save_history([], session_dir)
@@ -252,6 +365,18 @@ class SessionManager:
         self.current_session_dir = target_dir
         # Sessions created before this layout existed get lazily initialized.
         self._ensure_session_layout(target_dir)
+
+        # Stamp "last used" (git-style checkout). Every path that loads a
+        # session goes through here: startup auto-load, `checkout -b`, and
+        # manual `checkout`; opening the app counts as a default checkout.
+        # Best-effort: a corrupt meta must not block the switch itself.
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            meta["last_used_at"] = datetime.datetime.now().isoformat()
+            self._write_meta(target_dir, meta)
+        except Exception as e:
+            print(f"[-] Warning: Failed to stamp last_used_at for {safe_session_id}: {e}")
         return True
     # End-def
 
