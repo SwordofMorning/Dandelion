@@ -22,7 +22,8 @@ Thumbs.db
 llm/memory/
 
 # Agent Playground
-playground/
+.playground/
+
 # Build artifacts
 build/
 .nuitka-cache/
