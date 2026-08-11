@@ -239,7 +239,18 @@ class SessionManager:
      # @return Most recent session meta, or None if there are no sessions.
      #
     def get_most_recent_session(self):
-        sessions = self.list_sessions()
+        # Only metadata that is a dict with a non-empty string id is a valid
+        # session. meta.log is normally written by us, but a hand-edited or
+        # corrupt file may still parse as valid JSON (e.g. a JSON array, or a
+        # dict missing `id`): _recency_key() calls .get() and compares the id,
+        # so such entries must be filtered out BEFORE max() to avoid
+        # AttributeError/TypeError crashing startup.
+        sessions = [
+            s for s in self.list_sessions()
+            if isinstance(s, dict)
+            and isinstance(s.get("id"), str)
+            and s.get("id")
+        ]
         if not sessions:
             return None
         return max(sessions, key=self._recency_key)
