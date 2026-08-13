@@ -1,15 +1,36 @@
-# src/tool/filesystem/edit_file_tool.py
+##
+ # @file src/tool/filesystem/edit_file_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Edit File Tools.
+ #
 
 import os
 from ..base_tool import BaseTool
 
+##
+ # @brief Edit File Class.
+ #
 class EditFileTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "edit_file"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Edit an existing file by replacing a specific exact text block with new text. "
@@ -17,7 +38,11 @@ class EditFileTool(BaseTool):
             "You MUST provide the EXACT old text (including correct indentation and line breaks) "
             "as it currently appears in the file. It will replace ALL occurrences of the old text."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -37,7 +62,15 @@ class EditFileTool(BaseTool):
             },
             "required": ["file_path", "old_text", "new_text"]
         }
+    # End-def
 
+    ##
+     # @brief Execute editing.
+     #
+     # @param kwargs schema properties: file_path, old_text, new_text.
+     #
+     # @return (success_bool, result_string)
+     #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")
         old_text = kwargs.get("old_text", "")
@@ -53,21 +86,20 @@ class EditFileTool(BaseTool):
             file_path = os.path.join(self.workspace_dir, file_path)
         file_path = os.path.abspath(file_path)
 
-        # Security sandbox check
-        if not self.check_workspace_permission(file_path, action_desc=f"EDIT File at '{file_path}'"):
-            return False, (
-                f"CRITICAL SECURITY BLOCK: Permission denied to edit file '{file_path}'. "
-                f"STOP and acknowledge this restriction to the user."
-            )
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(file_path, action_desc=f"EDIT File at '{file_path}'")
+        if err:
+            return False, err
+        # End-if
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(resolved):
             return False, f"Error: File not found at '{file_path}'."
             
-        if not os.path.isfile(file_path):
+        if not os.path.isfile(resolved):
             return False, f"Error: '{file_path}' is a directory, not a file."
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with self._open_secure(resolved, "r") as f:
                 content = f.read()
 
             if old_text not in content:
@@ -77,15 +109,30 @@ class EditFileTool(BaseTool):
                     f"Please ensure indentation, spaces, and line breaks match exactly. "
                     f"Consider using read_file to check the exact content."
                 )
+            # End-if
+
+            # Re-verify before write-back: the read-close -> write-open gap is
+            # the widest TOCTOU window in this tool; abort if the resolved
+            # target changed since the initial check.
+            resolved2, inside2 = self._resolved_within_workspace(file_path)
+            if not inside2 or resolved2 != resolved:
+                return False, (
+                    f"CRITICAL SECURITY BLOCK: resolved path of '{file_path}' changed "
+                    f"while editing. Aborting without write-back."
+                )
+            # End-if
 
             new_content = content.replace(old_text, new_text)
 
-            with open(file_path, "w", encoding="utf-8") as f:
+            with self._open_secure(resolved, "w") as f:
                 f.write(new_content)
 
             return True, f"Successfully edited file '{file_path}'."
+        # End-try
 
         except UnicodeDecodeError:
             return False, f"Error: '{file_path}' could not be decoded as UTF-8."
         except Exception as e:
             return False, f"Error editing file: {e}"
+    # End-def execute
+# End-class

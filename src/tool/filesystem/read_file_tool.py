@@ -1,4 +1,9 @@
-# .update_src/tool/filesystem/read_file_tool.py
+##
+ # @file src/tool/filesystem/read_file_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Read File Tool.
+ #
 
 import os
 from ..base_tool import BaseTool
@@ -18,20 +23,40 @@ _BINARY_EXTENSIONS = {
     ".db", ".sqlite", ".sqlite3",
 }
 
+##
+ # @brief Read File Class.
+ #
 class ReadFileTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "read_file"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Read the contents of a text file. Supports reading the entire file or a "
             "specific range of lines (1-indexed). Binary files are automatically refused. "
             "Use this to inspect source code, configuration, logs, and other text-based files."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -55,28 +80,44 @@ class ReadFileTool(BaseTool):
             },
             "required": ["file_path"]
         }
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Check if extension indicates a binary file.
-    # ---------------------------------------------------------
+    ##
+     # @brief Check if extension indicates a binary file.
+     #
+     # @param file_path Target file path.
+     #
+     # @return True if the extension is in the known binary set.
+     #
     def _is_binary_extension(self, file_path):
         ext = os.path.splitext(file_path)[1].lower()
         return ext in _BINARY_EXTENSIONS
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Check if content looks binary (null bytes in first 8KB).
-    # ---------------------------------------------------------
+    ##
+     # @brief Check if content looks binary (null bytes in first 8KB).
+     #
+     # @param file_path Resolved (realpath) file path to inspect.
+     #
+     # @return True if null bytes are found in the first 8KB, False otherwise.
+     #
     def _content_is_binary(self, file_path):
         try:
-            with open(file_path, "rb") as f:
+            with self._open_secure(file_path, "rb", encoding=None) as f:
                 chunk = f.read(8192)
                 return b"\x00" in chunk
         except Exception:
             return False
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Execute file reading.
-    # ---------------------------------------------------------
+    ##
+     # @brief Execute file reading.
+     #
+     # @param kwargs schema properties: file_path, start_line, end_line,
+     # show_line_numbers.
+     #
+     # @return (success_bool, result_string)
+     #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")
         start_line = kwargs.get("start_line")
@@ -90,29 +131,28 @@ class ReadFileTool(BaseTool):
             file_path = os.path.join(self.workspace_dir, file_path)
         file_path = os.path.abspath(file_path)
 
-        # Security sandbox check
-        if not self.check_workspace_permission(file_path, action_desc=f"READ File at '{file_path}'"):
-            return False, (
-                f"CRITICAL SECURITY BLOCK: Permission denied to read file '{file_path}'. "
-                f"STOP and acknowledge this restriction to the user."
-            )
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(file_path, action_desc=f"READ File at '{file_path}'")
+        if err:
+            return False, err
+        # End-if
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(resolved):
             return False, f"Error: File not found at '{file_path}'"
-        if not os.path.isfile(file_path):
+        if not os.path.isfile(resolved):
             return False, f"Error: Path is not a file: '{file_path}'"
 
         # Refuse binary files
-        if self._is_binary_extension(file_path):
+        if self._is_binary_extension(resolved):
             return False, (
                 f"Error: '{file_path}' appears to be a binary file "
-                f"(extension '{os.path.splitext(file_path)[1]}'). Refusing to read."
+                f"(extension '{os.path.splitext(resolved)[1]}'). Refusing to read."
             )
-        if self._content_is_binary(file_path):
+        if self._content_is_binary(resolved):
             return False, f"Error: '{file_path}' contains binary data (null bytes detected). Refusing to read."
 
         # Check file size
-        file_size = os.path.getsize(file_path)
+        file_size = os.path.getsize(resolved)
         if file_size > _MAX_READ_BYTES:
             return False, (
                 f"Error: File is too large ({file_size / (1024*1024):.1f} MB). "
@@ -134,7 +174,7 @@ class ReadFileTool(BaseTool):
                 end_line = start_line
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with self._open_secure(resolved, "r") as f:
                 all_lines = f.readlines()
 
             total_lines = len(all_lines)
@@ -157,6 +197,7 @@ class ReadFileTool(BaseTool):
                 result = "\n".join(result_lines)
             else:
                 result = "".join(selected)
+            # End-if
 
             header = (
                 f"File: '{file_path}' "
@@ -164,8 +205,11 @@ class ReadFileTool(BaseTool):
                 f"({file_size}B)"
             )
             return True, f"{header}\n\n{result}"
+        # End-try
 
         except UnicodeDecodeError:
             return False, f"Error: '{file_path}' could not be decoded as UTF-8. It may be a binary file."
         except Exception as e:
             return False, f"Error reading file: {e}"
+    # End-def
+# End-class

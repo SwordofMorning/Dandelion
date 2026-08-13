@@ -1,17 +1,44 @@
-# src/tool/agent/skill_tool.py
+##
+ # @file src/tool/agent/skill_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Load Skill.
+ #
 
 from ..base_tool import BaseTool
 
+##
+ # @brief Load Skill Class.
+ #
 class LoadSkillTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param skill_manager Skill manager class.
+     #
+     # @see src/core/skill.py
+     #
     def __init__(self, skill_manager):
         self.skill_manager = skill_manager
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "load_skill"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return "Load the full markdown content of a specific skill by its name."
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object", 
@@ -20,7 +47,16 @@ class LoadSkillTool(BaseTool):
             }, 
             "required": ["name"]
         }
+    # End-def
 
+    ##
+     # @brief Execute skill loading.
+     #
+     # @param kwargs schema properties: name.
+     #
+     # @return (success_bool, result_string) result_string is the skill's full
+     # markdown content on success, or the error message on failure.
+     #
     def execute(self, **kwargs):
         name = kwargs.get("name", "")
         if not name:
@@ -32,3 +68,5 @@ class LoadSkillTool(BaseTool):
             
         print(f"\n[+] [Skill Loaded] Agent fetched skill: {name}")
         return True, content
+    # End-def
+# End-class

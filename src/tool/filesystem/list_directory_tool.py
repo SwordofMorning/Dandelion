@@ -1,16 +1,40 @@
-# .update_src/tool/filesystem/list_directory_tool.py
+##
+ # @file src/tool/filesystem/list_directory_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief List Directory.
+ #
 
 import os
 import fnmatch
 from ..base_tool import BaseTool
 
+##
+ # @brief List Directory Class.
+ #
 class ListDirectoryTool(BaseTool):
+    # Members, Skip cache and protected subfolder, while could still be read by Shell.
+    _SKIP_DIRS = {"__pycache__", "node_modules", ".git", ".env", ".log"}
+
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "list_directory"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "List the contents of a directory. "
@@ -18,7 +42,11 @@ class ListDirectoryTool(BaseTool):
             "Hidden directories (.git, __pycache__, node_modules, .env) are automatically excluded. "
             "Use this to explore project structure before reading or editing files."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -42,15 +70,19 @@ class ListDirectoryTool(BaseTool):
             },
             "required": []
         }
+    # End-def
 
-    # ---------------------------------------------------------
-    # Internal: always-skipped directory names
-    # ---------------------------------------------------------
-    _SKIP_DIRS = {"__pycache__", "node_modules", ".git", ".env", ".log"}
-
-    # ---------------------------------------------------------
-    # Brief: Recursively build a tree representation string.
-    # ---------------------------------------------------------
+    ##
+     # @brief Recursively build a tree representation string.
+     #
+     # @param root_path Directory to scan.
+     # @param max_depth Maximum recursion depth.
+     # @param filter_pattern Optional glob pattern (files only); None disables.
+     # @param current_depth Current recursion depth (starts at 1).
+     #
+     # @return Tree string with dirs as `name/` and files as
+     # `name  (size)`, or a permission/error notice; '' when depth exceeded.
+     #
     def _build_tree(self, root_path, max_depth, filter_pattern, current_depth):
         if current_depth > max_depth:
             return ""
@@ -74,6 +106,7 @@ class ListDirectoryTool(BaseTool):
             if filter_pattern and not entry.is_dir():
                 if not fnmatch.fnmatch(name, filter_pattern):
                     continue
+            # End-if
 
             indent = "    " * (current_depth - 1)
 
@@ -82,6 +115,7 @@ class ListDirectoryTool(BaseTool):
                 sub = self._build_tree(entry.path, max_depth, filter_pattern, current_depth + 1)
                 if sub:
                     lines.append(sub)
+                # End-if
             else:
                 try:
                     size = entry.stat().st_size
@@ -91,15 +125,24 @@ class ListDirectoryTool(BaseTool):
                         size_str = f"{size / 1024:.1f}KB"
                     else:
                         size_str = f"{size / (1024 * 1024):.1f}MB"
+                    # End-if
                     lines.append(f"{indent}{name}  ({size_str})")
                 except OSError:
                     lines.append(f"{indent}{name}")
+                # End-try
+            # End-if
+        # End-for
 
         return "\n".join(lines) + ("\n" if lines else "")
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Execute directory listing.
-    # ---------------------------------------------------------
+    ##
+     # @brief Execute directory listing.
+     #
+     # @param kwargs schema properties: path, recursive, depth, filter_pattern.
+     #
+     # @return (success_bool, result_string)
+     #
     def execute(self, **kwargs):
         path = kwargs.get("path") or self.workspace_dir
         recursive = kwargs.get("recursive", False)
@@ -115,26 +158,27 @@ class ListDirectoryTool(BaseTool):
             path = os.path.join(self.workspace_dir, path)
         path = os.path.abspath(path)
 
-        if not self.check_workspace_permission(path, action_desc=f"LIST Directory at '{path}'"):
-            return False, (
-                f"CRITICAL SECURITY BLOCK: Permission denied to list directory '{path}'. "
-                f"STOP and acknowledge this restriction to the user."
-            )
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(path, action_desc=f"LIST Directory at '{path}'")
+        if err:
+            return False, err
+        # End-if
 
-        if not os.path.exists(path):
+        if not os.path.exists(resolved):
             return False, f"Error: Directory not found at '{path}'"
-        if not os.path.isdir(path):
+        if not os.path.isdir(resolved):
             return False, f"Error: Path is not a directory: '{path}'"
 
         try:
             if recursive:
-                tree = self._build_tree(path, depth, filter_pattern, 1)
+                tree = self._build_tree(resolved, depth, filter_pattern, 1)
                 header = f"Directory tree of '{path}' (depth={depth})"
                 if filter_pattern:
                     header += f" [filter: {filter_pattern}]"
                 result = f"{header}:\n\n{tree.rstrip()}" if tree else f"{header}:\n\n(no matching entries)"
+            # End-if
             else:
-                entries = sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower()))
+                entries = sorted(os.scandir(resolved), key=lambda e: (not e.is_dir(), e.name.lower()))
                 lines = []
                 for entry in entries:
                     name = entry.name
@@ -148,7 +192,11 @@ class ListDirectoryTool(BaseTool):
                     marker = "/" if entry.is_dir() else ""
                     lines.append(f"  {name}{marker}")
                 result = f"Contents of '{path}':\n" + ("\n".join(lines) if lines else "  (empty)")
+            # End-else
 
             return True, result
         except Exception as e:
             return False, f"Error listing directory: {e}"
+        # End-try
+    # End-def execute
+# End-class

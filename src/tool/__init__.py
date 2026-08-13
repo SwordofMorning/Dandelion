@@ -1,4 +1,9 @@
-# src/tool/__init__.py
+##
+ # @file src/tool/__init__.py
+ # @date 2026/08/13
+ # 
+ # @brief Tool Package.
+ #
 
 from .shell.bash_tool import BashTool
 from .agent.skill_tool import LoadSkillTool

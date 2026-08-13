@@ -1,9 +1,15 @@
-# src/tool/agent/plan_tool.py
-
-# Brief: Use LLM to split the task.
-# This tool does not perform any specific actions. 
-# It calls a separate LLM (without polluting the main thread's memory) 
-# to translate complex natural language tasks into a structured JSON task array.
+##
+ # @file src/tool/agent/plan_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief  Use LLM to split the task.
+ # 
+ # @note This tool does not perform any specific actions.
+ # It calls a separate LLM (without polluting the main thread's memory)
+ # to translate complex natural language tasks into a structured JSON
+ # TaskPlan object with top-level fields: overall_goal, subtasks, and
+ # execution_strategy (integration_notes optional).
+ #
 
 import json
 from ..base_tool import BaseTool
@@ -43,22 +49,45 @@ Output strictly the following JSON structure:
 }
 """
 
+##
+ # @brief Plan Class.
+ #
 class PlanTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param safe_client Request LLM.
+     # @param config User's config in `.env`.
+     #
+     # @see src/utils/safe_llm/safe_llm.py
+     #
     def __init__(self, safe_client, config):
         super().__init__()
         self.safe_client = safe_client
         self.config = config
+    # End-def
     
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "plan_tool"
+    # End-def
     
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Analyze a complex task and produce a structured TaskPlan with subtasks, "
             "dependencies, and recommended toolsets. Use this BEFORE spawning subagents "
             "for multi-step tasks."
         )
+    # End-def
     
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -74,7 +103,16 @@ class PlanTool(BaseTool):
             },
             "required": ["complex_task"]
         }
+    # End-def
     
+    ##
+     # @brief Run task decomposition via a separate LLM call.
+     #
+     # @param kwargs schema properties: complex_task, max_subtasks.
+     #
+     # @return (success_bool, result_string) result_string is the JSON TaskPlan
+     # on success, or the error message on failure.
+     #
     def execute(self, **kwargs):
         complex_task = kwargs.get("complex_task", "")
         max_subtasks = kwargs.get("max_subtasks", 6)
@@ -132,3 +170,5 @@ class PlanTool(BaseTool):
             return True, json.dumps(plan, ensure_ascii=True, indent=2)
         except json.JSONDecodeError as e:
             return False, f"Failed to parse TaskPlan JSON: {e}\n\nRaw output:\n{text[:500]}"
+    # End-def
+# End-class

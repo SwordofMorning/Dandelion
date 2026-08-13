@@ -1,31 +1,58 @@
-# src/tool/agent/state_tool.py
+##
+ # @file src/tool/agent/state_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Update Task State (Agent's Target).
+ #
 
 import os
 import json
 from ..base_tool import BaseTool
 
+##
+ # @brief State Update Class.
+ #
 class StateTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     # @param session_manager Session manager; resolves the active session's
+     # task_state.json dynamically.
+     #
     def __init__(self, workspace_dir=None, session_manager=None):
         super().__init__(workspace_dir)
         self.session_manager = session_manager
+    # End-def
 
+    ##
+     # @brief Resolve the active session's task_state.json dynamically.
+     #
+     # @note Session-scoped only: the legacy global state file
+     # (llm/task/task_state.json) was removed, so there is NO fallback.
+     # The session manager creates a blank file on demand
+     # (ensure_task_state_file); None means no active session, and callers
+     # must fail loudly instead of touching any global file.
+     # Resolving dynamically makes `checkout` (session switch) work without
+     # rebuilding the agent.
+     #
+     # @return Path to task_state.json, or None if no active session.
+     #
     def _get_state_file(self):
-        """Resolve the active session's task_state.json dynamically, so
-        `checkout` (session switch) works without rebuilding the agent.
-
-        Session-scoped only: the legacy global state file
-        (llm/task/task_state.json) was removed, so there is NO fallback.
-        The session manager creates a blank file on demand
-        (ensure_task_state_file); None means no active session, and callers
-        must fail loudly instead of touching any global file.
-        """
         if self.session_manager is not None:
             return self.session_manager.ensure_task_state_file()
         return None
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "update_state"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Update the current task state, including the main target and TODO lists. "
@@ -34,7 +61,11 @@ class StateTool(BaseTool):
             "conversation as part of the [Dandelion Context] block appended "
             "to the latest user message, to keep you focused on the current task."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         # All fields optional: execute() merges into existing state, so the
         # model can update a single field without rewriting the whole state.
@@ -55,6 +86,14 @@ class StateTool(BaseTool):
             }
         }
 
+    ##
+     # @brief Load current task state.
+     #
+     # @note Falls back to defaults when the file is missing, malformed or
+     # no active session exists; a corrupt file is reported loudly.
+     #
+     # @return State dict {target, todos, completed}.
+     #
     def _load(self):
         state = {"target": "No specific target set.", "todos": [], "completed": []}
         state_file = self._get_state_file()
@@ -80,6 +119,15 @@ class StateTool(BaseTool):
                 print(f"[-] Warning: failed to parse task state at {state_file}: {e}")
         return state
 
+    ##
+     # @brief Write JSON atomically (tmp + os.replace).
+     #
+     # @param path Target file path.
+     # @param state State dict to serialize.
+     #
+     # @note A crash mid-write never leaves a half-written task_state.json
+     # (the attention anchor would be lost and silently reset to defaults).
+     #
     @staticmethod
     def _atomic_write_json(path, state):
         """Write JSON atomically (tmp + os.replace) so a crash mid-write never
@@ -90,23 +138,46 @@ class StateTool(BaseTool):
             json.dump(state, f, indent=2, ensure_ascii=False)
         os.replace(tmp_path, path)
 
+    ##
+     # @brief Check whether a value contains non-ASCII characters.
+     #
+     # @param value str or list of str.
+     #
+     # @return True if any non-ASCII char is found, False otherwise.
+     #
     @staticmethod
     def _has_non_ascii(value):
-        """True if the value (str or list of str) contains non-ASCII chars."""
         if isinstance(value, list):
             return any(ord(ch) > 127 for v in value for ch in str(v or ""))
         return any(ord(ch) > 127 for ch in str(value or ""))
 
+    ##
+     # @brief Safely render todos/completed as a single string.
+     #
+     # @param value null, list, or bare str.
+     #
+     # @return '' for null, ', '-joined strings for lists, str(value) otherwise.
+     #
     @staticmethod
     def _coerce_list(value):
-        """Safely render todos/completed: null -> '', list -> joined
-        strings, anything else (e.g. a bare string) -> str(value)."""
         if value is None:
             return ""
         if isinstance(value, list):
             return ", ".join(str(x) for x in value if x is not None)
         return str(value)
 
+    ##
+     # @brief Update the task state (target/todos/completed).
+     #
+     # @param kwargs schema properties: target, todos, completed (all optional).
+     #
+     # @note Merge semantics: only provided fields are updated, so partial
+     # updates never wipe out the rest of the task state. ASCII-only
+     # enforcement (Language Policy) rejects non-ASCII values with a hint.
+     #
+     # @return (success_bool, result_string) result_string echoes the merged
+     # state on success so the model sees it immediately.
+     #
     def execute(self, **kwargs):
         # Session-scoped only: without an active session there is no place to
         # persist task state. Fail loudly instead of writing a global file
