@@ -1,15 +1,40 @@
-# src/tool/agent/memory_tool.py
+##
+ # @file src/tool/agent/memory_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Memory **Save** Tool For Agent.
+ # 
+ # @note Only allowed to write ASCII characters due to key words match.
+ #
+ # @note write memory: LLM -> MemoryTool
+ # @note read memory: In sysprompt (user's msg append).
+ #
 
 from ..base_tool import BaseTool
 
 class MemoryTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param memory_manager Memory Manager Class.
+     #
+     # @see src/core/memory.py
+     #
     def __init__(self, memory_manager):
         super().__init__()
         self.memory = memory_manager
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "remember"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Save important facts, user preferences, or architectural decisions to memory. "
@@ -18,7 +43,11 @@ class MemoryTool(BaseTool):
             "or scope='session' for facts that only apply to the current session branch. "
             "Use this when you learn something that should not be forgotten."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -35,7 +64,16 @@ class MemoryTool(BaseTool):
             },
             "required": ["name", "description", "content"]
         }
+    # End-def
 
+    ##
+     # @brief Sandbox protect.
+     #
+     # @note Check if target_path is strictly within workspace_dir.
+     # If it escapes the workspace, prompt user for manual y/N approval.
+     #
+     # @return rue if allowed (or inside workspace), False if denied by user.
+     #
     def execute(self, **kwargs):
         name = kwargs.get("name")
         description = kwargs.get("description", "")
@@ -86,3 +124,5 @@ class MemoryTool(BaseTool):
                 f"context on the next user turn."
             )
         return False, "Failed to save memory."
+    # End-def
+# End-class
