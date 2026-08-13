@@ -1,9 +1,18 @@
-# src/tool/agent/state_tool.py
+##
+ # @file src/tool/agent/state_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Update Task State (Agent's Target).
+ #
 
 import os
 import json
 from ..base_tool import BaseTool
 
+##
+ # @brief State Update Class.
+ # @todo 帮我补充这个文件中的注释
+ #
 class StateTool(BaseTool):
     def __init__(self, workspace_dir=None, session_manager=None):
         super().__init__(workspace_dir)
