@@ -1,4 +1,9 @@
-# .update_src/tool/filesystem/read_file_tool.py
+##
+ # @file src/tool/filesystem/read_file_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Read File Tool.
+ #
 
 import os
 from ..base_tool import BaseTool
