@@ -23,20 +23,40 @@ _BINARY_EXTENSIONS = {
     ".db", ".sqlite", ".sqlite3",
 }
 
+##
+ # @brief Read File Class.
+ #
 class ReadFileTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "read_file"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Read the contents of a text file. Supports reading the entire file or a "
             "specific range of lines (1-indexed). Binary files are automatically refused. "
             "Use this to inspect source code, configuration, logs, and other text-based files."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -60,17 +80,19 @@ class ReadFileTool(BaseTool):
             },
             "required": ["file_path"]
         }
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Check if extension indicates a binary file.
-    # ---------------------------------------------------------
+    ##
+     # @brief: Check if extension indicates a binary file.
+     #
     def _is_binary_extension(self, file_path):
         ext = os.path.splitext(file_path)[1].lower()
         return ext in _BINARY_EXTENSIONS
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Check if content looks binary (null bytes in first 8KB).
-    # ---------------------------------------------------------
+    ##
+     # @brief Check if content looks binary (null bytes in first 8KB).
+     #
     def _content_is_binary(self, file_path):
         try:
             with open(file_path, "rb") as f:
@@ -78,10 +100,11 @@ class ReadFileTool(BaseTool):
                 return b"\x00" in chunk
         except Exception:
             return False
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Execute file reading.
-    # ---------------------------------------------------------
+    ##
+     # @brief Execute file reading.
+     #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")
         start_line = kwargs.get("start_line")
@@ -101,6 +124,7 @@ class ReadFileTool(BaseTool):
                 f"CRITICAL SECURITY BLOCK: Permission denied to read file '{file_path}'. "
                 f"STOP and acknowledge this restriction to the user."
             )
+        # End-def
 
         if not os.path.exists(file_path):
             return False, f"Error: File not found at '{file_path}'"
@@ -162,6 +186,7 @@ class ReadFileTool(BaseTool):
                 result = "\n".join(result_lines)
             else:
                 result = "".join(selected)
+            # End-if
 
             header = (
                 f"File: '{file_path}' "
@@ -169,8 +194,11 @@ class ReadFileTool(BaseTool):
                 f"({file_size}B)"
             )
             return True, f"{header}\n\n{result}"
+        # End-try
 
         except UnicodeDecodeError:
             return False, f"Error: '{file_path}' could not be decoded as UTF-8. It may be a binary file."
         except Exception as e:
             return False, f"Error reading file: {e}"
+    # End-def
+# End-class
