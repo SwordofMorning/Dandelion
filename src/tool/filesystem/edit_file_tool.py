@@ -106,6 +106,7 @@ class EditFileTool(BaseTool):
                     f"Please ensure indentation, spaces, and line breaks match exactly. "
                     f"Consider using read_file to check the exact content."
                 )
+            # End-if
 
             new_content = content.replace(old_text, new_text)
 
@@ -113,7 +114,7 @@ class EditFileTool(BaseTool):
                 f.write(new_content)
 
             return True, f"Successfully edited file '{file_path}'."
-        # End-if
+        # End-try
 
         except UnicodeDecodeError:
             return False, f"Error: '{file_path}' could not be decoded as UTF-8."

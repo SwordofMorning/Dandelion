@@ -1,4 +1,9 @@
-# .update_src/tool/filesystem/grep_search_tool.py
+##
+ # @file src/tool/filesystem/grep_search_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Grep Search Tools.
+ #
 
 import os
 import re
@@ -36,13 +41,29 @@ _SKIP_EXTENSIONS = {
     ".o", ".obj", ".a", ".lib", ".class",
 }
 
+##
+ # @brief Grep Search Class.
+ #
 class GrepSearchTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "grep_search"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Search for a text pattern (regular expression) across files in a directory. "
@@ -52,7 +73,11 @@ class GrepSearchTool(BaseTool):
             "Use this to find function definitions, variable usages, configuration keys, "
             "or any text pattern in a codebase."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -82,10 +107,11 @@ class GrepSearchTool(BaseTool):
             },
             "required": ["pattern"]
         }
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Determine if a file should be searched based on its extension.
-    # ---------------------------------------------------------
+    ##
+     # @brief Determine if a file should be searched based on its extension.
+     #
     def _should_search(self, file_path, file_pattern):
         ext = os.path.splitext(file_path)[1].lower()
         basename = os.path.basename(file_path).lower()
@@ -106,10 +132,11 @@ class GrepSearchTool(BaseTool):
             return True
 
         return False
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Walk directory tree and collect searchable file paths.
-    # ---------------------------------------------------------
+    ## 
+     # @brief Walk directory tree and collect searchable file paths.
+     #
     def _collect_files(self, root_path, file_pattern):
         files = []
         for dirpath, dirnames, filenames in os.walk(root_path):
@@ -121,10 +148,11 @@ class GrepSearchTool(BaseTool):
                 if self._should_search(full_path, file_pattern):
                     files.append(full_path)
         return files
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Execute grep search.
-    # ---------------------------------------------------------
+    ## 
+     # @brief Execute grep search.
+     #
     def execute(self, **kwargs):
         pattern = kwargs.get("pattern", "")
         path = kwargs.get("path") or self.workspace_dir
@@ -179,6 +207,7 @@ class GrepSearchTool(BaseTool):
                 + (f" matching '{file_pattern}'" if file_pattern else "")
                 + "."
             )
+        # End-if
 
         # Search
         results = []
@@ -204,6 +233,7 @@ class GrepSearchTool(BaseTool):
                         if len(results) >= max_results or total_lines_scanned > _MAX_SCAN_LINES:
                             truncated = True
                             break
+                        # End-if
 
                         if regex.search(line):
                             # Make path relative to workspace for cleaner output
@@ -217,9 +247,14 @@ class GrepSearchTool(BaseTool):
                                 "line": line_no,
                                 "content": line.rstrip("\n")[:500]
                             })
+                        # End-if
+                    # End-for
+                # End-with
+            # End-try
 
             except (UnicodeDecodeError, PermissionError, OSError):
                 continue
+        # End-for
 
         # Build output
         if not results:
@@ -228,6 +263,7 @@ class GrepSearchTool(BaseTool):
                 f"No matches found for pattern '{pattern}'{flags_str} "
                 f"across {len(target_files)} files in '{path}'."
             )
+        # End-if
 
         output_lines = [
             f"Search results for '{pattern}'"
@@ -245,3 +281,5 @@ class GrepSearchTool(BaseTool):
             output_lines.append(f"\n[Results truncated at {max_results} matches or scan limit.]")
 
         return True, "\n".join(output_lines)
+    # End-def execute
+# End-class
