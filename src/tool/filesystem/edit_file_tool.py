@@ -1,15 +1,36 @@
-# src/tool/filesystem/edit_file_tool.py
+##
+ # @file src/tool/filesystem/edit_file_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Edit File Tools.
+ #
 
 import os
 from ..base_tool import BaseTool
 
+##
+ # @brief Edit File Class.
+ #
 class EditFileTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+     # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "edit_file"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Edit an existing file by replacing a specific exact text block with new text. "
@@ -17,7 +38,11 @@ class EditFileTool(BaseTool):
             "You MUST provide the EXACT old text (including correct indentation and line breaks) "
             "as it currently appears in the file. It will replace ALL occurrences of the old text."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -37,7 +62,11 @@ class EditFileTool(BaseTool):
             },
             "required": ["file_path", "old_text", "new_text"]
         }
+    # End-def
 
+    ##
+     # @brief Execute editing.
+     #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")
         old_text = kwargs.get("old_text", "")
@@ -84,8 +113,11 @@ class EditFileTool(BaseTool):
                 f.write(new_content)
 
             return True, f"Successfully edited file '{file_path}'."
+        # End-if
 
         except UnicodeDecodeError:
             return False, f"Error: '{file_path}' could not be decoded as UTF-8."
         except Exception as e:
             return False, f"Error editing file: {e}"
+    # End-def execute
+# End-class
