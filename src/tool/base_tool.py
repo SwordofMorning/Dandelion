@@ -36,7 +36,7 @@ class BaseTool:
     # End-def
 
     ##
-     # @brief Return tools'schema.
+     # @brief Return tool's schema.
      # like:
      # {
      #   type,
