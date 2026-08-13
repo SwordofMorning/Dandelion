@@ -112,6 +112,12 @@ class GrepSearchTool(BaseTool):
     ##
      # @brief Determine if a file should be searched based on its extension.
      #
+     # @param file_path Full path of the candidate file.
+     # @param file_pattern Optional glob pattern; when set, only basenames
+     # matching it are searched.
+     #
+     # @return True if the file should be searched, False otherwise.
+     #
     def _should_search(self, file_path, file_pattern):
         ext = os.path.splitext(file_path)[1].lower()
         basename = os.path.basename(file_path).lower()
@@ -137,6 +143,11 @@ class GrepSearchTool(BaseTool):
     ## 
      # @brief Walk directory tree and collect searchable file paths.
      #
+     # @param root_path Directory to walk.
+     # @param file_pattern Optional glob pattern forwarded to _should_search().
+     #
+     # @return List of searchable file paths (absolute).
+     #
     def _collect_files(self, root_path, file_pattern):
         files = []
         for dirpath, dirnames, filenames in os.walk(root_path):
@@ -152,6 +163,11 @@ class GrepSearchTool(BaseTool):
 
     ## 
      # @brief Execute grep search.
+     #
+     # @param kwargs schema properties: pattern, path, file_pattern,
+     # case_sensitive, max_results.
+     #
+     # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
         pattern = kwargs.get("pattern", "")

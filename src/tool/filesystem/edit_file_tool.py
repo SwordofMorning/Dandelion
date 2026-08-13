@@ -19,7 +19,7 @@ class EditFileTool(BaseTool):
      #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
-     # End-def
+    # End-def
 
     ##
      # @brief Return tool's name.
@@ -66,6 +66,10 @@ class EditFileTool(BaseTool):
 
     ##
      # @brief Execute editing.
+     #
+     # @param kwargs schema properties: file_path, old_text, new_text.
+     #
+     # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")

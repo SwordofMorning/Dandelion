@@ -51,10 +51,13 @@ class BaseTool:
     ##
      # @brief Sandbox protect.
      #
+     # @param target_path File path the tool wants to access.
+     # @param action_desc Human-readable action description for the approval prompt.
+     #
      # @note Check if target_path is strictly within workspace_dir.
      # If it escapes the workspace, prompt user for manual y/N approval.
      #
-     # @return rue if allowed (or inside workspace), False if denied by user.
+     # @return True if allowed (or inside workspace), False if denied by user.
      #
     def check_workspace_permission(self, target_path, action_desc="File Access"):
         # Relative path.

@@ -75,7 +75,13 @@ class ListDirectoryTool(BaseTool):
     ##
      # @brief Recursively build a tree representation string.
      #
-     # @todo 补充 @param
+     # @param root_path Directory to scan.
+     # @param max_depth Maximum recursion depth.
+     # @param filter_pattern Optional glob pattern (files only); None disables.
+     # @param current_depth Current recursion depth (starts at 1).
+     #
+     # @return Tree string with dirs as `name/` and files as
+     # `name  (size)`, or a permission/error notice; '' when depth exceeded.
      #
     def _build_tree(self, root_path, max_depth, filter_pattern, current_depth):
         if current_depth > max_depth:
@@ -132,6 +138,10 @@ class ListDirectoryTool(BaseTool):
 
     ##
      # @brief Execute directory listing.
+     #
+     # @param kwargs schema properties: path, recursive, depth, filter_pattern.
+     #
+     # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
         path = kwargs.get("path") or self.workspace_dir

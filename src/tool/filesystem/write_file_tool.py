@@ -2,7 +2,7 @@
  # @file src/tool/filesystem/write_file_tool.py
  # @date 2026/08/13
  # 
- # @brief Read File Tool.
+ # @brief Write File Tool.
  #
 
 import os
@@ -65,6 +65,10 @@ class WriteFileTool(BaseTool):
 
     ##
      # @brief Execute file writing.
+     #
+     # @param kwargs schema properties: file_path, content.
+     #
+     # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")

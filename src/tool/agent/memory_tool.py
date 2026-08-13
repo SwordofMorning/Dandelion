@@ -12,6 +12,9 @@
 
 from ..base_tool import BaseTool
 
+##
+ # @brief Memory Class.
+ #
 class MemoryTool(BaseTool):
     ##
      # @brief Constructor.
@@ -67,9 +70,14 @@ class MemoryTool(BaseTool):
     # End-def
 
     ##
-     # @brief Sandbox protect.
+     # @brief Save memory entry.
      #
-     # @return rue if allowed (or inside workspace), False if denied by user.
+     # @param kwargs schema properties: name, description, tags, content, scope.
+     #
+     # @note ASCII-only enforcement: non-ASCII values are rejected because
+     # internal keyword retrieval splits on ASCII whitespace.
+     #
+     # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
         name = kwargs.get("name")

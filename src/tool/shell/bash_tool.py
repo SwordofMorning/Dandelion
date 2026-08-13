@@ -125,7 +125,7 @@ class BashTool(BaseTool):
     # End-def _is_safe_command
 
     ##
-     # @brief execute shell command.
+     # @brief Execute shell command.
      #
      # @param kwargs schema properties.
      # 

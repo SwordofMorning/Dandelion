@@ -83,7 +83,11 @@ class ReadFileTool(BaseTool):
     # End-def
 
     ##
-     # @brief: Check if extension indicates a binary file.
+     # @brief Check if extension indicates a binary file.
+     #
+     # @param file_path Target file path.
+     #
+     # @return True if the extension is in the known binary set.
      #
     def _is_binary_extension(self, file_path):
         ext = os.path.splitext(file_path)[1].lower()
@@ -92,6 +96,10 @@ class ReadFileTool(BaseTool):
 
     ##
      # @brief Check if content looks binary (null bytes in first 8KB).
+     #
+     # @param file_path Target file path.
+     #
+     # @return True if null bytes are found in the first 8KB, False otherwise.
      #
     def _content_is_binary(self, file_path):
         try:
@@ -104,6 +112,11 @@ class ReadFileTool(BaseTool):
 
     ##
      # @brief Execute file reading.
+     #
+     # @param kwargs schema properties: file_path, start_line, end_line,
+     # show_line_numbers.
+     #
+     # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")
@@ -124,7 +137,7 @@ class ReadFileTool(BaseTool):
                 f"CRITICAL SECURITY BLOCK: Permission denied to read file '{file_path}'. "
                 f"STOP and acknowledge this restriction to the user."
             )
-        # End-def
+        # End-if
 
         if not os.path.exists(file_path):
             return False, f"Error: File not found at '{file_path}'"

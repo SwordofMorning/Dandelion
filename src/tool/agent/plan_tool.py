@@ -104,9 +104,12 @@ class PlanTool(BaseTool):
     # End-def
     
     ##
-     # @brief Sandbox protect.
+     # @brief Run task decomposition via a separate LLM call.
      #
-     # @return rue if allowed (or inside workspace), False if denied by user.
+     # @param kwargs schema properties: complex_task, max_subtasks.
+     #
+     # @return (success_bool, result_string) result_string is the JSON TaskPlan
+     # on success, or the error message on failure.
      #
     def execute(self, **kwargs):
         complex_task = kwargs.get("complex_task", "")

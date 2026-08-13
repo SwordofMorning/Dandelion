@@ -8,7 +8,7 @@
 from ..base_tool import BaseTool
 
 ##
- # @Brief Load Skill Class.
+ # @brief Load Skill Class.
  #
 class LoadSkillTool(BaseTool):
     ##
@@ -36,6 +36,9 @@ class LoadSkillTool(BaseTool):
         return "Load the full markdown content of a specific skill by its name."
     # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object", 
@@ -47,7 +50,12 @@ class LoadSkillTool(BaseTool):
     # End-def
 
     ##
-     # @brief Return tool's schema.
+     # @brief Execute skill loading.
+     #
+     # @param kwargs schema properties: name.
+     #
+     # @return (success_bool, result_string) result_string is the skill's full
+     # markdown content on success, or the error message on failure.
      #
     def execute(self, **kwargs):
         name = kwargs.get("name", "")

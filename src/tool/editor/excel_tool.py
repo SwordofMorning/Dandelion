@@ -133,7 +133,7 @@ class ReadExcelTool(BaseTool):
         ]
         return True, "\n".join(meta) + "\n" + table_str
     # End-def execute
-# End-def
+# End-class
 
 ##
  # @brief Excel Write Class.
@@ -229,6 +229,13 @@ class WriteExcelTool(BaseTool):
             return False, f"Error writing Excel: {str(e)}"
     # End-def execute
 
+    ##
+     # @brief Parse a GitHub-flavored Markdown table into a pandas DataFrame.
+     #
+     # @param md Markdown table string (GFM).
+     #
+     # @return pandas.DataFrame; empty DataFrame when no data lines exist.
+     #
     def _parse_markdown_table(self, md: str):
         import pandas as pd
         import re
@@ -253,4 +260,4 @@ class WriteExcelTool(BaseTool):
         data = rows[1:] if len(rows) > 1 else []
         return pd.DataFrame(data, columns=headers)
     # End-def
-# End-def
+# End-class

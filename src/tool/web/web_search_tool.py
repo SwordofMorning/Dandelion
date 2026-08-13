@@ -41,7 +41,7 @@ class WebSearchTool(BaseTool):
 
     ##
      # @brief Return tool's name.
-     #    
+     #
     def get_name(self):
         return "web_search"
     # End-def
@@ -210,4 +210,4 @@ class WebSearchTool(BaseTool):
 
         return "\n".join(lines)
     # End-def
-# End-def
+# End-class
