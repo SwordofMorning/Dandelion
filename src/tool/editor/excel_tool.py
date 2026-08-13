@@ -89,10 +89,13 @@ class ReadExcelTool(BaseTool):
             file_path = os.path.join(self.workspace_dir, file_path)
         file_path = os.path.abspath(file_path)
 
-        if not self.check_workspace_permission(file_path, "READ Excel File"):
-            return False, f"Error: Permission denied for '{file_path}'."
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(file_path, action_desc="READ Excel File")
+        if err:
+            return False, err
+        # End-if
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(resolved):
             return False, f"Error: File not found: {file_path}"
 
         sheet = kwargs.get("sheet", 0)
@@ -101,7 +104,7 @@ class ReadExcelTool(BaseTool):
 
         try:
             df = pd.read_excel(
-                file_path,
+                resolved,
                 sheet_name=sheet,
                 header=header_row,
                 nrows=max_rows if max_rows is not None else None,
@@ -212,18 +215,21 @@ class WriteExcelTool(BaseTool):
             file_path = os.path.join(self.workspace_dir, file_path)
         file_path = os.path.abspath(file_path)
 
-        if not self.check_workspace_permission(file_path, "WRITE Excel File"):
-            return False, f"Error: Permission denied for '{file_path}'."
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(file_path, action_desc="WRITE Excel File")
+        if err:
+            return False, err
+        # End-if
 
         try:
             df = self._parse_markdown_table(md_table)
             if df.empty:
                 return False, "Error: No valid data parsed from markdown table."
 
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+            os.makedirs(os.path.dirname(resolved), exist_ok=True)
+            with pd.ExcelWriter(resolved, engine="openpyxl") as writer:
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-            
+
             return True, f"Successfully wrote {df.shape[0]} rows to '{file_path}'."
         except Exception as e:
             return False, f"Error writing Excel: {str(e)}"

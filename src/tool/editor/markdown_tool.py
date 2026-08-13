@@ -80,44 +80,40 @@ class MarkdownTool(BaseTool):
         action = kwargs.get("action")
         file_path = kwargs.get("file_path")
         content = kwargs.get("content", "")
-        
+
         if not file_path.endswith(".md"):
             return False, "Error: Target file must have a .md extension."
-            
-        # SECURITY INJECTION: Check workspace permission
-        if not self.check_workspace_permission(file_path, action_desc=f"{action.upper()} Markdown File"):
-            # Cognitive Interrupt Error Message
-            return False, (
-                f"CRITICAL SECURITY BLOCK: The human user explicitly DENIED permission "
-                f"to {action} the file '{file_path}'. STOP IMMEDIATELY. "
-                f"Do not attempt any workarounds. Acknowledge this restriction to the user."
-            )
+
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(file_path, action_desc=f"{action.upper()} Markdown File")
+        if err:
+            return False, err
         # End-if
-            
+
         try:
             if action == "read":
-                if not os.path.exists(file_path):
+                if not os.path.exists(resolved):
                     return False, f"Error: File not found at {file_path}"
-                with open(file_path, "r", encoding="utf-8") as f:
+                with self._open_secure(resolved, "r") as f:
                     return True, f.read()
-                    
+
             elif action == "write":
                 # Ensure directory exists
-                os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
-                with open(file_path, "w", encoding="utf-8") as f:
+                os.makedirs(os.path.dirname(resolved), exist_ok=True)
+                with self._open_secure(resolved, "w") as f:
                     f.write(content)
                 return True, f"Successfully written to {file_path}"
-                
+
             elif action == "append":
-                if not os.path.exists(file_path):
+                if not os.path.exists(resolved):
                     return False, f"Error: Cannot append. File not found at {file_path}"
-                with open(file_path, "a", encoding="utf-8") as f:
+                with self._open_secure(resolved, "a") as f:
                     f.write("\n" + content)
                 return True, f"Successfully appended to {file_path}"
-                
+
             else:
                 return False, f"Error: Unknown action '{action}'"
-                
+
         except Exception as e:
             return False, f"Error performing {action} on {file_path}: {str(e)}"
     # End-def

@@ -190,16 +190,15 @@ class GrepSearchTool(BaseTool):
             path = os.path.join(self.workspace_dir, path)
         path = os.path.abspath(path)
 
-        # Security sandbox check
-        if not self.check_workspace_permission(path, action_desc=f"GREP Search in '{path}'"):
-            return False, (
-                f"CRITICAL SECURITY BLOCK: Permission denied to search in '{path}'. "
-                f"STOP and acknowledge this restriction to the user."
-            )
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(path, action_desc=f"GREP Search in '{path}'")
+        if err:
+            return False, err
+        # End-if
 
-        if not os.path.exists(path):
+        if not os.path.exists(resolved):
             return False, f"Error: Directory not found at '{path}'"
-        if not os.path.isdir(path):
+        if not os.path.isdir(resolved):
             return False, f"Error: Path is not a directory: '{path}'"
 
         # Compile regex
@@ -211,7 +210,7 @@ class GrepSearchTool(BaseTool):
 
         # Collect files
         try:
-            target_files = self._collect_files(path, file_pattern)
+            target_files = self._collect_files(resolved, file_pattern)
         except PermissionError:
             return False, f"Error: Permission denied while scanning directories in '{path}'."
         except Exception as e:
@@ -237,12 +236,12 @@ class GrepSearchTool(BaseTool):
 
             try:
                 # Quick binary check on first chunk
-                with open(file_path, "rb") as f:
+                with self._open_secure(file_path, "rb", encoding=None) as f:
                     head = f.read(4096)
                     if b"\x00" in head:
                         continue
 
-                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                with self._open_secure(file_path, "r", errors="replace") as f:
                     for line_no, line in enumerate(f, 1):
                         total_lines_scanned += 1
 

@@ -158,27 +158,27 @@ class ListDirectoryTool(BaseTool):
             path = os.path.join(self.workspace_dir, path)
         path = os.path.abspath(path)
 
-        if not self.check_workspace_permission(path, action_desc=f"LIST Directory at '{path}'"):
-            return False, (
-                f"CRITICAL SECURITY BLOCK: Permission denied to list directory '{path}'. "
-                f"STOP and acknowledge this restriction to the user."
-            )
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(path, action_desc=f"LIST Directory at '{path}'")
+        if err:
+            return False, err
+        # End-if
 
-        if not os.path.exists(path):
+        if not os.path.exists(resolved):
             return False, f"Error: Directory not found at '{path}'"
-        if not os.path.isdir(path):
+        if not os.path.isdir(resolved):
             return False, f"Error: Path is not a directory: '{path}'"
 
         try:
             if recursive:
-                tree = self._build_tree(path, depth, filter_pattern, 1)
+                tree = self._build_tree(resolved, depth, filter_pattern, 1)
                 header = f"Directory tree of '{path}' (depth={depth})"
                 if filter_pattern:
                     header += f" [filter: {filter_pattern}]"
                 result = f"{header}:\n\n{tree.rstrip()}" if tree else f"{header}:\n\n(no matching entries)"
             # End-if
             else:
-                entries = sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower()))
+                entries = sorted(os.scandir(resolved), key=lambda e: (not e.is_dir(), e.name.lower()))
                 lines = []
                 for entry in entries:
                     name = entry.name

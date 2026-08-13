@@ -81,12 +81,11 @@ class WriteFileTool(BaseTool):
             file_path = os.path.join(self.workspace_dir, file_path)
         file_path = os.path.abspath(file_path)
 
-        # Security sandbox check
-        if not self.check_workspace_permission(file_path, action_desc=f"WRITE File at '{file_path}'"):
-            return False, (
-                f"CRITICAL SECURITY BLOCK: Permission denied to write file '{file_path}'. "
-                f"STOP and acknowledge this restriction to the user."
-            )
+        # SECURITY: interactive approval + fail-safe re-verify on resolved path.
+        resolved, err = self._prepare_path(file_path, action_desc=f"WRITE File at '{file_path}'")
+        if err:
+            return False, err
+        # End-if
 
         # Check content size
         content_bytes = len(content.encode("utf-8"))
@@ -97,15 +96,15 @@ class WriteFileTool(BaseTool):
             )
 
         # Determine if this is a new file or overwrite
-        file_existed = os.path.exists(file_path)
+        file_existed = os.path.exists(resolved)
 
         try:
             # Ensure parent directories exist
-            parent_dir = os.path.dirname(file_path)
+            parent_dir = os.path.dirname(resolved)
             if parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
 
-            with open(file_path, "w", encoding="utf-8") as f:
+            with self._open_secure(resolved, "w") as f:
                 f.write(content)
 
             action_verb = "Updated" if file_existed else "Created"
