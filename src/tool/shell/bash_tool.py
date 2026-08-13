@@ -4,7 +4,9 @@
  # 
  # @brief Direct Shell Call.
  #
- # @note Environment specified in sysprompt, which allow LLm to know using PS on Windows.
+ # @note Shell selection: Bash is preferred when available (also on Windows,
+ # e.g. Git Bash); PowerShell is used only as the fallback. The shell
+ # environment is described in sysprompt so the LLM knows which one runs.
  #
 
 import subprocess
