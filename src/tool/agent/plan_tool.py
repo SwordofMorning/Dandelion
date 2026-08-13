@@ -4,9 +4,11 @@
  # 
  # @brief  Use LLM to split the task.
  # 
- # @note This tool does not perform any specific actions. 
- # It calls a separate LLM (without polluting the main thread's memory) 
- # to translate complex natural language tasks into a structured JSON task array.
+ # @note This tool does not perform any specific actions.
+ # It calls a separate LLM (without polluting the main thread's memory)
+ # to translate complex natural language tasks into a structured JSON
+ # TaskPlan object with top-level fields: overall_goal, subtasks, and
+ # execution_strategy (integration_notes optional).
  #
 
 import json
