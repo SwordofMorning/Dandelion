@@ -69,9 +69,6 @@ class MemoryTool(BaseTool):
     ##
      # @brief Sandbox protect.
      #
-     # @note Check if target_path is strictly within workspace_dir.
-     # If it escapes the workspace, prompt user for manual y/N approval.
-     #
      # @return rue if allowed (or inside workspace), False if denied by user.
      #
     def execute(self, **kwargs):

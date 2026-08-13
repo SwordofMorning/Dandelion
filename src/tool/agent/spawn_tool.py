@@ -1,17 +1,32 @@
-# src/tool/agent/spawn_tool.py
-
-# Brief: fork() a new subagent like threads.
+##
+ # @file src/tool/agent/spawn_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief fork() a new subagent like threads.
+ #
 
 from ..base_tool import BaseTool
 from ...subagent.registry import TOOLSET_REGISTRY
 
+##
+ # @brief Fork Subagent Class.
+ #
 class SpawnSubagentTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param pool Subagent pool
+     #
+     # @see src/subagent/pool.py
+     #
     def __init__(self, pool):
         super().__init__()
         self.pool = pool
+    # End-def
 
     def get_name(self):
         return "spawn_subagent"
+    # End-def
 
     def get_description(self):
         return (
@@ -19,6 +34,7 @@ class SpawnSubagentTool(BaseTool):
             "The SubAgent runs in an isolated context and returns a structured summary. "
             "Use this for complex, self-contained sub-tasks to keep the main context clean."
         )
+    # End-def
 
     def get_schema(self):
         return {
@@ -44,6 +60,7 @@ class SpawnSubagentTool(BaseTool):
             },
             "required": ["task_description", "toolset", "role_prompt"]
         }
+    # End-def
 
     def execute(self, **kwargs):
         task_desc = kwargs.get("task_description", "")
@@ -67,7 +84,10 @@ class SpawnSubagentTool(BaseTool):
         )
         
         return True, result.to_context_string()
+    # End-def
 
+##
+ # @todo Why 2 Spawn Class Here? this called by who?
 class RestrictedSpawnTool(BaseTool):
     def __init__(self, pool, parent_subagent, current_depth, max_depth):
         super().__init__()
