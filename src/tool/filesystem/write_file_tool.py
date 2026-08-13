@@ -1,4 +1,9 @@
-# .update_src/tool/filesystem/write_file_tool.py
+##
+ # @file src/tool/filesystem/write_file_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Read File Tool.
+ #
 
 import os
 from ..base_tool import BaseTool
@@ -6,13 +11,29 @@ from ..base_tool import BaseTool
 # Maximum file size to write (5 MB)
 _MAX_WRITE_BYTES = 5 * 1024 * 1024
 
+##
+ # @brief Write File Class.
+ #
 class WriteFileTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "write_file"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Write content to a file. Creates the file if it does not exist, "
@@ -20,7 +41,11 @@ class WriteFileTool(BaseTool):
             "WARNING: To prevent API timeouts, do NOT write massive files (> 200 lines) in a single call. "
             "For large files, write the initial chunk first, then use 'edit_file' or alternative chunked methods."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -36,10 +61,11 @@ class WriteFileTool(BaseTool):
             },
             "required": ["file_path", "content"]
         }
+    # End-def
 
-    # ---------------------------------------------------------
-    # Brief: Execute file writing.
-    # ---------------------------------------------------------
+    ##
+     # @brief Execute file writing.
+     #
     def execute(self, **kwargs):
         file_path = kwargs.get("file_path", "")
         content = kwargs.get("content", "")
@@ -85,6 +111,7 @@ class WriteFileTool(BaseTool):
                 f"  Size: {content_bytes}B ({content_bytes / 1024:.1f} KB)\n"
                 f"  Lines: {lines}"
             )
+        # End-try
 
         except PermissionError:
             return False, f"Error: Permission denied when writing to '{file_path}'."
@@ -92,3 +119,5 @@ class WriteFileTool(BaseTool):
             return False, f"Error writing file: {e}"
         except Exception as e:
             return False, f"Unexpected error writing file: {e}"
+     # End-def execute
+# End-class
