@@ -1,5 +1,5 @@
 ##
- # @file # src/tool/base_tool.py
+ # @file src/tool/base_tool.py
  # @date 2026/08/013
  # 
  # @brief Tool Class.
