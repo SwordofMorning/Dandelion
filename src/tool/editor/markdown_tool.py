@@ -1,15 +1,39 @@
-# src/tool/editor/markdown_tool.py
+##
+ # @file src/tool/editor/markdown_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Markdown Tool.
+ # Same as Write file, but need to load markdown write skill firstly.
+ #
+ # @todo need to add some 'edit/modify' function.
+ #
 
 import os
 from ..base_tool import BaseTool
 
+##
+ # @brief Markdown Class.
+ #
 class MarkdownTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "markdown_editor"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Read, write, or append to a Markdown (.md) file. "
@@ -18,7 +42,11 @@ class MarkdownTool(BaseTool):
             "WARNING: To avoid API timeouts, if generating large content (> 200 lines), "
             "use 'write' for the first chunk and 'append' for subsequent chunks iteratively."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object", 
@@ -39,7 +67,15 @@ class MarkdownTool(BaseTool):
             }, 
             "required": ["action", "file_path"]
         }
+    # End-def
 
+    ##
+     # @brief Run tool.
+     #
+     # @param kwargs schema properties.
+     #
+     # @return (success_bool, result_string)
+     #
     def execute(self, **kwargs):
         action = kwargs.get("action")
         file_path = kwargs.get("file_path")
@@ -56,6 +92,7 @@ class MarkdownTool(BaseTool):
                 f"to {action} the file '{file_path}'. STOP IMMEDIATELY. "
                 f"Do not attempt any workarounds. Acknowledge this restriction to the user."
             )
+        # End-if
             
         try:
             if action == "read":
@@ -83,3 +120,5 @@ class MarkdownTool(BaseTool):
                 
         except Exception as e:
             return False, f"Error performing {action} on {file_path}: {str(e)}"
+    # End-def
+# End-class

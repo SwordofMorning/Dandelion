@@ -1,15 +1,37 @@
-# src/tool/editor/excel_tool.py
+##
+ # @file src/tool/editor/excel_tool.py
+ # @date 2026/08/13
+ # 
+ # @brief Excel Tool, with 2 class.
+ # A general excel (xlsx) read tool, but might not suitable for xls (old version).
+ #
 
 import os
 from ..base_tool import BaseTool
 
+##
+ # @brief Excel Read Class.
+ #
 class ReadExcelTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "read_excel"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Read an Excel file (.xlsx/.xls) and return the specified worksheet as a Markdown table. "
@@ -18,7 +40,11 @@ class ReadExcelTool(BaseTool):
             "header_row (0-based index or null, default 0), "
             "max_rows (limit data rows to save tokens, default 100)."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -30,7 +56,15 @@ class ReadExcelTool(BaseTool):
             },
             "required": ["file_path"]
         }
+    # End-def
 
+    ##
+     # @brief Run tool.
+     #
+     # @param kwargs schema properties.
+     #
+     # @return (success_bool, result_string)
+     #
     def execute(self, **kwargs):
         # Dynamic Import
         try:
@@ -98,21 +132,42 @@ class ReadExcelTool(BaseTool):
             ""
         ]
         return True, "\n".join(meta) + "\n" + table_str
+    # End-def execute
+# End-def
 
-
+##
+ # @brief Excel Write Class.
+ #
 class WriteExcelTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param workspace_dir Default to current directory if not explicitly provided.
+     #
     def __init__(self, workspace_dir=None):
         super().__init__(workspace_dir)
+    # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "write_excel"
+    # End-def
 
+    ##
+     # @brief Return tool's description.
+     #
     def get_description(self):
         return (
             "Write tabular data to an Excel file (.xlsx) from a Markdown table string. "
             "Overwrites the file if it exists."
         )
+    # End-def
 
+    ##
+     # @brief Return tool's schema.
+     #
     def get_schema(self):
         return {
             "type": "object",
@@ -123,7 +178,15 @@ class WriteExcelTool(BaseTool):
             },
             "required": ["file_path", "markdown_table"]
         }
+    # End-def
 
+    ##
+     # @brief Run tool.
+     #
+     # @param kwargs schema properties.
+     #
+     # @return (success_bool, result_string)
+     #
     def execute(self, **kwargs):
         # Dynamic Import
         try:
@@ -164,26 +227,30 @@ class WriteExcelTool(BaseTool):
             return True, f"Successfully wrote {df.shape[0]} rows to '{file_path}'."
         except Exception as e:
             return False, f"Error writing Excel: {str(e)}"
+    # End-def execute
 
     def _parse_markdown_table(self, md: str):
         import pandas as pd
         import re
         lines = [line.strip() for line in md.strip().split("\n") if line.strip()]
         data_lines = [line for line in lines if not re.match(r"^\|[\s\-\|:]+\|$", line)]
-        
+
         if not data_lines:
             return pd.DataFrame()
-            
+
         rows = []
         for line in data_lines:
             if line.startswith("|") and line.endswith("|"):
                 line = line[1:-1]
             cells = [cell.strip() for cell in line.split("|")]
             rows.append(cells)
-            
+        # End-for
+
         if not rows:
             return pd.DataFrame()
-            
+
         headers = rows[0]
         data = rows[1:] if len(rows) > 1 else []
         return pd.DataFrame(data, columns=headers)
+    # End-def
+# End-def
