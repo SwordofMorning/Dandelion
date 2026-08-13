@@ -88,6 +88,8 @@ class WebSearchTool(BaseTool):
     ##
      # @brief Execute web search via Tavily.
      #
+     # @param kwargs schema properties.
+     #
      # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):

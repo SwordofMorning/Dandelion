@@ -105,6 +105,8 @@ class BaseTool:
     ##
      # @brief Run tool.
      #
+     # @param kwargs schema properties.
+     #
      # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
