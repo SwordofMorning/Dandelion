@@ -6,6 +6,7 @@
  #
 
 from .shell.bash_tool import BashTool
+from .shell.ssh_tool import SSHTool
 from .agent.skill_tool import LoadSkillTool
 from .agent.plan_tool import PlanTool
 from .agent.spawn_tool import SpawnSubagentTool

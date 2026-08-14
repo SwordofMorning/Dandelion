@@ -240,3 +240,101 @@ def load_api_config(file_path):
         "EFFORT": active_profile.get("effort", "medium"),
     }
 # End-def
+
+##
+ # ========================================
+ # @section III. Remote Device Config
+ # ========================================
+ #
+
+##
+ # @brief Load remote device config (devices.yaml).
+ #
+ # @param devices_path Path to devices.yaml; default: config_dir()/devices.yaml.
+ #
+ # @return (devices_dict, errors_list). devices_dict maps alias -> cfg
+ # (each cfg carries an "alias" key and normalized defaults); errors_list
+ # holds per-entry validation errors (invalid entries are skipped).
+ #
+ # @note Entry fields:
+ #   ssh:    type, host, user required; auth = key_path or password (>=1);
+ #           optional port(22), shell, timeout(120), security{allow,block}.
+ #   serial: type, port required; optional baudrate(115200), parity, bytesize,
+ #           stopbits, newline, encoding, buf_size(65536), read_timeout(3).
+ #   Unknown types are rejected. The file lives under the config dir
+ #   (sandbox-shielded, agent tools cannot read it).
+ #
+def load_devices_config(devices_path=None):
+    if devices_path is None:
+        try:
+            from mk.lib.paths import config_dir
+            devices_path = os.path.join(config_dir(), "devices.yaml")
+        except Exception:
+            devices_path = os.path.join(os.getcwd(), "devices.yaml")
+        # End-try
+    # End-if
+
+    if not os.path.exists(devices_path):
+        return {}, []
+    # End-if
+
+    import yaml
+
+    try:
+        with open(devices_path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        # End-with
+    except yaml.YAMLError as e:
+        return {}, [f"devices.yaml parse error: {e}"]
+    # End-try
+
+    if not isinstance(raw, dict):
+        return {}, ["devices.yaml root must be a mapping of aliases"]
+    # End-if
+
+    devices = {}
+    errors = []
+    for alias, entry in raw.items():
+        if not isinstance(entry, dict):
+            errors.append(f"Device '{alias}': entry must be a mapping.")
+            continue
+        # End-if
+
+        dtype = str(entry.get("type", "")).strip().lower()
+        if dtype not in ("ssh", "serial"):
+            errors.append(f"Device '{alias}': unknown type '{entry.get('type')}'. Allowed: ssh, serial.")
+            continue
+        # End-if
+
+        if dtype == "ssh":
+            if not entry.get("host"):
+                errors.append(f"Device '{alias}': missing required field 'host'.")
+                continue
+            # End-if
+            if not entry.get("user"):
+                errors.append(f"Device '{alias}': missing required field 'user'.")
+                continue
+            # End-if
+            if not entry.get("key_path") and not entry.get("password"):
+                errors.append(f"Device '{alias}': missing auth (need 'key_path' or 'password').")
+                continue
+            # End-if
+            entry.setdefault("port", 22)
+            entry.setdefault("timeout", 120)
+        else:
+            if not entry.get("port"):
+                errors.append(f"Device '{alias}': missing required field 'port'.")
+                continue
+            # End-if
+            entry.setdefault("baudrate", 115200)
+            entry.setdefault("read_timeout", 3)
+            entry.setdefault("buf_size", 65536)
+        # End-if
+
+        entry["alias"] = alias
+        entry["type"] = dtype
+        devices[alias] = entry
+    # End-for
+
+    return devices, errors
+# End-def
