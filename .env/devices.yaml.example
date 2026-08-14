@@ -1,31 +1,36 @@
 # ============================================================
 # Dandelion Remote Device Config (Example)
 # ============================================================
-# 用法：
-#   1. 复制本文件为 .env/devices.yaml（与 api.cfg 同级）。
-#   2. 按实际设备填写 host / user / 认证信息。
-#   3. 凭据（password / key_path）仅存放于 .env 目录：
-#      - .env 被沙箱规则屏蔽，Agent 工具无法读取本文件；
-#      - 建议限制目录权限（Windows ACL / Linux chmod 600）。
+# Usage:
+#   1. Copy this file to .env/devices.yaml (same dir as api.cfg).
+#   2. Fill in host / user / credentials for your devices.
+#   3. Credentials (password / key_path) live ONLY under the .env dir:
+#      - .env is sandbox-shielded: agent tools cannot read this file;
+#      - restrict directory permissions (Windows ACL / Linux chmod 600).
 #
-# 认证优先级：key_path（密钥）优先，其次 password（密码）。
-# 密码为明文存放，适用于"无公钥、同型号通用密码"的嵌入式开发板。
+# Auth priority: key_path (key) first, then password.
+# Password is stored in plaintext; intended for embedded boards that have
+# no public key and share a common password per board model.
 #
-# security 字段（可选）：
-#   allow: 从默认阻断动词列表中豁免（默认列表见 src/tool/shell/ssh_tool.py 的 _BLOCKED_VERBS）
-#   block: 额外追加阻断动词
+# Optional per-device "security" map:
+#   allow: exempt verbs from the default blocked list
+#          (defaults: src/tool/shell/ssh_tool.py, _BLOCKED_VERBS)
+#   block: add extra blocked verbs
 #
-# 默认安全规则（语义判定，非目录一刀切）：
-#   - P1: 命令中含 ".env" 子串 -> 阻断
-#   - R1: 访问 /etc/shadow、/etc/gshadow -> 阻断
-#   - R2: rm/mv/cp 目标为顶级关键目录（/、/etc、/boot 等）或穿越到关键目录 -> 阻断；
-#         /etc/init.d 等子路径与普通相对路径放行
-#   - R3: mkfs*/fdisk/parted/flash_erase/nandwrite/ubiformat/passwd/
-#         shutdown/poweroff/halt/reboot/init 0|1|6 等 -> 默认阻断（可经 allow 豁免）
-#   - R4: dd 写入 /dev/mtd*、/dev/mmcblk*、/dev/sd* 等块设备 -> 阻断；读取放行
+# Default safety rules (semantic analysis, not blanket path blocking):
+#   P1: command containing the ".env" substring -> blocked
+#   R1: access to /etc/shadow, /etc/gshadow -> blocked
+#   R2: rm/mv/cp targeting top-level critical dirs (/, /etc, /boot, ...)
+#       or traversing into them -> blocked; sub-paths such as /etc/init.d
+#       and normal relative paths are allowed
+#   R3: mkfs*/fdisk/parted/flash_erase/nandwrite/ubiformat/passwd/
+#       shutdown/poweroff/halt/reboot/init 0|1|6 -> blocked by default
+#       (exempt via security.allow)
+#   R4: dd writing to /dev/mtd*, /dev/mmcblk*, /dev/sd* etc. -> blocked;
+#       dd reading (backup images) is allowed
 
 # ------------------------------------------------------------
-# 例 1：Ubuntu 主机（密钥认证）
+# Example 1: Ubuntu host (key auth)
 # ------------------------------------------------------------
 ubuntu:
   type: ssh
@@ -37,21 +42,21 @@ ubuntu:
   timeout: 120
 
 # ------------------------------------------------------------
-# 例 2：嵌入式开发板（无公钥，同型号通用密码）
+# Example 2: Embedded board (no public key, shared plaintext password)
 # ------------------------------------------------------------
 board_ssh:
   type: ssh
   host: 192.168.1.2
   user: root
-  password: <同型号设备通用密码>
+  password: <shared-password-for-this-board-model>
   shell: sh
   timeout: 60
   security:
-    allow: [reboot]      # 示例：允许重启板子（默认阻断）
-    # block: [touch]     # 示例：额外阻断某动词
+    allow: [reboot]      # example: allow reboot (blocked by default)
+    # block: [touch]     # example: add an extra blocked verb
 
 # ------------------------------------------------------------
-# 例 3：串口设备（预留，serial 工具暂缓实现）
+# Example 3: Serial device (reserved; serial tool deferred)
 # ------------------------------------------------------------
 # board_serial:
 #   type: serial

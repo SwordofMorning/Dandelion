@@ -42,7 +42,7 @@ class SafeLLMClient:
      # @param model_id Model identifier for the main agent.
      # @param sdk_type SDK type ("Anthropic", "OpenAI", "Gemini", "AI Studio", "NVIDIA").
      # @param all_models Full model list for sub-agent routing.
-     # @param thinking "enabled" or "disabled" — extended thinking toggle for the main agent.
+     # @param thinking "enabled" or "disabled" - extended thinking toggle for the main agent.
      # @param effort Reasoning effort: "low", "medium", "high", or "max".
      # @param logger Optional SessionManager for logging final API payloads (post-injection).
      #

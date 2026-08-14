@@ -705,7 +705,7 @@ class MyAgent:
         # 2. Main LLM API Call
         # Send-time safety clamp: even if the heuristic estimate undershoots
         # (or compaction was skipped), never let history + output + overhead
-        # exceed MAX_CONTEXT_TOKENS — degrade the output size instead of
+        # exceed MAX_CONTEXT_TOKENS - degrade the output size instead of
         # getting a provider 400 context-length rejection.
         max_tokens = int(self.config["MAX_TOKENS"])
         remaining_budget = (self._soft_token_limit()
