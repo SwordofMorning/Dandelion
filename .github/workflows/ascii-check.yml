@@ -1,0 +1,35 @@
+name: ASCII-Only Check
+
+on:
+  push:
+    branches:
+      - "master"
+  pull_request:
+    branches:
+      - "master"
+
+permissions:
+  contents: read
+
+jobs:
+  # 1. ASCII Check Job: gate all PRs and pushes targeting master.
+  #    Master must stay ASCII-Only: any non-ASCII character found under
+  #    src/ fails this job and blocks the merge / push.
+  ascii-check:
+    name: ASCII-Only Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: ASCII-Only Check
+        shell: bash
+        run: |
+          # test/ascii_check.py prints findings in clang-format style
+          # (<path>:<line>:<col>: non-ASCII 'x' (U+XXXX)) and exits 1
+          # when any is found; a non-zero exit fails this job.
+          python3 test/ascii_check.py src/
