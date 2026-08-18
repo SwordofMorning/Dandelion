@@ -475,7 +475,7 @@ class SSHTool(BaseTool):
         # End-if
 
         new_client.connect(**kwargs)
-        new_client.set_keepalive(30)
+        new_client.get_transport().set_keepalive(30)
         self._clients[alias] = new_client
         return new_client
     # End-def
