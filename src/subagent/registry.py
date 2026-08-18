@@ -8,9 +8,9 @@
 TOOLSET_REGISTRY = {
     "minimal": ["read_file", "write_file", "list_directory"],
     "filesystem": ["read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file"],
-    "code_analysis": ["read_file", "grep_search", "list_directory", "bash"],
+    "code_analysis": ["read_file", "grep_search", "list_directory", "bash", "ssh"],
     "data_processing": ["read_excel", "write_excel", "write_file", "markdown_editor"],
-    "full": ["bash", "read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file", "read_excel", "write_excel"]
+    "full": ["bash", "ssh", "read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file", "read_excel", "write_excel"]
 }
 
 ##

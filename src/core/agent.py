@@ -32,7 +32,8 @@ from src.tool import (
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
     ReadExcelTool, WriteExcelTool,
-    StateTool, MemoryTool
+    StateTool, MemoryTool,
+    SSHTool
 )
 
 # Create a module-level CLIPrinter instance for convenience
@@ -178,6 +179,8 @@ class MyAgent:
         edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
         # Others
         web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
+        # Remote
+        ssh_tool = SSHTool(workspace_dir=self.workspace_dir)
         # Memory
         state_tool = StateTool(workspace_dir=self.workspace_dir, session_manager=self.session)
         memory_tool = MemoryTool(self.memory)
@@ -194,7 +197,8 @@ class MyAgent:
             edit_tool.get_name(): edit_tool,
             web_search_tool.get_name(): web_search_tool,
             read_excel_tool.get_name(): read_excel_tool,
-            write_excel_tool.get_name(): write_excel_tool
+            write_excel_tool.get_name(): write_excel_tool,
+            ssh_tool.get_name(): ssh_tool
         }
 
         # ----- @par 2. Subagent Pool and Tools -----
@@ -220,7 +224,8 @@ class MyAgent:
             grep_tool, write_tool, read_tool, list_tool,
             edit_tool, plan_tool, spawn_subagent, web_search_tool,
             read_excel_tool, write_excel_tool,
-            state_tool, memory_tool
+            state_tool, memory_tool,
+            ssh_tool
         ]
 
         for t in tool_list:
@@ -700,7 +705,7 @@ class MyAgent:
         # 2. Main LLM API Call
         # Send-time safety clamp: even if the heuristic estimate undershoots
         # (or compaction was skipped), never let history + output + overhead
-        # exceed MAX_CONTEXT_TOKENS — degrade the output size instead of
+        # exceed MAX_CONTEXT_TOKENS - degrade the output size instead of
         # getting a provider 400 context-length rejection.
         max_tokens = int(self.config["MAX_TOKENS"])
         remaining_budget = (self._soft_token_limit()

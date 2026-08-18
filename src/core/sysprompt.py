@@ -94,9 +94,9 @@ class PromptBuilder:
                 "### Available Toolsets:\n"
                 "- 'minimal': read_file, write_file, list_directory\n"
                 "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file\n"
-                "- 'code_analysis': read_file, grep_search, list_directory, bash\n"
-                "- 'data_processing': read_weekly_report, write_file, markdown_editor\n"
-                "- 'full': bash, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file"
+                "- 'code_analysis': read_file, grep_search, list_directory, bash, ssh\n"
+                "- 'data_processing': read_excel, write_excel, write_file, markdown_editor\n"
+                "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel"
             )
         # End-if
         
