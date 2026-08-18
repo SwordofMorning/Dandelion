@@ -11,8 +11,8 @@
  # Exit code: 0 = clean, 1 = findings.
  #
  # Usage:
- #     python3 .playground/ascii_check.py src/
- #     python3 .playground/ascii_check.py src/ mk/ main.py
+ #     python3 test/ascii_check.py src/
+ #     python3 test/ascii_check.py src/ mk/ main.py
  #
 
 import argparse
