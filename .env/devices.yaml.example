@@ -38,7 +38,6 @@ ubuntu:
   port: 22
   user: ubuntu
   key_path: C:/Users/<your_name>/.ssh/id_ed25519
-  shell: bash
   timeout: 120
 
 # ------------------------------------------------------------
@@ -49,7 +48,6 @@ board_ssh:
   host: 192.168.1.2
   user: root
   password: <shared-password-for-this-board-model>
-  shell: sh
   timeout: 60
   security:
     allow: [reboot]      # example: allow reboot (blocked by default)

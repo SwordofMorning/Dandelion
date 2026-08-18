@@ -258,11 +258,15 @@ def load_api_config(file_path):
  #
  # @note Entry fields:
  #   ssh:    type, host, user required; auth = key_path or password (>=1);
- #           optional port(22), shell, timeout(120), security{allow,block}.
+ #           optional port(22), timeout(120), security{allow,block}.
  #   serial: type, port required; optional baudrate(115200), parity, bytesize,
  #           stopbits, newline, encoding, buf_size(65536), read_timeout(3).
  #   Unknown types are rejected. The file lives under the config dir
  #   (sandbox-shielded, agent tools cannot read it).
+ #
+ # @note Aliases are normalized to strings: YAML mapping keys may be
+ # non-string (e.g. "123:"), and every alias key must be a string so
+ # lookups and sorted(devices.keys()) work consistently.
  #
 def load_devices_config(devices_path=None):
     if devices_path is None:
@@ -294,7 +298,10 @@ def load_devices_config(devices_path=None):
 
     devices = {}
     errors = []
-    for alias, entry in raw.items():
+    for raw_alias, entry in raw.items():
+        # Normalize: YAML keys may be non-string; all devices keys must be
+        # strings for consistent lookups and sorted() output.
+        alias = str(raw_alias)
         if not isinstance(entry, dict):
             errors.append(f"Device '{alias}': entry must be a mapping.")
             continue

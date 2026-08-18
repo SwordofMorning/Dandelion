@@ -32,12 +32,14 @@ from ..base_tool import BaseTool
 ##
  # @brief P1 fast substring patterns (lower-case command check).
  #
- # @note Only ".env": credential files may exist on ANY target (deployed
- # Dandelion copies, app secrets, localhost aliases); near-zero false
- # positives. NOT "/etc" or "~/" (embedded high-frequency paths), NOT "../"
- # (handled semantically by R2 to avoid breaking "cd ..").
+ # @note ".env": credential files may exist on ANY target (deployed Dandelion
+ # copies, app secrets, localhost aliases); near-zero false positives.
+ # "$(" / backtick: command substitution must be rejected outright - token
+ # rules cannot see through nested substitution (e.g. "$(rm -rf /)").
+ # NOT "/etc" or "~/" (embedded high-frequency paths), NOT "../" (handled
+ # semantically by R2 to avoid breaking "cd ..").
  #
-_FAST_BLOCK_PATTERNS = [".env"]
+_FAST_BLOCK_PATTERNS = [".env", "$(", "`"]
 
 ##
  # @brief R1 sensitive files (exact or path-prefix match).
@@ -105,30 +107,45 @@ _MAX_OUTPUT_CHARS = 50000
  #
  # @param command Raw command string.
  #
- # @return List of token-lists (one per sub-command segment).
+ # @return List of token-lists (one per sub-command segment), or None when
+ # the command cannot be tokenized (fail closed: caller must reject).
+ #
+ # @note Uses shlex.shlex with punctuation_chars=";&|" so separators are
+ # recognized even when attached to arguments ("ls;rm" -> ["ls",";","rm"]).
+ # Newlines are treated as segment separators ("cmd1\ncmd2" must be two
+ # independent segments). Command substitution ("$(", backtick) is rejected
+ # at the P1 level, not here.
  #
 def _split_segments(command):
-    try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError:
-        return [shlex.split(command, posix=False)]
-    # End-try
-
     segments = []
-    cur = []
-    for tok in tokens:
-        if tok in _SEGMENT_SEPARATORS:
-            if cur:
-                segments.append(cur)
-                cur = []
+    for raw_line in command.split("\n"):
+        line = raw_line.rstrip("\r")
+        if not line.strip():
+            continue
+        # End-if
+        try:
+            lex = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+            tokens = list(lex)
+        except ValueError:
+            # Unbalanced quotes etc.: fail closed (no posix=False fallback).
+            return None
+        # End-try
+
+        cur = []
+        for tok in tokens:
+            if tok in _SEGMENT_SEPARATORS:
+                if cur:
+                    segments.append(cur)
+                    cur = []
+                # End-if
+            else:
+                cur.append(tok)
             # End-if
-        else:
-            cur.append(tok)
+        # End-for
+        if cur:
+            segments.append(cur)
         # End-if
     # End-for
-    if cur:
-        segments.append(cur)
-    # End-if
     return segments
 # End-def
 
@@ -269,28 +286,35 @@ def check_command_safety(command, sec_cfg=None):
     # End-for
 
     # ----- @par P2. Semantic rules -----
-    for seg in _split_segments(command):
+    segments = _split_segments(command)
+    if segments is None:
+        # Fail closed: untokenizable input (e.g. unbalanced quotes) is
+        # refused instead of being executed with partial checks.
+        return False, (
+            "CRITICAL SECURITY BLOCK: command could not be tokenized "
+            "(unbalanced quotes). Refusing to execute."
+        )
+    # End-if
+
+    for seg in segments:
         verb = _extract_verb(seg)
         if not verb:
             continue
         # End-if
 
-        # Per-device overrides.
+        # Per-device block list applies to every verb.
         if verb in block:
             return False, f"CRITICAL SECURITY BLOCK [R3/device]: verb '{verb}' is blocked for this device."
         # End-if
-        if verb in allow:
-            continue
-        # End-if
 
-        # R1. Sensitive files.
+        # R1. Sensitive files (always enforced).
         for tok in seg:
             if any(tok == f or tok.startswith(f + "/") for f in _SENSITIVE_FILES):
                 return False, f"CRITICAL SECURITY BLOCK [R1]: sensitive file '{tok}' is forbidden."
             # End-if
         # End-for
 
-        # R2. Destructive targets (rm / mv / cp).
+        # R2. Destructive targets (rm / mv / cp, always enforced).
         if verb in _DESTRUCTIVE_TARGET_VERBS:
             for arg in _positional_args(seg):
                 if _destructive_target_blocked(arg):
@@ -299,15 +323,19 @@ def check_command_safety(command, sec_cfg=None):
             # End-for
         # End-if
 
-        # R3. Destructive verbs.
-        if verb in _BLOCKED_VERBS or verb.startswith("mkfs"):
-            return False, f"CRITICAL SECURITY BLOCK [R3]: verb '{verb}' is blocked."
-        # End-if
-        if verb == "init" and any(a in ("0", "1", "6") for a in _positional_args(seg)):
-            return False, "CRITICAL SECURITY BLOCK [R3]: 'init' runlevel change is blocked."
+        # R3. Destructive verbs. security.allow exempts ONLY this check
+        # (blocked-verb list / mkfs prefix / init runlevel change); R1, R2
+        # and R4 stay enforced for every verb.
+        if verb not in allow:
+            if verb in _BLOCKED_VERBS or verb.startswith("mkfs"):
+                return False, f"CRITICAL SECURITY BLOCK [R3]: verb '{verb}' is blocked."
+            # End-if
+            if verb == "init" and any(a in ("0", "1", "6") for a in _positional_args(seg)):
+                return False, "CRITICAL SECURITY BLOCK [R3]: 'init' runlevel change is blocked."
+            # End-if
         # End-if
 
-        # R4. dd writing to block devices.
+        # R4. dd writing to block devices (always enforced).
         if verb == "dd":
             for tok in seg:
                 if tok.startswith("of=") and tok[3:].startswith(_BLOCK_DEVICE_PREFIXES):
@@ -408,8 +436,15 @@ class SSHTool(BaseTool):
      # @return (cfg_dict, None) or (None, error_string).
      #
     def _device_config(self, alias):
-        devices, _ = self._load_devices()
+        devices, errors = self._load_devices()
         if alias not in devices:
+            # If the alias is absent because its entry failed validation,
+            # surface that reason instead of a bare "not found".
+            for err in errors:
+                if err.startswith(f"Device '{alias}'"):
+                    return None, f"Error: {err}"
+                # End-if
+            # End-for
             names = ", ".join(sorted(devices.keys())) or "(none)"
             return None, (
                 f"Error: Device alias '{alias}' not found in devices.yaml. "
@@ -496,24 +531,64 @@ class SSHTool(BaseTool):
 
         out = b""
         err = b""
+        out_capped = False
+        err_capped = False
         deadline = time.monotonic() + float(timeout)
         while True:
             if time.monotonic() > deadline:
                 channel.close()
                 return None, "Timeout"
             # End-if
-            if channel.recv_ready():
-                out += channel.recv(8192)
+
+            # Accumulate with a per-stream cap (bytes) so a chatty remote
+            # cannot balloon memory; the final truncate still applies in
+            # execute() and a truncation marker is prepended below.
+            if not out_capped and channel.recv_ready():
+                chunk = channel.recv(8192)
+                if chunk:
+                    room = _MAX_OUTPUT_CHARS - len(out)
+                    if len(chunk) > room:
+                        out += chunk[:room]
+                        out_capped = True
+                    else:
+                        out += chunk
+                    # End-if
+                # End-if
             # End-if
-            if channel.recv_stderr_ready():
-                err += channel.recv_stderr(8192)
+            if not err_capped and channel.recv_stderr_ready():
+                chunk = channel.recv_stderr(8192)
+                if chunk:
+                    room = _MAX_OUTPUT_CHARS - len(err)
+                    if len(chunk) > room:
+                        err += chunk[:room]
+                        err_capped = True
+                    else:
+                        err += chunk
+                    # End-if
+                # End-if
             # End-if
+
             if channel.exit_status_ready():
-                while channel.recv_ready():
-                    out += channel.recv(8192)
+                # Drain remaining buffered data, still capped.
+                while not out_capped and channel.recv_ready():
+                    chunk = channel.recv(8192)
+                    room = _MAX_OUTPUT_CHARS - len(out)
+                    if len(chunk) > room:
+                        out += chunk[:room]
+                        out_capped = True
+                        break
+                    # End-if
+                    out += chunk
                 # End-while
-                while channel.recv_stderr_ready():
-                    err += channel.recv_stderr(8192)
+                while not err_capped and channel.recv_stderr_ready():
+                    chunk = channel.recv_stderr(8192)
+                    room = _MAX_OUTPUT_CHARS - len(err)
+                    if len(chunk) > room:
+                        err += chunk[:room]
+                        err_capped = True
+                        break
+                    # End-if
+                    err += chunk
                 # End-while
                 break
             # End-if
@@ -522,7 +597,11 @@ class SSHTool(BaseTool):
 
         exit_status = channel.recv_exit_status()
         channel.close()
-        text = (out + err).decode("utf-8", errors="replace")
+        marker = ""
+        if out_capped or err_capped:
+            marker = f"[TRUNCATED: output exceeded {_MAX_OUTPUT_CHARS} chars]\n"
+        # End-if
+        text = marker + (out + err).decode("utf-8", errors="replace")
         return exit_status, text
     # End-def
 
