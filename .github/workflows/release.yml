@@ -235,10 +235,14 @@ jobs:
       # === Make (docker mode): build inside the target distro container ===
       - name: Build with Nuitka (Docker ${{ matrix.distro_label }})
         if: matrix.build_mode == 'docker'
+        env:
+          # Pass the computed tag through env, not shell interpolation:
+          # tag names may legally contain shell metacharacters ($(), ``, ;).
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/work" \
-            -e DANDELION_VERSION="${{ needs.meta.outputs.tag }}" \
+            -e DANDELION_VERSION="$RELEASE_TAG" \
             -e DANDELION_TARGET="${{ matrix.distro }}" \
             -w /work \
             "ubuntu:${{ matrix.distro }}" \
@@ -330,6 +334,9 @@ jobs:
           path: artifacts
 
       - name: Zip Artifacts
+        env:
+          # Same pattern as the build step: tag via env, not interpolation.
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
         run: |
           RELEASE_DIR="$GITHUB_WORKSPACE/release_assets"
           mkdir -p "$RELEASE_DIR"
@@ -341,7 +348,7 @@ jobs:
             echo "Processing $dir..."
 
             # Construct the final zip name: name-os-arch-version.zip
-            zip_name="${dir}-${{ needs.meta.outputs.tag }}.zip"
+            zip_name="${dir}-${RELEASE_TAG}.zip"
 
             # Enter directory and zip content (-y preserves symlinks)
             (cd "$dir" && zip -r -y "$RELEASE_DIR/$zip_name" .)
