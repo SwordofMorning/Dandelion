@@ -114,6 +114,16 @@ def _check_nuitka():
  #
 def _gen_build_info(version):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Optional CI override: target distro (e.g. "18.04" from the Docker
+    # matrix). When set, PLATFORM becomes e.g. "linux-x86_64-ubuntu18.04"
+    # so users can identify which Ubuntu release an artifact was built for.
+    target = os.environ.get("DANDELION_TARGET", "").strip()
+    plat = platform.system().lower()
+    if target:
+        plat = "%s-%s-ubuntu%s" % (plat, platform.machine(), target)
+    # End-if
+
     lines = [
         "##",
         " # @file mk/lib/build_info.py",
@@ -125,7 +135,7 @@ def _gen_build_info(version):
         "VERSION = \"" + version + "\"",
         "BUILD_MODE = \"standalone\"",
         "BUILD_DATE = \"" + now + "\"",
-        "PLATFORM = \"" + platform.system().lower() + "\"",
+        "PLATFORM = \"" + plat + "\"",
         "",
     ]
     path = os.path.join(MK_DIR, "lib", "build_info.py")
@@ -620,6 +630,12 @@ def _postprocess(cfg, name, version):
     # Write version file.
     with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
+        # Optional CI override: record the target distro the artifact was
+        # built for (e.g. "target=ubuntu18.04" from the Docker matrix).
+        target = os.environ.get("DANDELION_TARGET", "").strip()
+        if target:
+            f.write("target=ubuntu" + target + "\n")
+        # End-if
     # End-with
 
     # ----- @par 4. Strip pyc caches from the artifact -----
