@@ -92,11 +92,11 @@ class PromptBuilder:
                 "3. Wait for each SubAgentResult before proceeding to dependent subtasks.\n"
                 "4. Synthesize the final answer from all SubAgentResults.\n"
                 "### Available Toolsets:\n"
-                "- 'minimal': read_file, write_file, list_directory\n"
+                "- 'minimal': read_file, write_file, list_directory, get_time\n"
                 "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file\n"
                 "- 'code_analysis': read_file, grep_search, list_directory, bash, ssh\n"
                 "- 'data_processing': read_excel, write_excel, write_file, markdown_editor\n"
-                "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel"
+                "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel, get_time"
             )
         # End-if
         
