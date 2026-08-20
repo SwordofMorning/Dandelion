@@ -33,7 +33,7 @@ from src.tool import (
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
     ReadExcelTool, WriteExcelTool,
     StateTool, MemoryTool,
-    SSHTool
+    SSHTool, TimeTool
 )
 
 # Create a module-level CLIPrinter instance for convenience
@@ -179,6 +179,7 @@ class MyAgent:
         edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
         # Others
         web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
+        time_tool = TimeTool(workspace_dir=self.workspace_dir, config=self.config)
         # Remote
         ssh_tool = SSHTool(workspace_dir=self.workspace_dir)
         # Memory
@@ -196,6 +197,7 @@ class MyAgent:
             list_tool.get_name(): list_tool,
             edit_tool.get_name(): edit_tool,
             web_search_tool.get_name(): web_search_tool,
+            time_tool.get_name(): time_tool,
             read_excel_tool.get_name(): read_excel_tool,
             write_excel_tool.get_name(): write_excel_tool,
             ssh_tool.get_name(): ssh_tool
@@ -225,7 +227,7 @@ class MyAgent:
             edit_tool, plan_tool, spawn_subagent, web_search_tool,
             read_excel_tool, write_excel_tool,
             state_tool, memory_tool,
-            ssh_tool
+            ssh_tool, time_tool
         ]
 
         for t in tool_list:
