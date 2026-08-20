@@ -160,7 +160,9 @@ class TimeTool(BaseTool):
             sign = 1 if m.group(1) == "+" else -1
             hours = int(m.group(2))
             minutes = int(m.group(3) or 0)
-            if hours > 14 or minutes > 59 or (hours == 14 and minutes != 0):
+            # Check for UTC+14 and UTC-12
+            max_hours = 14 if sign > 0 else 12
+            if (hours > max_hours or minutes > 59 or (hours == max_hours and minutes != 0)):
                 return None, "", (
                     f"Error: invalid UTC offset '{tz_override}'. "
                     "Valid range is UTC-12:00 to UTC+14:00."
