@@ -19,6 +19,7 @@ import shutil
 
 TASK_STATE_FILENAME = "task_state.json"
 SESSION_MEMORY_DIRNAME = "memory"
+STAGED_FILENAME = "staged.md"
 
 DEFAULT_TASK_STATE = {"target": "No specific target set.", "todos": [], "completed": []}
 
@@ -146,6 +147,79 @@ class SessionManager:
         if not self.current_session_dir:
             return None
         return os.path.join(self.current_session_dir, SESSION_MEMORY_DIRNAME)
+    # End-def
+
+    ##
+     # @brief Path of the current session's staged draft file (None if no active session).
+     #
+     # @note The staged area (edited message) lives under `.log/sess_xx/staged.md`,
+     #       managed together with history.log / api.log / task_state.json / memory/.
+     #       It is session-scoped: `checkout` switches the buffer, `exit` loses nothing.
+     #
+     # @return Absolute path of `.log/sess_xx/staged.md`, or None.
+     #
+    def get_staged_file(self):
+        if not self.current_session_dir:
+            return None
+        return os.path.join(self.current_session_dir, STAGED_FILENAME)
+    # End-def
+
+    ##
+     # @brief Load the staged draft (edited message) of the current session.
+     #
+     # @return Staged draft text (stripped), or "" when absent/unreadable.
+     #
+     # @note Missing or corrupt files degrade to "" (same tolerance as
+     #       load_history), never blocking startup or commit.
+     #
+    def load_staged(self):
+        staged_file = self.get_staged_file()
+        if not staged_file or not os.path.exists(staged_file):
+            return ""
+        try:
+            with open(staged_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"[-] Warning: Failed to load staged draft from {staged_file}: {e}")
+            return ""
+    # End-def
+
+    ##
+     # @brief Save the staged draft (edited message) of the current session.
+     #
+     # @param content Staged draft text.
+     #
+     # @return Success or Fail.
+     # @retval True write file success.
+     # @retval False write file fail (no active session).
+     #
+     # @note Atomic write (tmp + os.replace): a crash mid-write must never leave
+     #       a half-written draft that would silently truncate the buffer.
+     #
+    def save_staged(self, content):
+        staged_file = self.get_staged_file()
+        if not staged_file:
+            return False
+        tmp_path = staged_file + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, staged_file)
+        return True
+    # End-def
+
+    ##
+     # @brief Clear the staged draft of the current session.
+     #
+     # @note Missing file is OK (silent success); a deletion failure only warns.
+     #
+    def clear_staged(self):
+        staged_file = self.get_staged_file()
+        if not staged_file or not os.path.exists(staged_file):
+            return
+        try:
+            os.remove(staged_file)
+        except OSError as e:
+            print(f"[-] Warning: Failed to clear staged draft at {staged_file}: {e}")
     # End-def
 
     ##
