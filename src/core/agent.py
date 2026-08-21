@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import json
+import time
 import datetime
 
 from src.utils import SafeLLMClient
@@ -45,6 +46,12 @@ cli = CLIPrinter()
 # session and DeepSeek's prefix cache keeps hitting across tool-loop iterations.
 _DYN_CTX_START = "[Dandelion Context"
 _DYN_CTX_END = "[Dandelion Context End]"
+
+# Main-agent LLM call retry policy: 1 initial attempt + _LLM_RETRY_COUNT retries.
+# Uniform for all error types (400/401/429/500/connection errors) per design
+# decision; exponential backoff (seconds) between attempts.
+_LLM_RETRY_COUNT = 3
+_LLM_RETRY_BACKOFF = (2, 4, 8)
 
 ##
  # @brief Strip previously injected [Dandelion Context] blocks from a user
@@ -674,9 +681,13 @@ class MyAgent:
      #
      # @see src/utils/cli/interactive_cli.py
      #
-     # @return True: continue the loop; False: stop.
-     # @retval True This round executed a tool call (or unexpected), need to feed back result to LLM. Continue.
-     # @retval False This round is a plain text reply (or an API error). Breakout.
+     # @return (continue_loop, error) tuple.
+     # @retval (True, None) This round executed a tool call, need to feed back
+     #                      result to LLM. Continue.
+     # @retval (False, None) This round is a plain text reply (or unexpected).
+     #                       Breakout; the turn completed normally.
+     # @retval (False, err_str) An API error occurred and all bounded retries
+     #                          (_LLM_RETRY_COUNT) were exhausted. Breakout.
      #
     def step(self):
         # 1. Build System Prompt (STATIC)
@@ -725,22 +736,42 @@ class MyAgent:
         # PRE-call logging is now handled inside SafeLLMClient -> Provider
         # (after thinking injection), so we only log POST here.
 
-        # Streaming
-        resp, err = self.client.safe_stream_request(payload)
+        # Streaming, with bounded retry: 1 initial attempt + _LLM_RETRY_COUNT
+        # retries (backoff _LLM_RETRY_BACKOFF). Only the API call itself is
+        # retried: the payload is built once and never re-injected or
+        # re-compacted between attempts (same semantics as route_request).
+        # Each attempt is logged with an attempt tag (api.log audit trail).
+        resp, err = None, None
+        for attempt in range(1, _LLM_RETRY_COUNT + 2):
+            resp, err = self.client.safe_stream_request(
+                payload,
+                log_tag=f"PRE LLM CALL - MAIN (attempt {attempt}/{_LLM_RETRY_COUNT + 1})"
+            )
 
-        # POST-call logging
-        self.session.log_api_call("POST LLM CALL - MAIN", resp if resp else {"error": err})
+            # POST-call logging (per attempt: failed attempts record the error).
+            self.session.log_api_call("POST LLM CALL - MAIN", resp if resp else {"error": err})
+
+            if err is None:
+                break
+            # End-if
+            if attempt <= _LLM_RETRY_COUNT:
+                wait = _LLM_RETRY_BACKOFF[attempt - 1]
+                print(f"[-] API Error: {err} (attempt {attempt}/{_LLM_RETRY_COUNT + 1})")
+                print(f"[-] Retrying in {wait}s ...")
+                time.sleep(wait)
+            # End-if
+        # End-for
 
         if err is not None:
             print(f"[-] API Error: {err}")
-            return False
+            return False, err
 
         self.history.append({"role": "assistant", "content": resp.content})
         self.session.save_history(self.history)
 
         # 3. Handle Output or Tools
         if resp.stop_reason != "tool_use":
-            return False
+            return False, None
 
         # Handle Tools
         results = []
@@ -798,7 +829,7 @@ class MyAgent:
             self.history.append({"role": "user", "content": "You indicated a tool use but provided no valid tool calls."})
 
         self.session.save_history(self.history)
-        return True
+        return True, None
     # End-def
 
     ##
