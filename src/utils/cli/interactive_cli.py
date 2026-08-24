@@ -7,7 +7,6 @@
 
 import os
 import shlex
-import tempfile
 import subprocess
 import builtins
 
@@ -41,10 +40,15 @@ class InteractiveCLI:
         # Assignment object.
         self.agent = agent_instance
         self.session = session_manager
-        # @note This will clear staged message when you exit Dandelion without commit, which have no save function.
-        self.staged_message = ""
         # Init printer.
         self.cli = CLIPrinter()
+
+        # @note The staged area is persisted per-session
+        #       (.log/sess_xx/staged.md), so `checkout` / `exit` never lose an
+        #       edited draft. It is loaded at startup / session switch.
+        self.staged_message = self.session.load_staged()
+        if self.staged_message.strip():
+            self.cli.info(f"Restored pending draft ({len(self.staged_message.strip())} chars) from this branch.")
 
         # Initialize prompt_toolkit session with in-memory history
         if HAS_PTK:
@@ -209,6 +213,13 @@ class InteractiveCLI:
             return
         # End-if
 
+        # If the current branch has a pending draft, note that it is preserved:
+        # drafts are session-scoped (staged.md), so switching branches never
+        # loses content; the buffer simply follows the session.
+        if self.staged_message.strip():
+            self.cli.info(f"Note: pending draft ({len(self.staged_message.strip())} chars) is preserved in the current branch.")
+        # End-if
+
         # ----- 1. Create new session branch -----
         if args[0] == '-b':
             # Error
@@ -226,6 +237,8 @@ class InteractiveCLI:
             new_id = self.session.create_session(new_name)
             # Refresh agent's history (nothing).
             self.agent.reload_history()
+            # Load the (empty) staged buffer of the new branch.
+            self.staged_message = self.session.load_staged()
             # Print success.
             self.cli.success(f"Switched to a new session branch: '{new_name}'")
             return
@@ -244,6 +257,10 @@ class InteractiveCLI:
         # Try to switch/checkout session
         if self.session.switch_session(session_id):
             self.agent.reload_history()
+            # Switch the staged buffer to the target branch's draft.
+            self.staged_message = self.session.load_staged()
+            if self.staged_message.strip():
+                self.cli.info(f"Restored pending draft ({len(self.staged_message.strip())} chars) in this branch.")
             self.cli.success(f"Switched to session branch: '{target}'")
         else:
             self.cli.error(f"Error: Failed to switch to '{target}'. Directory might be corrupted.")
@@ -251,8 +268,11 @@ class InteractiveCLI:
     # End-def
 
     ##
-     # @brief `vim` command handle. 
+     # @brief `vim` command handle.
      # Open editor and write message, saved on staged buffer.
+     #
+     # @return True on a completed editor session; False when the editor could
+     #         not be launched (draft preserved, buffer untouched).
      #
     def _cmd_vim(self):
         # Set default editor: vim on Linux and notepad on Windows.
@@ -261,32 +281,45 @@ class InteractiveCLI:
             editor = 'vim' if os.name != 'nt' else 'notepad'
         # End-if
 
-        # Create temporary file for drafting
-        fd, tmp_path = tempfile.mkstemp(suffix=".md", prefix="dandelion_draft_", text=True)
+        # The draft file IS the persisted staged buffer
+        # (.log/sess_xx/staged.md): single source of truth, vim swap recovery
+        # lives in the session dir, and no /tmp scratch file is involved.
+        staged_file = self.session.get_staged_file()
+        if not staged_file:
+            self.cli.error("Error: No active session; cannot edit the staged draft.")
+            return False
+        # End-if
+
+        # Ensure the file exists with the current buffer content.
+        self.session.save_staged(self.staged_message)
+
+        # Parse the editor command with shlex to support flags
+        editor_cmd = shlex.split(editor, posix=(os.name != 'nt'))
+        # Normalize the executable token on Windows to remove surrounding quotes
+        if os.name == 'nt' and editor_cmd:
+            editor_cmd[0] = editor_cmd[0].strip('"').strip("'")
+        # End-if
+
+        editor_cmd.append(staged_file)
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(self.staged_message)
-
-            # Parse the editor command with shlex to support flags
-            editor_cmd = shlex.split(editor, posix=(os.name != 'nt'))
-            # Normalize the executable token on Windows to remove surrounding quotes
-            if os.name == 'nt' and editor_cmd:
-                editor_cmd[0] = editor_cmd[0].strip('"').strip("'")
-
-            editor_cmd.append(tmp_path)
             subprocess.call(editor_cmd)
+        except FileNotFoundError:
+            # The configured editor could not be launched. The staged draft is
+            # preserved (it was written above) and the exception must NOT
+            # propagate to run()'s generic error handler.
+            self.cli.error(f"Error: Editor '{editor_cmd[0]}' could not be launched.")
+            self.cli.info("Staged draft preserved. Check your EDITOR setting.")
+            return False
+        # End-try
 
-            # Read back user input
-            with open(tmp_path, 'r', encoding='utf-8') as f:
-                new_content = f.read().strip()
-
-            if new_content != self.staged_message:
-                self.staged_message = new_content
-                self.cli.success("Buffer successfully updated via editor.")
-            else:
-                self.cli.info("Buffer unchanged.")
-        finally:
-            os.remove(tmp_path)
+        # Read back user input (the editor wrote the file in place).
+        new_content = self.session.load_staged()
+        if new_content != self.staged_message:
+            self.staged_message = new_content
+            self.cli.success("Buffer successfully updated via editor.")
+        else:
+            self.cli.info("Buffer unchanged.")
+        return True
     # End-def
 
     ##
@@ -322,9 +355,21 @@ class InteractiveCLI:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.staged_message = f.read().strip()
+            # Persist the buffer to the session-scoped staged file.
+            self.session.save_staged(self.staged_message)
             self.cli.success(f"Successfully loaded {os.path.getsize(filepath)} bytes into buffer.")
         except Exception as e:
             self.cli.error(f"Error loading file: {e}")
+    # End-def
+
+    ##
+     # @brief `clear` command handle.
+     # Clear the staged buffer (memory + persisted staged.md).
+     #
+    def _cmd_clear(self):
+        self.staged_message = ""
+        self.session.clear_staged()
+        self.cli.success("Buffer cleared.")
     # End-def
 
     ##
@@ -336,6 +381,7 @@ class InteractiveCLI:
         meta = self.session.get_current_meta()
         self.cli.info(f"\nCurrent Branch : {meta.get('name', 'Unknown')}")
         self.cli.info(f"History Turns  : {len(self.agent.history)}")
+        self.cli.info(f"Staged File    : {self.session.get_staged_file()}")
 
         # No staged message.
         if not self.staged_message:
@@ -357,28 +403,212 @@ class InteractiveCLI:
 
     ##
     # @brief `commit` command handle. 
-    # Send message to LLM.
+    # Send message to LLM (transactional).
+    #
+    # @note The staged buffer is only cleared AFTER the LLM accepts the
+    #       message (first step() succeeds). On failure the draft stays in
+    #       staged.md and a recovery menu is offered:
+    #       [R]etry / [S]ave and Exit / [V]im (edit) / [D]iscard.
     #
     def _cmd_commit(self):
-        if not self.staged_message.strip():
+        content = self.staged_message.strip()
+        if not content:
             self.cli.error("Error: Buffer is empty. Draft a message using 'vim' or 'load' first.")
             return
+        # End-if
 
         self.cli.raw(f"\n{self.cli.C_CYAN}================ COMMIT PREVIEW ================{self.cli.C_RESET}")
-        preview = self.staged_message[:500]
-        self.cli.raw(preview + ("\n... [Truncated]" if len(self.staged_message) > 500 else ""))
+        preview = content[:500]
+        self.cli.raw(preview + ("\n... [Truncated]" if len(content) > 500 else ""))
         self.cli.raw(f"{self.cli.C_CYAN}================================================{self.cli.C_RESET}")
 
         ans = input(f"{self.cli.C_CYAN}[?]{self.cli.C_RESET} Proceed to send to LLM? [y/N]: ").strip().lower()
-        if ans in ['y', 'yes']:
-            self.agent.inject_user_message(self.staged_message)
-            self.staged_message = ""
-            self.cli.info("Inference Engine Started...\n")
-            while self.agent.step():
-                pass
-        else:
+        if ans not in ['y', 'yes']:
             self.cli.error("Send cancelled.")
+            return
         # End-if
+
+        self.cli.info("Inference Engine Started...\n")
+
+        # ----- Phase 1: send the user message (transactional) -----
+        # The draft stays in staged.md until the LLM accepts the message; a
+        # failed send keeps the buffer intact for Retry / Edit / Discard.
+        injected = False
+        while True:
+            try:
+                if not injected:
+                    self.agent.inject_user_message(content)
+                    injected = True
+                # End-if
+
+                cont, err = self.agent.step()
+                if err is None:
+                    # Message accepted: the staged area is now committed.
+                    self.session.clear_staged()
+                    self.staged_message = ""
+                    break
+                # End-if
+
+                # Recovery menu: the message was never accepted.
+                choice = self._prompt_recovery_action(err)
+                if choice == 'R':
+                    # Message stays in history; step() re-sends it (the dynamic
+                    # context block is rebuilt idempotently inside step()).
+                    continue
+                elif choice == 'V':
+                    # Roll back the pending message, edit the draft, re-send.
+                    self._rollback_pending_message()
+                    if not self._cmd_vim():
+                        # Editor could not be launched: keep the draft and
+                        # leave the commit flow (no re-send of stale content).
+                        self.cli.info("Commit aborted. Draft preserved in this branch.")
+                        return
+                    # End-if
+                    content = self.staged_message.strip()
+                    if not content:
+                        self.session.clear_staged()
+                        self.cli.error("Buffer is empty after edit; draft cleared. Commit aborted.")
+                        return
+                    # End-if
+                    self.cli.raw(f"\n{self.cli.C_CYAN}=========== REVISED COMMIT PREVIEW ==========={self.cli.C_RESET}")
+                    self.cli.raw(content[:500] + ("\n... [Truncated]" if len(content) > 500 else ""))
+                    self.cli.raw(f"{self.cli.C_CYAN}=============================================={self.cli.C_RESET}")
+                    injected = False  # re-inject the revised content
+                elif choice == 'S':
+                    # vim :wq semantics: the draft is saved (staged.md kept),
+                    # leave the commit flow; it can be committed later.
+                    self._rollback_pending_message()
+                    self.cli.info("Draft saved to this branch. Commit aborted.")
+                    return
+                elif choice == 'D':
+                    # Draft discarded.
+                    self._rollback_pending_message()
+                    self.session.clear_staged()
+                    self.staged_message = ""
+                    self.cli.info("Draft discarded.")
+                    return
+                # End-elif
+            except (KeyboardInterrupt, EOFError):
+                # Interrupt BEFORE acceptance: roll back the never-accepted
+                # message and keep the draft for later.
+                self._rollback_pending_message()
+                self.cli.info("\nSend aborted. Draft preserved.")
+                return
+            # End-try
+        # End-while
+
+        # ----- Phase 2: tool loop (only when the accepted step requested
+        # tools; a plain-text reply (cont=False) means the turn is done).
+        # Interrupts here happen AFTER the draft was committed, so the message
+        # must NOT claim the draft is preserved, and no rollback is attempted:
+        # the pending tool_result belongs to the committed turn and stays in
+        # history so run()'s background check auto-resumes it at the next
+        # prompt. -----
+        if cont:
+            try:
+                _, err = self._run_agent_loop()
+            except (KeyboardInterrupt, EOFError):
+                self.cli.info("\nSend aborted mid-execution. The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+                return
+            # End-try
+            if err is not None:
+                self.cli.error(f"Tool loop interrupted by API error: {err}")
+                self.cli.info("The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+            # End-if
+        # End-if
+    # End-def
+
+    ##
+     # @brief Run the agent tool-loop until it stops naturally or hits an API error.
+     #
+     # @return (True, None) loop ended normally.
+     # @retval (False, err) an API error occurred (all bounded retries exhausted).
+     #
+    def _run_agent_loop(self):
+        while True:
+            cont, err = self.agent.step()
+            if err is not None:
+                return False, err
+            # End-if
+            if not cont:
+                return True, None
+            # End-if
+        # End-while
+    # End-def
+
+    ##
+     # @brief Ask the user how to recover from a failed send.
+     #
+     # @param err API error string.
+     #
+     # @return Choice: 'R' (retry), 'S' (save and exit), 'V' (vim edit), 'D' (discard).
+     #
+    def _prompt_recovery_action(self, err):
+        self.cli.error(f"\nLLM API Error: {err}")
+        self.cli.info("The staged draft is preserved. Choose an action:")
+        while True:
+            choice = input(
+                f"{self.cli.C_CYAN}[?]{self.cli.C_RESET} "
+                "[R]etry / [S]ave and Exit / [V]im (edit) / [D]iscard: "
+            ).strip().lower()
+            if choice in ('r', 'retry'):
+                return 'R'
+            elif choice in ('s', 'save', 'exit'):
+                return 'S'
+            elif choice in ('v', 'vim', 'edit'):
+                return 'V'
+            elif choice in ('d', 'discard'):
+                return 'D'
+            # End-elif
+            self.cli.error("Invalid choice. Please enter R / S / V / D.")
+        # End-while
+    # End-def
+
+    ##
+     # @brief Pop the injected user message that was never accepted by the LLM.
+     #
+     # @note On API failure step() appends nothing, so the history tail is
+     #       exactly the injected plain-text user message (plus the dynamic
+     #       context block, removed with it). A tool_result payload is never
+     #       popped here.
+     #
+    def _rollback_pending_message(self):
+        hist = self.agent.history
+        if not hist:
+            return
+        # End-if
+        tail = hist[-1]
+        if tail.get("role") != "user":
+            return
+        # End-if
+        if isinstance(tail.get("content", ""), list):
+            return  # tool_result payload: never roll back
+        # End-if
+        hist.pop()
+        self.session.save_history(hist)
+    # End-def
+
+    ##
+     # @brief Drop the pending tool turn (trailing tool_result + its assistant
+     #        tool_use) from history.
+     #
+     # @note The tool outputs were never sent to the LLM (the API call failed),
+     #       so removing the pair loses no information and the model re-decides
+     #       on the next turn. Keeps history valid: a dangling tool_use would
+     #       400 the next commit (tool_use without tool_result).
+     #
+    def _drop_pending_tool_turn(self):
+        hist = self.agent.history
+        if hist and hist[-1]["role"] == "user":
+            tail = hist[-1]["content"]
+            if isinstance(tail, list) and tail and tail[0].get("type") == "tool_result":
+                hist.pop()
+                if hist and hist[-1]["role"] == "assistant":
+                    hist.pop()
+                # End-if
+            # End-if
+        # End-if
+        self.session.save_history(hist)
     # End-def
 
     ##
@@ -411,18 +641,16 @@ class InteractiveCLI:
                     if isinstance(content, list) and len(content) > 0 and content[0].get("type") == "tool_result":
                         self.cli.info("\nProcessing pending tool returns in background...")
 
-                        initial_history_len = len(self.agent.history)
+                        ok, err = self._run_agent_loop()
 
-                        while self.agent.step():
-                            pass
-
-                        # Safeguard: If step() failed due to an API Error, the history size remains unchanged.
-                        # We must pop the stuck tool_result to break the infinite 429 retry loop.
-                        if len(self.agent.history) == initial_history_len:
-                            self.cli.error("\nFATAL: Background execution blocked by an API Error.")
-                            self.cli.error("Dropping the pending tool result to prevent infinite API retry loop.")
-                            self.agent.history.pop()
-                            self.session.save_history(self.agent.history)
+                        # All retries exhausted: drop the pending tool turn
+                        # (tool_result + its assistant tool_use pair) so history
+                        # never ends with a dangling tool_use that would 400 the
+                        # next commit. The pair was never seen by the model.
+                        if err is not None:
+                            self.cli.error(f"\nFATAL: Background execution blocked by an API Error: {err}")
+                            self._drop_pending_tool_turn()
+                            self.cli.error("Dropping the pending tool turn to prevent infinite API retry loop.")
                         # End-if
 
                         continue
@@ -499,8 +727,7 @@ class InteractiveCLI:
                 elif command == 'commit':
                     self._cmd_commit()
                 elif command == 'clear':
-                    self.staged_message = ""
-                    self.cli.success("Buffer cleared.")
+                    self._cmd_clear()
                 else:
                     self.cli.error(f"Unknown command '{command}'. Type 'help' for available commands.")
                 # End-if
