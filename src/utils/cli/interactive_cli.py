@@ -268,8 +268,11 @@ class InteractiveCLI:
     # End-def
 
     ##
-     # @brief `vim` command handle. 
+     # @brief `vim` command handle.
      # Open editor and write message, saved on staged buffer.
+     #
+     # @return True on a completed editor session; False when the editor could
+     #         not be launched (draft preserved, buffer untouched).
      #
     def _cmd_vim(self):
         # Set default editor: vim on Linux and notepad on Windows.
@@ -284,7 +287,7 @@ class InteractiveCLI:
         staged_file = self.session.get_staged_file()
         if not staged_file:
             self.cli.error("Error: No active session; cannot edit the staged draft.")
-            return
+            return False
         # End-if
 
         # Ensure the file exists with the current buffer content.
@@ -298,7 +301,16 @@ class InteractiveCLI:
         # End-if
 
         editor_cmd.append(staged_file)
-        subprocess.call(editor_cmd)
+        try:
+            subprocess.call(editor_cmd)
+        except FileNotFoundError:
+            # The configured editor could not be launched. The staged draft is
+            # preserved (it was written above) and the exception must NOT
+            # propagate to run()'s generic error handler.
+            self.cli.error(f"Error: Editor '{editor_cmd[0]}' could not be launched.")
+            self.cli.info("Staged draft preserved. Check your EDITOR setting.")
+            return False
+        # End-try
 
         # Read back user input (the editor wrote the file in place).
         new_content = self.session.load_staged()
@@ -307,6 +319,7 @@ class InteractiveCLI:
             self.cli.success("Buffer successfully updated via editor.")
         else:
             self.cli.info("Buffer unchanged.")
+        return True
     # End-def
 
     ##
@@ -433,16 +446,6 @@ class InteractiveCLI:
                     # Message accepted: the staged area is now committed.
                     self.session.clear_staged()
                     self.staged_message = ""
-
-                    # Phase 2: tool loop (only when this step requested tools).
-                    # A plain-text reply (cont=False) means the turn is done.
-                    if cont:
-                        ok, err = self._run_agent_loop()
-                        if err is not None:
-                            self.cli.error(f"Tool loop interrupted by API error: {err}")
-                            self.cli.info("The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
-                        # End-if
-                    # End-if
                     break
                 # End-if
 
@@ -455,7 +458,12 @@ class InteractiveCLI:
                 elif choice == 'V':
                     # Roll back the pending message, edit the draft, re-send.
                     self._rollback_pending_message()
-                    self._cmd_vim()
+                    if not self._cmd_vim():
+                        # Editor could not be launched: keep the draft and
+                        # leave the commit flow (no re-send of stale content).
+                        self.cli.info("Commit aborted. Draft preserved in this branch.")
+                        return
+                    # End-if
                     content = self.staged_message.strip()
                     if not content:
                         self.session.clear_staged()
@@ -481,13 +489,33 @@ class InteractiveCLI:
                     return
                 # End-elif
             except (KeyboardInterrupt, EOFError):
-                # Ctrl+C / EOF during the send phase: roll back the pending
-                # (never-accepted) message and keep the draft for later.
+                # Interrupt BEFORE acceptance: roll back the never-accepted
+                # message and keep the draft for later.
                 self._rollback_pending_message()
                 self.cli.info("\nSend aborted. Draft preserved.")
                 return
             # End-try
         # End-while
+
+        # ----- Phase 2: tool loop (only when the accepted step requested
+        # tools; a plain-text reply (cont=False) means the turn is done).
+        # Interrupts here happen AFTER the draft was committed, so the message
+        # must NOT claim the draft is preserved, and no rollback is attempted:
+        # the pending tool_result belongs to the committed turn and stays in
+        # history so run()'s background check auto-resumes it at the next
+        # prompt. -----
+        if cont:
+            try:
+                _, err = self._run_agent_loop()
+            except (KeyboardInterrupt, EOFError):
+                self.cli.info("\nSend aborted mid-execution. The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+                return
+            # End-try
+            if err is not None:
+                self.cli.error(f"Tool loop interrupted by API error: {err}")
+                self.cli.info("The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+            # End-if
+        # End-if
     # End-def
 
     ##
