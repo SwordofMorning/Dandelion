@@ -147,9 +147,59 @@ windows_jobs = 2
 `src/`下的源码按照功能分为了四个模块：
 
 1. `core`，Agent的核心逻辑，涉及上下文压缩、记忆管理等；
-2. `subagent`，涉及SubAgent的
+2. `subagent`，涉及SubAgent的“Agent池”、消息传递结构等；
+3. `tool`，Agent调用的各类工具；
+3. `utils`，包含配置调用、CLI、日志管理等多种通用的接口。
 
-## 四、工具类
+## 四、通用类
 
 `src/utils`下提供了一些通用的方法，比如读取配置；但也有一些复杂的、涉及Agent的交互逻辑，比如CLI。为此，这里将和Agent按照相关性，按照从低到高的顺序来讲述工程的核心逻辑。
+
+### 4.1 配置加载 config
+
+`src/utils/config/config.py`提供了读取`.env/`下各项配置的函数。其中：
+
+1. `load_api_config()`用于读取`api.cfg`，包含API Key、模型名称等配置项，在`main.py`的最初阶段被调用；
+2. `load_devices_config()`读取`devices.yaml`，包含SSH、串口的设备号，在`src/tool/shell/ssh_tool.py`中的执行阶段被调用。
+
+### 4.2 日志与会话 logging
+
+`src/utils/logging/logger.py`主要职责是将程序运行中的数据写入日志文件：
+
+```sh
+Agent/SubAgent -> log_api_call() -> `.log/`
+```
+
+`src/utils/logging/session.py`则为CLI实现了会话管理功能，每一个会话都以`sess_yyyymmdd_hhmmss_ms`的格式存放在`.log/`下。每一个会话文件夹下的内容有如下内容：
+
+```log
+.
+├── api.log
+├── artifacts
+│   ├── call_00_52wgHo88lnWaSbwa1LVi0390.txt
+│   ├── call_00_d3RYUb6puaMqEbF6qHPz5544.txt
+│   ├── call_00_ET_pDF2P1ouXrYlgUznHSfw1398.txt
+│   ├── call_00_ET_qXiy3nRHIkejK7HmsswS1871.txt
+│   ├── call_00_XWPproKZtD09QOr9HMpM4566.txt
+│   ├── call_01_ChyyGZs00djfLGsVV9No1945.txt
+│   ├── call_01_ET_UmuzMbEiDTM9EOBC5Qfm2566.txt
+│   └── call_01_QwIjMQ4IxwJxK6qP2WP18965.txt
+├── history.log
+├── memory
+│   ├── feat_staged_retry_decisions.md
+│   ├── feat_staged_retry_impl_status.md
+│   ├── feat_staged_retry_recheck_status.md
+│   └── MEMORY.md
+├── meta.log
+└── task_state.json
+```
+
+其中：
+
+1. `api.log`记录了每一次Agent向LLM的request以及其回复的原始数据（json格式），包含tools、sysprompt、user、assist等内容；
+2. `artifacts/`下是tool call的产物，对于read file来说，一次只能允许读取8000个字符；因此需要先将结果保存到本地，然后让LLM分多次读取；
+3. `history.log`简化后的`api.log`，只包含用户发送的信息、LLM回复的结果，就像是Web/APP端对话一样；
+4. `memory/`下包含了LLM认为需要存放的“local”记忆；
+5. `meta.log`保留了会话本身的信息，比如会话的名字、最后使用的时间等；
+6. `task_state.json`是LLM自己规划的任务，包含目标、代办、已完成三个内容，用于保持LLM的注意力。
 
