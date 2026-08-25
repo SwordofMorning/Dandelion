@@ -28,7 +28,7 @@
 5. .github/     # GHA workflow
 ```
 
-### 1.2 `main.py`
+### 1.2 主函数
 
 `main.py`代码相对简洁，其中主要做如下几件事：
 
@@ -39,9 +39,9 @@
 4. 依据配置内容构造Main Agent；
 5. 将Agent和会话管理器赋值给CLI并启动。
 
-## 二、`mk/`
+## 二、构建脚本
 
-`mk/`相对简单，并且`mk/lib/paths.py`还为程序提供了pwd定位的工作，因此我们先从项目的构建流程入手。如果你对工程构建没有兴趣，可以直接跳转到[下一章](#三srcutils)。
+`mk/`相对简单，并且`mk/lib/paths.py`还为程序提供了pwd定位的工作，因此我们先从项目的构建流程入手。如果你对工程构建没有兴趣，可以直接跳转到[下一章](#三src概览)。
 
 构建工具选用Nuitka，只对项目中的“小文件”进行编译；较大的文件（例如，Google的一系列SDK）则采用拷贝Python源码的方式添加到构建产物中。
 
@@ -101,7 +101,7 @@ windows_jobs = 2
 
 这里是为了避免GHA的Windows平台潜在的内存不足，而手动限制`make -j`的任务数量 - 针对大的Python文件，还是指Google的SDK。
 
-### 2.3 make.py
+### 2.3 `mk/make.py`
 
 在文件的最下方的`main()`中，根据用户的输入进行不同的函数分发，对于核心构建函数`target_all()`来说，它按顺序执行如下的三个工作：
 
@@ -142,5 +142,14 @@ windows_jobs = 2
 5. 生成运行脚本；
     > 为了可以在`build/Dandelion`这一层中运行程序，而不需要进到`build/Dandelion/bin`中，在外层放置了`dandelion.cmd`和`dandelion.sh`，用于执行`bin`中的实际二进制程序。
 
-## 三、`src/utils/`
+## 三、src概览
+
+`src/`下的源码按照功能分为了四个模块：
+
+1. `core`，Agent的核心逻辑，涉及上下文压缩、记忆管理等；
+2. `subagent`，涉及SubAgent的
+
+## 四、工具类
+
+`src/utils`下提供了一些通用的方法，比如读取配置；但也有一些复杂的、涉及Agent的交互逻辑，比如CLI。为此，这里将和Agent按照相关性，按照从低到高的顺序来讲述工程的核心逻辑。
 
