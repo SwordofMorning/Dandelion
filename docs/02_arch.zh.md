@@ -155,6 +155,19 @@ windows_jobs = 2
 
 `src/utils`下提供了一些通用的方法，比如读取配置；但也有一些复杂的、涉及Agent的交互逻辑，比如CLI。为此，这里将和Agent按照相关性，按照从低到高的顺序来讲述工程的核心逻辑。
 
+在本章节中的[CLI小节](#46-cli)中了解Agent Loop是如何实现之后，我们进入[下一章](#五agent核心设计)，查看Agent类的具体实现。
+
+```sh
+.
+├── cli                 # CLI 终端
+├── config              # 配置加载
+├── __init__.py
+├── llm_provider        # API SDK 动态配置
+├── logging             # 日志/会话管理
+├── routing             # 模型路由
+└── safe_llm            # LLM request 实现
+```
+
 ### 4.1 配置加载 config
 
 `src/utils/config/config.py`提供了读取`.env/`下各项配置的函数。其中：
@@ -202,4 +215,61 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 4. `memory/`下包含了LLM认为需要存放的“local”记忆；
 5. `meta.log`保留了会话本身的信息，比如会话的名字、最后使用的时间等；
 6. `task_state.json`是LLM自己规划的任务，包含目标、代办、已完成三个内容，用于保持LLM的注意力。
+
+### 4.3 各API请求 llm_provider
+
+`src/utils/llm_provider`下针对OpenAI、Anthropic和Google AI的不同SDK的API请求的格式进行了派生。其中`base.py`提供了通用的基类方法，剩下的几个类由`LLMProvider`派生而来。
+
+对于Anthropic API来说，其中DeepSeek使用的Reasoning Effort (Think Level)采用OpenAI/Google风格的`low`、`med`、`high`等字符，而不是像Anthropic一样使用Think Budget。
+
+对于OpenAI和Google AI来说，其实现了基本的框架与内容，后续需要更新为Response API和Interactive API。
+
+### 4.4 模型路由 routing
+
+`src/utils/routing`旨在解决两个问题：
+
+1. SubAgent的模型自动选择，高推理能力的模型执复杂任务、低推理能力的模型执行简单的工具调用任务；
+2. 部分LLM服务商存在TPM、RPM等访问限制，需要实现一个本地的速率控制，避免429 too many request.
+
+注意，这里的Rate Limit并没有实现一个全局的、动态的控制逻辑，只是实现了单次启用程序的计数统计。这里需要后期完善。
+
+### 4.5 LLM请求 safe_llm
+
+`src/utils/safe_llm`核心职责是为程序发送request到LLM，其流程如下：
+
+```py
+# - Main Agent
+#      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
+# - Sub Agent
+#      PlanTool.execute()  -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
+#      SubAgent.run()      -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
+```
+
+其中：
+
+1. MainAgent将在它自身的Tool iterate中直接通过`safe_stream_request()`向LLM发起request请求；
+2. SubAgent则需要通过`route_request`：
+    - 首先，根据它（类）的属性（成员），选择合适的LLM（在config中配置）；
+    - 然后，再确认没有超过Rate Limit；
+    - 最后，发送请求。
+
+### 4.6 CLI
+
+`src/utils/cli/cli_printer.py`提供了终端彩色打印的功能，无其他核心功能。
+
+`src/utils/cli/interactive_cli.py`基于`prompt_toolkit`，模仿git风格的命令行控制，提供了一套交互式的CLI。其中值得关注的点有：
+
+1. `_build_completer()`中定义了命令以及其补全的次级命令；
+2. `run()`中通过死循环来实现“Agent Loop”：
+    ```py
+        # Interactive **CLI** Loop
+        run(True)
+            # **Agent** Loop
+            -> _run_agent_loop()
+                # Call **Tools** Loop/Iterate
+                -> agent.step()
+    ```
+3. 其余内容则是命令分发、异常管理等。
+
+## 五、Agent核心设计
 
