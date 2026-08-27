@@ -282,7 +282,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 2. SubAgent 则需要通过 `route_request`：
     - 首先，根据它（类）的属性（成员：task_description/toolset/depth），选择合适的 LLM（在 `SUB_LIST` 中配置，经 `RoutingPolicy` 条件匹配 + 速率限制）；
     - 然后，确认没有超过 Rate Limit；
-    - 最后，发送请求。同一 alias 的 provider 实例在 `_provider_cache` 中缓存（带线程锁），每个 SubAgent 模型使用自己的 `thinking/effort` 配置。
+    - 最后，发送请求。
 3. 无论哪条路径，发送前都会做消息归一化 `_normalize_messages()`：将相邻的同 role 消息合并（例如压缩摘要产生的连续 user 消息），满足 Anthropic/Gemini 对严格角色交替的要求。
 4. 重试策略：
     - Main Agent：1 次初始 + `_LLM_RETRY_COUNT=3` 次重试，指数退避 `(2, 4, 8)` 秒，对 400/401/429/500/连接错误统一处理；
