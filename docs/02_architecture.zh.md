@@ -110,7 +110,7 @@ windows_jobs = 2
 
 这里是为了避免 GHA 的 Windows 平台潜在的内存不足（MSVC 对单个编译单元堆占用大，会触发 "C1002: compiler is out of heap space"），而手动限制 `make -j` 的任务数量——针对大的 Python 文件，还是指 Google 的 SDK。
 
-此外，`[build]` 段还定义了 `entry = main.py`、`output_dir = build`、`cache_dir = .nuitka-cache`、`icon`、`company/description`（写入 Windows PE 版本资源）等；`[sign]` 段目前 `enabled = false`，对应 `make sign` 占位目标（P3 规划）。
+此外，`[build]` 段还定义了 `entry = main.py`、`output_dir = build`、`cache_dir = .nuitka-cache`、`icon`、`company/description`（写入 Windows PE 版本资源）等；`[sign]` 段目前 `enabled = false`，对应 `make sign` 预留的软件签名。
 
 ### 2.3 `mk/make.py`
 
