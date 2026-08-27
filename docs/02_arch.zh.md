@@ -345,3 +345,52 @@ Dandelion上下文的token计算并没有引入分词器，而是简单地通过
 3. 通过LLM构建摘要；
 4. 以`head + summary + tail`的形式重新返回上下文。
 
+## 六、子代理设计
+
+子agent的设计大致如下：
+
+```sh
+.
+├── pool.py             # “线程(agent)”池
+├── registry.py         # subagent注册机
+├── result.py           # subagent与parent之间传递消息的数据结构
+├── i_subagent.py       # 虚基类
+└── subagent.py         # “通用”subagent
+```
+
+`i_subagent`旨在为特化subagent保留相同的调用接口，例如，我们期望通过特化的subagent来攥写相应的报告文档。在`subagent.py`内部，同样与Main Agent一样有sysprompt、agent-loop等机制，但是省去了复杂的上下文、记忆管理：
+
+1. 每一个subagent都在`run()`中完成它的全部工作，然后将结果封装到`result.py`中返回；
+2. subagent也能派生出“subsubagent”，但是有其最大递归深度的限制；
+3. 每个subagent有一个专属的ID，以便于pool进行管理、为parent界定返回值与日志记录。
+
+`pool.py`创建了一个agent池来管理subagents，通常来说，subagent的调用方式通常为：
+
+```sh
+Main Agent (Root)
+    # 不生成 subsubagent
+    -> plan_tool:                               # 创建多少个不同的任务，并分配给subagent
+    -> SpawnSubagentTool:                       # 创建agent池
+        -> pool.create_and_run:                 # agent池创建调用对象
+            -> resolve_toolset:                 # 获取工具集
+            -> SubAgent.run:                    # SubAgent-Loop
+        <- parent.sub_results.append(result)    # 返回结果
+    # 生成 subsubagent
+    -> plan_tool:
+    -> SpawnSubagentTool:
+        -> pool.create_and_run:
+            -> resolve_toolset:
+            -> SubAgent.run:
+                -> RestrictedSpawnTool:                     # 生成subsubagent
+                    -> pool.create_and_run:                 # SubSubAgent-Loop
+                    # ...
+                    <- parent.sub_results.append(result)    # 返回结果
+            # ...
+        <- parent.sub_results.append(result)                # 返回结果
+```
+
+详细设计可以参考相应代码中的注释部分。
+
+## 七、工具类
+
+`src/tool`下的工具类都由`base_tool.py`派生而来，在`base_too.py`中实现了大部分的基于路径的沙箱保护，少部分（比如针对shell）的特殊防护则在派生类中增加额外的成员函数进行保护。
