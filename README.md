@@ -119,4 +119,4 @@ deepseek-v4-flash:(staged_msg)> exit
 2. [项目架构][02_arch.zh.path]
 
 [releases-url]: https://github.com/SwordofMorning/Dandelion/releases
-[02_arch.zh.path]: docs/02_arch.zh.md
+[02_arch.zh.path]: docs/02_architecture.zh.md
