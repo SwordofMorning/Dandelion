@@ -112,4 +112,10 @@ The usage here is similar to the source code method mentioned above. After enter
 
 Both scripts point to the `dandelion` binary file located in their subdirectories. This approach is designed to simplify directory navigation using wrapping scripts.
 
+## 4. Reading List
+
+1. Download and run TODO.
+2. [Architecture][02_arch.en.path]
+
 [releases-url]: https://github.com/SwordofMorning/Dandelion/releases
+[02_arch.en.path]: 02_architecture.en.md

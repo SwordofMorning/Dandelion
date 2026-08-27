@@ -113,4 +113,10 @@ deepseek-v4-flash:(staged_msg)> exit
 
 来执行程序，两者均指向其子目录下的`dandelion`二进制文件。这里旨在通过以脚本的形式简化目录。
 
+## 四、阅读清单
+
+1. 下载并运行：TODO
+2. [项目架构][02_arch.zh.path]
+
 [releases-url]: https://github.com/SwordofMorning/Dandelion/releases
+[02_arch.zh.path]: docs/02_architecture.zh.md
