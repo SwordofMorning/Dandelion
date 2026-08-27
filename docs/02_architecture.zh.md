@@ -304,7 +304,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
                 # Call **Tools** Loop/Iterate
                 -> agent.step()
     ```
-    其中 `_run_agent_loop()` 在两种时机被调用：`commit` 命令发送消息后的工具循环，以及 `run()` 每次等待输入前对 history 尾部的"后台检查"——若发现最后一条是 tool_result（上次中断遗留的未完成工具轮次），则先自动续跑 Agent Loop，失败则丢弃该悬挂的 tool_use/tool_result 对（`_drop_pending_tool_turn()`），避免下一次请求 400；
+    其中 `_run_agent_loop()` 在两种时机被调用：`commit` 命令发送消息后的工具循环；以及 `run()` 每次等待输入前对 history 尾部的"后台检查"——若发现最后一条是 tool_result（上次中断遗留的未完成工具轮次），则先自动续跑 Agent Loop，失败则丢弃该悬挂的 "tool_use/tool_result 对"，避免下一次请求 400；
 3. staged 暂存区：`vim`/`load` 编辑的消息先写入当前会话的 `staged.md`，提示符中以 `*` 显示脏标记。
 
 ## 五、Agent 核心设计
@@ -379,11 +379,11 @@ Dandelion 上下文的 token 计算并没有引入分词器，而是简单地通
 soft_limit = MAX_CONTEXT_TOKENS - MAX_TOKENS - 固定开销(sysprompt + tool schemas)
 ```
 
-即：上下文窗口是"共享"的（history + 输出 + 开销必须一起放进去），因此压缩阈值提前为输出预算与固定开销留出空间，避免 provider 返回 400 context-length 错误。
+即：上下文窗口是"共享"的（最大上下文 = 历史上下文 + 为LLM设置的最大输出 + 本次输入），因此压缩阈值提前为输出预算与固定开销留出空间，避免 provider 返回 400 context-length 错误。
 
 压缩在 `_compact_context()` 中实现：
 
-1. 备份：将完整 history 以追加式 JSON 写入会话的 `archives/history_<len>_<时间戳>.json`（可恢复）；
+1. 备份：将完整 history 以追加式 JSON 写入会话的 `archives/history_<len>_<时间戳>.json`；
 2. 选择压缩范围：head 取前 5 条（并确保不以未配对的 assistant tool_use 结尾），recent 取最近 15 条之内、以"最近的纯文本 user 消息"为安全断点（保证 tool_use/tool_result 配对不被拆散）；找不到安全断点则只保留 head + summary；
 3. 通过 LLM 构建摘要（独立请求，XML 格式输出：goals/completed/decisions/artifacts/pending，摘要输入超过 200k 字符时截断中间部分；失败则回落基础剪断）；
 4. 以 `head + summary(user 角色) + recent` 的形式重写 history 并持久化，同时失效记忆缓存；
