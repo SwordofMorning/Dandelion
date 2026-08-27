@@ -66,7 +66,7 @@ main.py
 
 其输出结果将输出到 `build` 文件夹下。
 
-对于 GHA 构建，则通过 `.github/workflows/release.yml -> mk/make.py` 的顺序来调用（详见[2.4 节](#24-ci构建发布)）。
+对于 GHA 构建，则通过 `.github/workflows/release.yml -> mk/make.py` 的顺序来调用（详见[2.4 节](#24-ci-构建发布)）。
 
 ### 2.1 mk 的架构
 
@@ -174,7 +174,6 @@ windows_jobs = 2
     - Linux x86_64 与 arm64：各 5 个 Ubuntu 目标（18.04/20.04/22.04/24.04/26.04），全部走 `docker-build.sh` 容器构建。
 3. 为什么 Docker per-distro：Nuitka standalone 产物链接构建机的 glibc，新发行版上构建的二进制在旧发行版上会报 `GLIBC_x.y not found`。在目标发行版自己的容器内构建可保证产物只依赖该发行版的 glibc；GitHub runner 镜像只覆盖 22.04/24.04，因此 18.04/20.04 无论如何都要走容器，统一用 Docker 使流程确定。
 4. 缓存策略：venv 与 Nuitka 缓存均按 `os_name-arch-distro` 隔离（编译产物携带构建容器的 glibc 要求，跨发行版共享缓存会"投毒"产物）。曾使用 sccache，Linux 增量构建在 `codeobject.c` 处崩溃，而 Windows 的 clcache 无此问题，故已移除 sccache 改用 clcache。
-5. 门禁：`.github/workflows/ascii-check.yml` 在主干分支执行 `test/ascii_check.py`，对 `src/`、`mk/`、`main.py` 等做 ASCII-only 扫描（与 5.3 的语言策略呼应，任何非 ASCII 源码字符都会导致构建失败）。
 
 ## 三、src 概览
 
