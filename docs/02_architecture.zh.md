@@ -114,7 +114,7 @@ windows_jobs = 2
 
 ### 2.3 `mk/make.py`
 
-在文件的最下方的 `main()` 中，根据用户的输入进行不同的函数分发（all/clean/version/sign/help）。对于核心构建函数 `target_all()` 来说，它按顺序执行如下的三个工作：
+在文件的最下方的 `main()` 中，根据用户的输入进行不同的函数分发。对于核心构建函数 `target_all()` 来说，它按顺序执行如下的三个工作：
 
 #### 2.3.1 前置信息
 
@@ -158,22 +158,21 @@ windows_jobs = 2
     > `_copy_dependency_closure()` 利用 BFS 搜索相应的库、被其调用的底层库、以及 `.dist-info`，确保运行时不会出现版本校验错误。
 3. 重新引入标准库（`_copy_stdlib_fallback()`）；
     > 以 `requests` 为例，假如我们让 Nuitka 忽略构建这个库，而这个库用到了 `ssl`。如果我们在核心代码中没有用到 `ssl`，那么可能出现遗失的问题。
-    > 因此，我们利用 Python 内置的 `ast` 扫描在 (2) 中拷贝的依赖，然后将其中被使用的标准库放入 `bin/_stdlib_fallback` 目录中（迭代至不动点，覆盖 `ssl -> _ssl` 这类传递依赖）。该目录在 `paths.py` 中被追加到 `sys.path` 末尾，保证永不遮蔽 Nuitka 编译模块。
-4. 构建工作区：为实现"开箱即用"，在 `build/Dandelion` "根目录"下创建 `.env`、`llm/memory`、`llm/skill` 和 `.log/` 等文件夹（空目录以 `.keep` 占位）；若存在 `.env/api.cfg.example`，则拷贝为 `.env/api.cfg` 并删除对应 `.keep`；
+    > 因此，我们利用 Python 内置的 `ast` 扫描在 (2) 中拷贝的依赖，然后将其中被使用的标准库放入 `bin/_stdlib_fallback` 目录中）。
+4. 构建工作区：为实现"开箱即用"，在 `build/Dandelion` "根目录"下创建 `.env`、`llm/memory`、`llm/skill` 和 `.log/` 等文件夹。
 5. 生成运行脚本：为了可以在 `build/Dandelion` 这一层中运行程序，而不需要进到 `build/Dandelion/bin` 中，在外层放置了 `dandelion.cmd` 和 `dandelion.sh`，用于执行 `bin` 中的实际二进制程序；
-    > Linux 侧采用 `exec` 包装脚本而非符号链接，以避免双路径解析（`$ORIGIN` 与 Nuitka 模块目录）不一致导致的崩溃；同时若环境存在 `patchelf`，会对二进制强制 `--force-rpath --set-rpath $ORIGIN`（DT_RPATH 而非 DT_RUNPATH），保证 `bin/` 内置的 libpython 等库先于 `LD_LIBRARY_PATH` 被搜索，防止外部 libpython 抢先加载。
+    > Linux 侧采用 `exec` 包装脚本而非符号链接，以避免双路径解析（`$ORIGIN` 与 Nuitka 模块目录）不一致导致的崩溃；同时若环境存在 `patchelf`，会对二进制强制 `--force-rpath --set-rpath $ORIGIN`，保证 `bin/` 内置的 libpython 等库先于 `LD_LIBRARY_PATH` 被搜索，防止外部 libpython 抢先加载。
 6. 收尾：写入 `version.txt`；遍历产物清理 `__pycache__`。
 
 ### 2.4 CI 构建发布
 
-`.github/workflows/release.yml` 承担"版本计算 + 矩阵构建 + 上传产物"：
+`.github/workflows/release.yml` 实现"版本计算 + 矩阵构建 + 上传产物"：
 
-1. `meta` job 计算版本：push tag 时用 `git describe --tags --match "v*"`；否则生成 `v0.0.0-dev-<yyMMdd>-<short-sha>`；非正式发布（未打 tag）再追加 `-ci` 后缀。版本通过 `DANDELION_VERSION` 注入 `mk/make.py`。
+1. `meta` job 计算版本：push tag 时用 `git describe --tags --match "v*"`；否则生成 `v0.0.0-dev-<yyMMdd>-<short-sha>`；非正式发布（CI中的workflow）追加 `-ci` 后缀。版本通过 `DANDELION_VERSION` 注入 `mk/make.py`。
 2. `build` job 矩阵：
     - Windows x86_64：GitHub host runner（Nuitka + MSVC + clcache）；
     - Linux x86_64 与 arm64：各 5 个 Ubuntu 目标（18.04/20.04/22.04/24.04/26.04），全部走 `docker-build.sh` 容器构建。
-3. 为什么 Docker per-distro：Nuitka standalone 产物链接构建机的 glibc，新发行版上构建的二进制在旧发行版上会报 `GLIBC_x.y not found`。在目标发行版自己的容器内构建可保证产物只依赖该发行版的 glibc；GitHub runner 镜像只覆盖 22.04/24.04，因此 18.04/20.04 无论如何都要走容器，统一用 Docker 使流程确定。
-4. 缓存策略：venv 与 Nuitka 缓存均按 `os_name-arch-distro` 隔离（编译产物携带构建容器的 glibc 要求，跨发行版共享缓存会"投毒"产物）。曾使用 sccache，Linux 增量构建在 `codeobject.c` 处崩溃，而 Windows 的 clcache 无此问题，故已移除 sccache 改用 clcache。
+3. 缓存策略：venv 与 Nuitka 缓存均按 `os_name-arch-distro` 隔离。
 
 ## 三、src 概览
 
