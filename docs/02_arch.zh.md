@@ -211,7 +211,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 1. `api.log`记录了每一次Agent向LLM的request以及其回复的原始数据（json格式），包含tools、sysprompt、user、assist等内容；
 2. `artifacts/`下是tool call的产物，对于read file来说，一次只能允许读取8000个字符；因此需要先将结果保存到本地，然后让LLM分多次读取；
-3. `history.log`简化后的`api.log`，只包含用户发送的信息、LLM回复的结果，就像是Web/APP端对话一样；
+3. `history.log`简化后的`api.log`，只包含用户发送的信息、LLM回复的结果（即`messages`字段中的内容），就像是Web/APP端对话一样；
 4. `memory/`下包含了LLM认为需要存放的“local”记忆；
 5. `meta.log`保留了会话本身的信息，比如会话的名字、最后使用的时间等；
 6. `task_state.json`是LLM自己规划的任务，包含目标、代办、已完成三个内容，用于保持LLM的注意力。
@@ -247,7 +247,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 其中：
 
-1. MainAgent将在它自身的Tool iterate中直接通过`safe_stream_request()`向LLM发起request请求；
+1. Main Agent将在它自身的Tool iterate中直接通过`safe_stream_request()`向LLM发起request请求；
 2. SubAgent则需要通过`route_request`：
     - 首先，根据它（类）的属性（成员），选择合适的LLM（在config中配置）；
     - 然后，再确认没有超过Rate Limit；
@@ -272,4 +272,36 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 3. 其余内容则是命令分发、异常管理等。
 
 ## 五、Agent核心设计
+
+在本章节，将介绍`src/core`下的设计，主要是Main Agent中的记忆管理、上下文压缩、Skill加载。这里我们将从最简单的`sysprompt`入手，开始讲解每一个文件的作用。在完成本章节的阅读之后，对Main Agent有了初步的了解，我们将在下一章中阅读SubAgent的设计。
+
+### 5.1 sysprompt
+
+Dandelion的systprompt被以常量的方式定义在`src/core/sysprompt.py`中，而不是采用文件加载的方式来实现。对于sysprompt，其中的拼接方式是：
+
+1. 首先，定义`[Dandelion]`身份，以便于后期拼接Memory和Target (Task State)；
+2. 其次，定义环境是Linux还是Windows，以便于LLM使用正确的shell命令；
+3. 然后，如果启用了SubAgent，那么添加相应的SubAgent调用规则；
+4. 接着，定义Skill、安全规则、语言规则、回复文本风格；
+5. 最后，明确Memory读取逻辑。
+
+为了最大程度提高缓存命中率，我们没有将Memory直接插入到`system`中而是将其放在`user`的结尾部分，这样，整个request的构建就像是：
+
+```json
+{
+    "system": "You are Dandelion, ......",
+    "messages": [
+        {
+            "role": "user",
+            "content": "用户输入或者Tools调用结果。[Dandelion Context (auto-injected reference data)]\nRelevant Memories: ...... [Dandelion Context End]"
+        },
+    ],
+}
+```
+
+### 5.2 skill
+
+`src/core/skill.py`负责将`llm/skill`中的各类skill提取出头部，插入到sysprompt中。如果LLM需要读取skill，则通过`skill_tool`来调用。
+
+### 5.3 memory
 
