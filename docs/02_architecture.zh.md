@@ -249,7 +249,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ### 4.3 各 API 请求 llm_provider
 
-`src/utils/llm_provider` 下针对 OpenAI、Anthropic 和 Google AI 的不同 SDK 的 API 请求格式进行了派生。其中 `base.py` 提供了通用的基类方法（`LLMProvider`，抽象 `safe_request/safe_stream_request/extract_text`），剩下的几个类（`OpenAIProvider`、`AnthropicProvider`、`GeminiProvider`）由它派生而来，`SafeLLMClient._create_provider()` 按 `SDK_TYPE` 选择。
+`src/utils/llm_provider` 下针对 OpenAI、Anthropic 和 Google AI 的不同 SDK 的 API 请求格式进行了派生。其中 `base.py` 提供了通用的基类方法，剩下的几个类由它派生而来，`SafeLLMClient._create_provider()` 按 `SDK_TYPE` 选择。
 
 对于 Anthropic API 来说，其中 DeepSeek 使用的 Reasoning Effort (Think Level) 采用 OpenAI/Google 风格的 `low`、`med`、`high` 等字符，而不是像 Anthropic 一样使用 Think Budget（`thinking/effort` 注入逻辑在 Provider 内完成）。
 
