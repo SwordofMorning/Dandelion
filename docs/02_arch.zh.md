@@ -305,3 +305,43 @@ Dandelion的systprompt被以常量的方式定义在`src/core/sysprompt.py`中�
 
 ### 5.3 memory
 
+Dandelion的记忆管理可以简要地分为：
+
+1. 索引：`sysprompt.build()`；
+2. 读取：`agent._get_memories()`；
+3. 写入：`MemoryTool.execute()`。
+
+同时，记忆分为两层：
+
+1. Global：存放在`llm/memory`下；
+2. Local：存放在`.log/sess_<id>/memory/`下。
+
+记忆写入的目录（层级）由LLM指定。
+
+值得注意的是，为了方便LLM进行索引（提取），记忆中的内容均采用英文（ASCII）攥写。在`src/core/memory.py`中，以`class MemoryManager`的形式将记忆的读、写进行了封装。详细的函数调用链可以在`@file`部分注释中查看。
+
+### 5.4 agent
+
+`src/core/agent.py`中定义了Main Agent所需要的全部功能。在前述的[CLI小节](#46-cli)中我们可以看到，agent中的`step()`并不是传统意义上的Agent Loop，而是每一次Agent Loop中的、针对Tools的Loop/Iterate。因此，让我们直接从`step()`开始阅读。
+
+#### 5.4.1 step()
+
+1. 首先，我们构造sysprompt；
+2. 其次，我们进行上下文管理（包含记忆、task state等）：
+    - 插入用户/Tool的输入内容；
+    - 判断是否超过相应的阈值，如果超过，则进行压缩；
+3. 然后，我们构建payload；
+4. 接着，我们进行request；
+5. 最后，根据LLM的返回结果，调用相应的工具，并将结果写入result中。
+
+于是，我们完成了这一次的`step()`，如果LLM任务没有到结束，那么通过`step()`的返回值，CLI会判断：是发起下一次`step()`，继续循环；还是将结束Agent Loop，将终端交还给用户。
+
+#### 5.4.2 上下文压缩
+
+Dandelion上下文的token计算并没有引入分词器，而是简单地通过`_estimate_tokens()`进行估算。上下文的压缩在`_compact_context()`中实现：
+
+1. 备份现有上下文；
+2. 选择压缩上下文范围；
+3. 通过LLM构建摘要；
+4. 以`head + summary + tail`的形式重新返回上下文。
+
