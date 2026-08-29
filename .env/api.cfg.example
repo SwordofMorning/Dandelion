@@ -79,8 +79,8 @@ MODEL_LIST = [
     {
         "model_id": "gemini-3.1-flash-lite",
         "conditions": ["simple"],
-        "max_token": 81920,
-        "max_context_tokens": 81920,
+        "max_token": 8000,
+        "max_context_tokens": 200000,
         "TPM": 250000,
         "RPM": 15,
         "RPD": 500,
