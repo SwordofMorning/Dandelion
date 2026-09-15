@@ -572,6 +572,14 @@ class InteractiveCLI:
         # Last checkpoint of the turn: also covers a stop request that landed
         # on the final step (a plain-text reply with nothing left to run).
         self._try_stop()
+
+        # @note _backup_ready is turn-scoped and must not survive a finished
+        #       turn: the next commit has to take a fresh snapshot, otherwise an
+        #       interrupt in a later turn would roll back this completed turn.
+        #       (Paths that keep the pending message - a retried commit after an
+        #       API failure or an aborted send - intentionally return early and
+        #       keep reusing the existing backup.)
+        self._backup_ready = False
     # End-def
 
     ##
