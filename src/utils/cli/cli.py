@@ -263,6 +263,9 @@ class InteractiveCLI:
             self.agent.reload_history()
             # Load the (empty) staged buffer of the new branch.
             self.staged_message = self.session.load_staged()
+            # The backup belongs to the session directory: a new branch always
+            # starts without rollback capability until its first commit.
+            self._backup_ready = False
             # Print success.
             self.cli.success(f"Switched to a new session branch: '{new_name}'")
             return
@@ -455,6 +458,15 @@ class InteractiveCLI:
             return
         # End-if
 
+        # From here on a turn is running: a SIGINT is recorded as a stop request
+        # (see _on_sigint) instead of raising KeyboardInterrupt.
+        self._turn_active = True
+
+        # Stale requests from a previous turn must not leak into this one, and
+        # the clear must happen BEFORE the backup copy so that a SIGINT arriving
+        # during the copy is preserved and honoured by the checkpoint below.
+        clear_stop()
+
         # ----- Turn backup (the Ctrl+C rollback anchor) -----
         # @note The backup is taken BEFORE the raw input is appended, so it
         #       holds exactly "the state before this commit" - including the
@@ -470,7 +482,12 @@ class InteractiveCLI:
                 self.cli.warning(f"Backup failed: this turn cannot be rolled back ({msg}).")
             # End-if
         # End-if
-        clear_stop()
+
+        # Checkpoint C0: a stop requested while the backup was being written
+        # must abort BEFORE any inference or tool execution starts.
+        if self._try_stop():
+            return
+        # End-if
 
         self.cli.info("Inference Engine Started...\n")
 
@@ -720,10 +737,10 @@ class InteractiveCLI:
      # @retval False Nothing requested, or the request was refused.
      #
      # @note Safety rule: stopping is only allowed when the turn has a complete
-     #       backup. Without one the request is refused and the agent keeps
-     #       running, because stopping a turn without restoring it could leave a
-     #       tool_use without its matching tool_result and make the next
-     #       request fail.
+     #       backup AND the restore succeeds. Otherwise the request is refused
+     #       and the agent keeps running, because stopping a turn without
+     #       restoring it could leave a tool_use without its matching
+     #       tool_result (breaking the next request) or a half-restored session.
      #
     def _try_stop(self):
         if not stop_requested():
@@ -736,7 +753,14 @@ class InteractiveCLI:
             return False
         # End-if
 
-        self._do_rollback()
+        if not self._do_rollback():
+            # The restore could not be completed; the session was put back the
+            # way it was, so the turn simply keeps running.
+            self.cli.error("Stop failed: the rollback could not be completed, continuing.")
+            clear_stop()
+            return False
+        # End-if
+
         clear_stop()
         return True
     # End-def
@@ -744,15 +768,35 @@ class InteractiveCLI:
     ##
      # @brief Restore the session state captured before the last commit.
      #
+     # @return True when the rollback completed (state reloaded); False when
+     #         nothing was rolled back and the turn should keep running.
+     #
      # @note Session files (history.log / staged.md / task_state.json / memory)
      #       are restored from .log/sess_xx/backup, then the agent history and
      #       the staged draft are reloaded into memory. artifacts/ and api.log
      #       are intentionally outside the backup (see src/utils/logging/backup.py).
+     # @note The restore is all-or-nothing (SessionBackup.restore): on failure
+     #       the session is left exactly as it was and the in-memory history and
+     #       draft are NOT reloaded, so the caller can safely continue the turn.
      # @note Workspace changes (file writes, bash, ssh) are OUT of scope: the
      #       user is told to review them with git.
      #
     def _do_rollback(self):
         restored, failed = SessionBackup(self.session.current_session_dir).restore()
+
+        if failed:
+            # A refused rollback is as important for a post-mortem as a
+            # successful one, so it is audited as well.
+            self.session.log_api_call("TURN ROLLBACK", {
+                "trigger": stop_reason(),
+                "status": "failed",
+                "failed": failed,
+            })
+            self.cli.error("Rollback could not be completed: " + ", ".join(failed))
+            self.cli.info("Nothing was rolled back; the turn keeps running.")
+            return False
+        # End-if
+
         self.agent.reload_history()
         self.staged_message = self.session.load_staged()
         self._backup_ready = False
@@ -762,6 +806,7 @@ class InteractiveCLI:
         # possible without inferring the event from timestamps alone.
         self.session.log_api_call("TURN ROLLBACK", {
             "trigger": stop_reason(),
+            "status": "done",
             "restored": restored,
             "failed": failed,
             "history_messages": len(self.agent.history),
@@ -780,6 +825,7 @@ class InteractiveCLI:
             f"or edit it first with 'vim'."
         )
         self.cli.warning("Workspace changes are NOT rolled back; review them yourself (git status).")
+        return True
     # End-def
 
     ##
@@ -912,13 +958,16 @@ class InteractiveCLI:
                 elif command == 'status':
                     self._cmd_status()
                 elif command == 'commit':
-                    # A turn is running: SIGINT becomes a stop request that is
-                    # consumed by the checkpoints inside the commit flow.
-                    self._turn_active = True
+                    # The turn only starts once the user confirms the send, so
+                    # _cmd_commit flips _turn_active itself. Whatever exit path
+                    # it takes, neither turn-scoped flag may survive it: the
+                    # next commit must start from a clean state (and take a
+                    # fresh backup) instead of reusing a stale one.
                     try:
                         self._cmd_commit()
                     finally:
                         self._turn_active = False
+                        self._backup_ready = False
                     # End-try
                 elif command == 'clear':
                     self._cmd_clear()

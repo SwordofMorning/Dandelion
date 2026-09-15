@@ -20,6 +20,10 @@
  #       while keeping them in every turn backup would cost a full copy of a
  #       directory that can grow to megabytes. archives/ is excluded as well.
  #
+ # @note Restore is all-or-nothing: on any failure the session is returned to
+ #       exactly the state it had before the attempt (see _unpark), so a failed
+ #       rollback never leaves a half-restored session behind.
+ #
 
 import os
 import json
@@ -30,6 +34,11 @@ import datetime
  # @brief Session entries copied into a backup, in restore order.
  #
 BACKUP_ITEMS = ["history.log", "staged.md", "task_state.json", "memory"]
+
+##
+ # @brief Entries that are directories inside the backup (all others are files).
+ #
+BACKUP_DIR_ITEMS = {"memory"}
 
 ##
  # @brief Directory (inside the session dir) holding the single backup.
@@ -61,12 +70,17 @@ class SessionBackup:
     # End-def
 
     ##
-     # @brief Check that a complete backup is available.
+     # @brief Check that a complete and usable backup is available.
      #
-     # @return True when the marker is readable and marked complete.
+     # @return True when the marker is complete AND every recorded item exists
+     #         in the backup with the expected type.
      #
      # @note The marker is written after every item was copied, so a backup
      #       interrupted half-way reports as invalid and is never restored.
+     # @note The item check matters: restore() treats a missing backup entry as
+     #       "did not exist yet", parks the live entry and then drops the parked
+     #       copy. Without this check a damaged backup would therefore silently
+     #       delete the live history/staged/task_state/memory entry.
      #
     def is_valid(self):
         if not self.backup_dir:
@@ -79,10 +93,33 @@ class SessionBackup:
         try:
             with open(marker, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            return isinstance(meta, dict) and meta.get("status") == "complete"
         except Exception:
             return False
         # End-try
+
+        if not isinstance(meta, dict) or meta.get("status") != "complete":
+            return False
+        # End-if
+
+        items = meta.get("items")
+        if not isinstance(items, list):
+            return False
+        # End-if
+
+        for item in items:
+            if not isinstance(item, str) or item not in BACKUP_ITEMS:
+                return False
+            # End-if
+            path = os.path.join(self.backup_dir, item)
+            if item in BACKUP_DIR_ITEMS:
+                if not os.path.isdir(path):
+                    return False
+                # End-if
+            elif not os.path.isfile(path):
+                return False
+            # End-if
+        # End-for
+        return True
     # End-def
 
     ##
@@ -141,22 +178,24 @@ class SessionBackup:
     ##
      # @brief Restore the session state from the backup.
      #
-     # @return (restored, failed) lists of item names.
+     # @return (restored, failed) lists of item names / failure messages.
      #
-     # @note Swap-based restore, in three phases:
+     # @note Swap-based, all-or-nothing restore, in three phases:
      #       1. every live item is MOVED aside into a per-attempt parking
      #          directory (backup/.swap.<timestamp>),
      #       2. the backup items are copied into the session directory,
      #       3. the parked originals are dropped.
-     #       A failure in phase 2 therefore never destroys the previous state:
-     #       the parked copy is kept and its path is reported, instead of the
-     #       live item being deleted before its replacement is known to work.
+     #       If phase 1 or phase 2 fails, the session is put back the way it was
+     #       (the fresh copies are removed and every parked original is moved
+     #       back), so the caller can keep running the turn instead of leaving a
+     #       half-restored session behind. Nothing unique is ever lost: a copy
+     #       made in phase 2 is removed, and every original stays in the parking
+     #       directory until phase 3.
      #
      # @note Items missing from the backup are not recreated, so the result is
      #       "the state as it was then" rather than an overlay of old and new.
-     #
-     # @note Per-item failures are collected and reported to the caller; a
-     #       single bad entry never aborts the whole restore.
+     #       is_valid() guarantees that every RECORDED item is present, so this
+     #       only applies to entries that legitimately did not exist yet.
      #
     def restore(self):
         if not self.is_valid():
@@ -178,19 +217,14 @@ class SessionBackup:
                 shutil.move(live, os.path.join(swap_dir, item))
                 parked.append(item)
             except Exception as e:
-                # Point at the parking directory when earlier items were already
-                # moved: their data is still on disk there.
-                if parked:
-                    return [], [f"{item}: cannot park live copy: {e}",
-                                f"items parked so far kept at {swap_dir}"]
-                # End-if
-                return [], [f"{item}: cannot park live copy: {e}"]
+                failures = [f"{item}: cannot park live copy: {e}"]
+                failures.extend(self._unpark(parked, swap_dir))
+                return [], failures
             # End-try
         # End-for
 
         # ----- Phase 2: copy the backup into the session directory -----
-        restored = []
-        failed = []
+        copied = []
         for item in BACKUP_ITEMS:
             saved = os.path.join(self.backup_dir, item)
             if not os.path.exists(saved):
@@ -203,32 +237,98 @@ class SessionBackup:
                 elif os.path.isfile(saved):
                     shutil.copy2(saved, live)
                 # End-if
-                restored.append(item)
+                copied.append(item)
             except Exception as e:
-                failed.append(f"{item}: {e}")
+                failures = [f"{item}: {e}"]
+                failures.extend(self._undo_copies(copied))
+                failures.extend(self._unpark(parked, swap_dir))
+                return [], failures
             # End-try
         # End-for
 
-        # ----- Phase 3: drop the parked originals (kept when phase 2 failed) --
-        if failed:
-            failed.append(f"previous state kept at {swap_dir}")
-        else:
-            for item in parked:
-                target = os.path.join(swap_dir, item)
-                try:
-                    if os.path.isdir(target):
-                        shutil.rmtree(target)
-                    elif os.path.isfile(target):
-                        os.remove(target)
-                    # End-if
-                except Exception:
-                    pass  # leftover parking data is harmless
-                # End-try
-            # End-for
-            if os.path.isdir(swap_dir) and not os.listdir(swap_dir):
+        # ----- Phase 3: drop the parked originals -----
+        for item in parked:
+            target = os.path.join(swap_dir, item)
+            try:
+                if os.path.isdir(target):
+                    shutil.rmtree(target)
+                elif os.path.isfile(target):
+                    os.remove(target)
+                # End-if
+            except Exception:
+                pass  # leftover parking data is harmless
+            # End-try
+        # End-for
+        if os.path.isdir(swap_dir) and not os.listdir(swap_dir):
+            try:
                 os.rmdir(swap_dir)
+            except Exception:
+                pass
+            # End-try
+        # End-if
+        return copied, []
+    # End-def
+
+    ##
+     # @brief Remove the entries created by phase 2 (their originals are parked).
+     #
+     # @param copied Item names copied into the session directory by phase 2.
+     #
+     # @return List of failure messages (empty when the copies were removed).
+     #
+    def _undo_copies(self, copied):
+        failures = []
+        for item in copied:
+            live = os.path.join(self.session_dir, item)
+            try:
+                if os.path.isdir(live):
+                    shutil.rmtree(live)
+                elif os.path.isfile(live):
+                    os.remove(live)
+                # End-if
+            except Exception as e:
+                failures.append(f"{item}: cannot undo the partial copy: {e}")
+            # End-try
+        # End-for
+        return failures
+    # End-def
+
+    ##
+     # @brief Move the parked originals back and drop the parking directory.
+     #
+     # @param parked Item names parked by phase 1.
+     # @param swap_dir Parking directory of this attempt.
+     #
+     # @return List of failure messages (empty when the previous state was put
+     #         back completely).
+     #
+    def _unpark(self, parked, swap_dir):
+        failures = []
+        for item in parked:
+            saved = os.path.join(swap_dir, item)
+            live = os.path.join(self.session_dir, item)
+            try:
+                if os.path.isdir(live):
+                    shutil.rmtree(live)
+                elif os.path.isfile(live):
+                    os.remove(live)
+                # End-if
+                shutil.move(saved, live)
+            except Exception as e:
+                failures.append(f"{item}: cannot move the parked original back: {e}")
+            # End-try
+        # End-for
+        if os.path.isdir(swap_dir):
+            if os.listdir(swap_dir):
+                failures.append(f"previous state kept at {swap_dir}")
+            else:
+                try:
+                    os.rmdir(swap_dir)
+                except Exception:
+                    pass
+                # End-try
             # End-if
         # End-if
-        return restored, failed
+        return failures
     # End-def
 # End-class
