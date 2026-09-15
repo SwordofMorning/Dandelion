@@ -22,6 +22,7 @@ import builtins
 from .interrupt import (
     request as request_stop,
     is_requested as stop_requested,
+    reason as stop_reason,
     clear as clear_stop,
 )
 from ..logging.backup import SessionBackup
@@ -705,9 +706,9 @@ class InteractiveCLI:
         # End-if
         request_stop("sigint")
         self.cli.warning(
-            "Stop requested: the current step will finish, then the turn is "
-            "rolled back to before this commit (a prompt is shown if it cannot "
-            "be rolled back)."
+            f"Stop requested ({stop_reason()}): the current step will finish, "
+            f"then the turn is rolled back to before this commit (a prompt is "
+            f"shown if it cannot be rolled back)."
         )
     # End-def
 
@@ -755,7 +756,9 @@ class InteractiveCLI:
         self.staged_message = self.session.load_staged()
         self._backup_ready = False
 
-        self.cli.success("Rolled back to before the last commit: " + ", ".join(restored))
+        self.cli.success(
+            f"Rolled back to before the last commit (trigger: {stop_reason()}): "
+            + ", ".join(restored))
         if failed:
             self.cli.error("Rollback reported failures: " + ", ".join(failed))
         # End-if

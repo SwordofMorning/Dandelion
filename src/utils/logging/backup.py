@@ -12,10 +12,13 @@
  #       therefore correct no matter where the interrupt landed, and no message
  #       bookkeeping (indices, pairing, compaction handling) is needed.
  #
- # @note api.log and meta.log are intentionally excluded: the first is a debug
- #       transcript of the LLM traffic, the second belongs to the session
- #       manager. archives/ is excluded too: a rollback can leave one orphan
- #       archive behind, which nothing reads and which helps post-mortems.
+ # @note Contents: history.log, staged.md, task_state.json and memory/.
+ #       api.log and meta.log are intentionally excluded (debug transcript and
+ #       session-manager metadata). artifacts/ is excluded too: the stored
+ #       outputs live outside the request payload, so an orphan entry left by a
+ #       rolled back turn is harmless (the model may only wonder what it is),
+ #       while keeping them in every turn backup would cost a full copy of a
+ #       directory that can grow to megabytes. archives/ is excluded as well.
  #
 
 import os
@@ -26,7 +29,7 @@ import datetime
 ##
  # @brief Session entries copied into a backup, in restore order.
  #
-BACKUP_ITEMS = ["history.log", "staged.md", "task_state.json", "memory", "artifacts"]
+BACKUP_ITEMS = ["history.log", "staged.md", "task_state.json", "memory"]
 
 ##
  # @brief Directory (inside the session dir) holding the single backup.
@@ -37,6 +40,11 @@ BACKUP_DIRNAME = "backup"
  # @brief Completeness marker written LAST by create().
  #
 BACKUP_MARKER = "backup.json"
+
+##
+ # @brief Prefix of the per-attempt parking directory used by restore().
+ #
+SWAP_PREFIX = ".swap."
 
 ##
  # @brief Session backup: create / validate / restore.
@@ -135,10 +143,17 @@ class SessionBackup:
      #
      # @return (restored, failed) lists of item names.
      #
-     # @note Each item is removed from the live session first and copied back
-     #       afterwards, so the result is the state "as it was then" instead of
-     #       an overlay of new and old files. Items missing from the backup are
-     #       left deleted (equivalent to "that file did not exist yet").
+     # @note Swap-based restore, in three phases:
+     #       1. every live item is MOVED aside into a per-attempt parking
+     #          directory (backup/.swap.<timestamp>),
+     #       2. the backup items are copied into the session directory,
+     #       3. the parked originals are dropped.
+     #       A failure in phase 2 therefore never destroys the previous state:
+     #       the parked copy is kept and its path is reported, instead of the
+     #       live item being deleted before its replacement is known to work.
+     #
+     # @note Items missing from the backup are not recreated, so the result is
+     #       "the state as it was then" rather than an overlay of old and new.
      #
      # @note Per-item failures are collected and reported to the caller; a
      #       single bad entry never aborts the whole restore.
@@ -148,18 +163,35 @@ class SessionBackup:
             return [], ["no usable backup"]
         # End-if
 
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        swap_dir = os.path.join(self.backup_dir, f"{SWAP_PREFIX}{stamp}")
+
+        # ----- Phase 1: park the current live items -----
+        parked = []
+        for item in BACKUP_ITEMS:
+            live = os.path.join(self.session_dir, item)
+            if not os.path.exists(live):
+                continue
+            # End-if
+            try:
+                os.makedirs(swap_dir, exist_ok=True)
+                shutil.move(live, os.path.join(swap_dir, item))
+                parked.append(item)
+            except Exception as e:
+                return [], [f"{item}: cannot park live copy: {e}"]
+            # End-try
+        # End-for
+
+        # ----- Phase 2: copy the backup into the session directory -----
         restored = []
         failed = []
         for item in BACKUP_ITEMS:
-            live = os.path.join(self.session_dir, item)
             saved = os.path.join(self.backup_dir, item)
+            if not os.path.exists(saved):
+                continue
+            # End-if
+            live = os.path.join(self.session_dir, item)
             try:
-                if os.path.isdir(live):
-                    shutil.rmtree(live)
-                elif os.path.isfile(live):
-                    os.remove(live)
-                # End-if
-
                 if os.path.isdir(saved):
                     shutil.copytree(saved, live)
                 elif os.path.isfile(saved):
@@ -170,6 +202,27 @@ class SessionBackup:
                 failed.append(f"{item}: {e}")
             # End-try
         # End-for
+
+        # ----- Phase 3: drop the parked originals (kept when phase 2 failed) --
+        if failed:
+            failed.append(f"previous state kept at {swap_dir}")
+        else:
+            for item in parked:
+                target = os.path.join(swap_dir, item)
+                try:
+                    if os.path.isdir(target):
+                        shutil.rmtree(target)
+                    elif os.path.isfile(target):
+                        os.remove(target)
+                    # End-if
+                except Exception:
+                    pass  # leftover parking data is harmless
+                # End-try
+            # End-for
+            if os.path.isdir(swap_dir) and not os.listdir(swap_dir):
+                os.rmdir(swap_dir)
+            # End-if
+        # End-if
         return restored, failed
     # End-def
 # End-class

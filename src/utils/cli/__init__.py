@@ -14,5 +14,9 @@ __all__ = [
     "InteractiveCLI",
 ]
 
-# Convenience instance for direct usage
-cli = CLIPrinter()
+# Convenience instance for direct usage.
+#
+# @note Named cli_printer (not cli) on purpose: a `cli` attribute here would
+#       shadow the cli.py submodule, making `import src.utils.cli.cli as x`
+#       (and `import src.utils.cli.<submodule> as x`) fail.
+cli_printer = CLIPrinter()
