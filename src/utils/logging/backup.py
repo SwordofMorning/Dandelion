@@ -178,6 +178,12 @@ class SessionBackup:
                 shutil.move(live, os.path.join(swap_dir, item))
                 parked.append(item)
             except Exception as e:
+                # Point at the parking directory when earlier items were already
+                # moved: their data is still on disk there.
+                if parked:
+                    return [], [f"{item}: cannot park live copy: {e}",
+                                f"items parked so far kept at {swap_dir}"]
+                # End-if
                 return [], [f"{item}: cannot park live copy: {e}"]
             # End-try
         # End-for

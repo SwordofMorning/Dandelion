@@ -744,9 +744,10 @@ class InteractiveCLI:
     ##
      # @brief Restore the session state captured before the last commit.
      #
-     # @note Session files (history.log / staged.md / task_state.json / memory /
-     #       artifacts) are restored from .log/sess_xx/backup, then the agent
-     #       history and the staged draft are reloaded into memory.
+     # @note Session files (history.log / staged.md / task_state.json / memory)
+     #       are restored from .log/sess_xx/backup, then the agent history and
+     #       the staged draft are reloaded into memory. artifacts/ and api.log
+     #       are intentionally outside the backup (see src/utils/logging/backup.py).
      # @note Workspace changes (file writes, bash, ssh) are OUT of scope: the
      #       user is told to review them with git.
      #
