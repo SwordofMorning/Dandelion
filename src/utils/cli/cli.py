@@ -757,6 +757,17 @@ class InteractiveCLI:
         self.staged_message = self.session.load_staged()
         self._backup_ready = False
 
+        # Audit trail: api.log is deliberately outside the backup set, so this
+        # record survives the rollback it describes and makes a post-mortem
+        # possible without inferring the event from timestamps alone.
+        self.session.log_api_call("TURN ROLLBACK", {
+            "trigger": stop_reason(),
+            "restored": restored,
+            "failed": failed,
+            "history_messages": len(self.agent.history),
+            "draft_chars": len(self.staged_message.strip()),
+        })
+
         self.cli.success(
             f"Rolled back to before the last commit (trigger: {stop_reason()}): "
             + ", ".join(restored))
