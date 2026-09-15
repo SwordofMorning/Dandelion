@@ -6,8 +6,8 @@
  # Provides interactive command-line interface and colored printing utilities.
  #
 
-from .cli_printer import CLIPrinter
-from .interactive_cli import InteractiveCLI
+from .printer import CLIPrinter
+from .cli import InteractiveCLI
 
 __all__ = [
     "CLIPrinter",

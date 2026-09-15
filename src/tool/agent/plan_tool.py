@@ -59,7 +59,7 @@ class PlanTool(BaseTool):
      # @param safe_client Request LLM.
      # @param config User's config in `.env`.
      #
-     # @see src/utils/safe_llm/safe_llm.py
+     # @see src/utils/llm_request/llm_request.py
      #
     def __init__(self, safe_client, config):
         super().__init__()

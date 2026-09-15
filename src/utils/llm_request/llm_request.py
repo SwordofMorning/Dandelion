@@ -1,5 +1,5 @@
 ##
- # @file src/utils/safe_llm/safe_llm.py
+ # @file src/utils/llm_request/llm_request.py
  # @date 2026/08/05
  # 
  # @brief Thread-safe wrapper around LLM providers: message normalization,

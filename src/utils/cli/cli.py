@@ -1,5 +1,5 @@
 ##
- # @file src/utils/cli/interactive_cli.py
+ # @file src/utils/cli/cli.py
  # @date 2026/08/04
  # 
  # @brief Interactive CLI for Dandelion.
@@ -40,7 +40,7 @@ try:
 except ImportError:
     HAS_PTK = False
 
-from .cli_printer import CLIPrinter
+from .printer import CLIPrinter
 
 ##
  # @brief Interactive CLI for Dandelion workspace management.

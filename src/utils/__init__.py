@@ -34,7 +34,7 @@ from .routing import (
 )
 
 # Safe LLM Client
-from .safe_llm import SafeLLMClient
+from .llm_request import SafeLLMClient
 
 __all__ = [
     # CLI
