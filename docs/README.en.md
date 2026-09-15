@@ -4,7 +4,7 @@
 
 A CLI-style Agent tool built with Nuitka, capable of cross-platform deployment through cross-compilation toolchains. The basic architecture is as follows:
 
-1. The "Interactive Loop" in `src/utils/cli/interactive_cli.py` functions as the Agent Loop;
+1. The "Interactive Loop" in `src/utils/cli/cli.py` functions as the Agent Loop;
 2. Each Agent Iterate (Tool Call) action is executed in the `step` function within `src/core/agent.py`.
 
 ## 1. Features

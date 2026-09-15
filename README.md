@@ -4,7 +4,7 @@
 
 一个CLI式的Agent工具，采用Nuitka构建，可以配合交叉编译工具链实现跨平台。基础结构如下：
 
-1. 在`src/utils/cli/interactive_cli.py`中的“Interactive Loop”相当于Agent Loop；
+1. 在`src/utils/cli/cli.py`中的“Interactive Loop”相当于Agent Loop；
 2. 并将每一次的Agent Iterate (Tool Call)动作放到`src/core/agent.py`中的“step”执行。
 
 
