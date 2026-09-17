@@ -197,7 +197,7 @@ windows_jobs = 2
 ├── llm_provider        # API SDK 动态配置
 ├── logging             # 日志/会话管理
 ├── routing             # 模型路由
-└── safe_llm            # LLM request 实现
+└── llm_request         # LLM request 实现
 ```
 
 ### 4.1 配置加载 config
@@ -264,9 +264,9 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 注意，这里的 Rate Limit 并没有实现一个全局的、动态的控制逻辑，只是基于滑动窗口实现了单次启用程序的计数统计。这里需要后期完善（代码中标注 `@todo Future: global real-time limit checking`）。
 
-### 4.5 LLM 请求 safe_llm
+### 4.5 LLM 请求 llm_request
 
-`src/utils/safe_llm` 核心职责是为程序发送 request 到 LLM，其流程如下：
+`src/utils/llm_request` 核心职责是为程序发送 request 到 LLM，其流程如下：
 
 ```py
 # - Main Agent
@@ -290,9 +290,9 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ### 4.6 CLI
 
-`src/utils/cli/cli_printer.py` 提供了终端彩色打印的功能，无其他核心功能。
+`src/utils/cli/printer.py` 提供了终端彩色打印的功能，无其他核心功能。
 
-`src/utils/cli/interactive_cli.py` 基于 `prompt_toolkit`（缺失时降级为普通 `input`），模仿 git 风格的命令行控制，提供了一套交互式的 CLI。其中值得关注的点有：
+`src/utils/cli/cli.py` 基于 `prompt_toolkit`（缺失时降级为普通 `input`），模仿 git 风格的命令行控制，提供了一套交互式的 CLI。其中值得关注的点有：
 
 1. `_build_completer()` 中定义了命令以及其补全的次级命令；
 2. `run()` 中通过死循环实现"CLI Loop"，其内部又分为两层：

@@ -6,13 +6,17 @@
  # Provides interactive command-line interface and colored printing utilities.
  #
 
-from .cli_printer import CLIPrinter
-from .interactive_cli import InteractiveCLI
+from .printer import CLIPrinter
+from .cli import InteractiveCLI
 
 __all__ = [
     "CLIPrinter",
     "InteractiveCLI",
 ]
 
-# Convenience instance for direct usage
-cli = CLIPrinter()
+# Convenience instance for direct usage.
+#
+# @note Named cli_printer (not cli) on purpose: a `cli` attribute here would
+#       shadow the cli.py submodule, making `import src.utils.cli.cli as x`
+#       (and `import src.utils.cli.<submodule> as x`) fail.
+cli_printer = CLIPrinter()

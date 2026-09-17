@@ -480,7 +480,18 @@ class SessionManager:
             with open(hist_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"[-] Warning: Failed to load history from {hist_file}: {e}")
+            # An unreadable history is kept aside for inspection instead of
+            # being silently dropped: the caller still receives [] (same
+            # tolerant behaviour), but the bytes survive for a manual recovery.
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            corrupt_file = hist_file + f".corrupt.{stamp}"
+            try:
+                shutil.copy2(hist_file, corrupt_file)
+                print(f"[-] Warning: Failed to load history from {hist_file}: {e}")
+                print(f"[-] Warning: Unreadable history preserved at {corrupt_file}")
+            except Exception:
+                print(f"[-] Warning: Failed to load history from {hist_file}: {e}")
+            # End-try
             return []
     # End-def
 
@@ -502,14 +513,22 @@ class SessionManager:
      # @param history chat history (json format).
      # @param target_dir session dir.
      #
+     # @note Atomic write (tmp + os.replace): an interrupted or killed process
+     #       can never leave a truncated history.log behind. This is also what
+     #       makes the Ctrl+C rollback trustworthy, since history.log may now be
+     #       rewritten at any checkpoint.
+     #
     def save_history(self, history, target_dir=None):
         tdir = target_dir or self.current_session_dir
         if not tdir:
             return
         hist_file = os.path.join(tdir, "history.log")
-        with open(hist_file, "w", encoding="utf-8") as f:
-            # default=self._default_serializer to handle ThinkingBlock objects
+        tmp_file = hist_file + ".tmp"
+        # default=self._default_serializer to handle ThinkingBlock objects
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2, default=self._default_serializer)
+        # End-with
+        os.replace(tmp_file, hist_file)
     # End-def
 
     ##

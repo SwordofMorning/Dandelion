@@ -6,7 +6,7 @@
  #
 
 # CLI utilities
-from .cli import CLIPrinter, InteractiveCLI, cli
+from .cli import CLIPrinter, InteractiveCLI, cli_printer
 
 # Config utilities
 from .config import load_api_config
@@ -34,13 +34,13 @@ from .routing import (
 )
 
 # Safe LLM Client
-from .safe_llm import SafeLLMClient
+from .llm_request import SafeLLMClient
 
 __all__ = [
     # CLI
     "CLIPrinter",
     "InteractiveCLI",
-    "cli",
+    "cli_printer",
     # Config
     "load_api_config",
     # LLM Provider

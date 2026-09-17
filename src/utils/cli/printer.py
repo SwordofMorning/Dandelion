@@ -1,9 +1,9 @@
 ##
- # @file src/utils/cli_printer.py
+ # @file src/utils/cli/printer.py
  # @date 2026/08/04
  # 
  # @brief CLI printing and formatting utility.
- # A wrapper function, string -> cli_printer -> string(colorful) -> terminal
+ # A wrapper function, string -> printer -> string(colorful) -> terminal
  #
 
 import builtins
