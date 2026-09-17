@@ -240,6 +240,12 @@ class SessionBackup:
                 copied.append(item)
             except Exception as e:
                 failures = [f"{item}: {e}"]
+                # A failed copy can leave a partial target behind, and the item
+                # is not registered in `copied` yet (that happens only after a
+                # successful copy), so it must be removed explicitly here - it
+                # is neither covered by _undo_copies() nor by _unpark() when the
+                # entry did not exist in the live session before phase 1.
+                failures.extend(self._remove_live(item))
                 failures.extend(self._undo_copies(copied))
                 failures.extend(self._unpark(parked, swap_dir))
                 return [], failures
@@ -270,6 +276,33 @@ class SessionBackup:
     # End-def
 
     ##
+     # @brief Delete the live copy of one item (no-op when it does not exist).
+     #
+     # @param item Item name relative to the session directory.
+     #
+     # @return List of failure messages (empty when the path is gone).
+     #
+     # @note Used by the failure recovery of restore(): a partially created
+     #       target is indistinguishable from a complete one here, so it is
+     #       simply removed - the authoritative copy is either parked (phase 1)
+     #       or still inside the backup, never lost by this call.
+     #
+    def _remove_live(self, item):
+        failures = []
+        live = os.path.join(self.session_dir, item)
+        try:
+            if os.path.isdir(live):
+                shutil.rmtree(live)
+            elif os.path.isfile(live):
+                os.remove(live)
+            # End-if
+        except Exception as e:
+            failures.append(f"{item}: cannot remove the live copy: {e}")
+        # End-try
+        return failures
+    # End-def
+
+    ##
      # @brief Remove the entries created by phase 2 (their originals are parked).
      #
      # @param copied Item names copied into the session directory by phase 2.
@@ -279,16 +312,7 @@ class SessionBackup:
     def _undo_copies(self, copied):
         failures = []
         for item in copied:
-            live = os.path.join(self.session_dir, item)
-            try:
-                if os.path.isdir(live):
-                    shutil.rmtree(live)
-                elif os.path.isfile(live):
-                    os.remove(live)
-                # End-if
-            except Exception as e:
-                failures.append(f"{item}: cannot undo the partial copy: {e}")
-            # End-try
+            failures.extend(self._remove_live(item))
         # End-for
         return failures
     # End-def
@@ -308,11 +332,7 @@ class SessionBackup:
             saved = os.path.join(swap_dir, item)
             live = os.path.join(self.session_dir, item)
             try:
-                if os.path.isdir(live):
-                    shutil.rmtree(live)
-                elif os.path.isfile(live):
-                    os.remove(live)
-                # End-if
+                failures.extend(self._remove_live(item))
                 shutil.move(saved, live)
             except Exception as e:
                 failures.append(f"{item}: cannot move the parked original back: {e}")
