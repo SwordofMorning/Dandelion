@@ -332,7 +332,16 @@ class SessionBackup:
             saved = os.path.join(swap_dir, item)
             live = os.path.join(self.session_dir, item)
             try:
-                failures.extend(self._remove_live(item))
+                removed = self._remove_live(item)
+                failures.extend(removed)
+                if removed:
+                    # Keep the parked original where it is: shutil.move onto a
+                    # live path that could not be cleared would nest the data
+                    # inside it (directory case) or overwrite it (file case),
+                    # and the removal failure is already reported. The caller
+                    # reports the parking directory when it is still non-empty.
+                    continue
+                # End-if
                 shutil.move(saved, live)
             except Exception as e:
                 failures.append(f"{item}: cannot move the parked original back: {e}")

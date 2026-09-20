@@ -497,6 +497,14 @@ class InteractiveCLI:
         injected = False
         while True:
             try:
+                # A stop requested while the recovery menu (or the editor) was
+                # open must be consumed BEFORE another step is sent: otherwise
+                # the retry would still spend one LLM call and execute its
+                # tools. Same rationale as checkpoint C0.
+                if self._try_stop():
+                    return
+                # End-if
+
                 if not injected:
                     self.agent.inject_user_message(content)
                     injected = True
