@@ -679,7 +679,7 @@ class MyAgent:
      # CLI -> agent.step() -> Request LLM -> Execute All Tools -> Return ->
      # CLI (continue? or stop?) -> agent.step() | Stop in CLI
      #
-     # @see src/utils/cli/interactive_cli.py
+     # @see src/utils/cli/cli.py
      #
      # @return (continue_loop, error) tuple.
      # @retval (True, None) This round executed a tool call, need to feed back

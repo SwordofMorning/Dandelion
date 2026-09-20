@@ -55,7 +55,9 @@ class BaseTool:
      # @param action_desc Human-readable action description for the approval prompt.
      #
      # @note Check if target_path is strictly within workspace_dir.
-     # If it escapes the workspace, prompt user for manual y/N approval.
+     # If it escapes the workspace, prompt user for manual y/N/C approval:
+     # [y] allow once, [n] deny this call, [C] deny this call and ask the CLI
+     # to stop and roll back the running turn (Ctrl+C equivalent).
      #
      # @return True if allowed (or inside workspace), False if denied by user.
      #
@@ -80,15 +82,25 @@ class BaseTool:
 
         # User input.
         while True:
-            ans = input("    Allow this operation? [y/N]: ").strip().lower()
+            ans = input("    Allow this operation? [y/N/C]: ").strip().lower()
             if ans in ['y', 'yes']:
                 print("    [+] User approved outside access.")
                 return True
+            elif ans in ['c', 'cancel']:
+                # [C] is the Ctrl+C equivalent for this prompt: ask the CLI to
+                # stop and roll back the turn, and deny this tool call. The stop
+                # itself is executed by the CLI checkpoints, never here.
+                # Deferred import keeps the tool layer free of import-order
+                # coupling with src.utils (this module only needs os otherwise).
+                from src.utils.cli.interrupt import request as request_stop
+                request_stop("tool_cancel")
+                print("    [!] Canceled: this call is denied and the turn will stop and roll back.")
+                return False
             elif ans in ['n', 'no', '']:
                 print("    [-] User denied access.")
                 return False
             else:
-                print("    Please enter y or n.")
+                print("    Please enter y, n or c.")
         # End-while
     # End-def check_workspace_permission
 

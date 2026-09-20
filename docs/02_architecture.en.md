@@ -197,7 +197,7 @@ After understanding how the Agent Loop is implemented in the [CLI Section](#46-c
 ├── llm_provider        # Dynamic API SDK configuration
 ├── logging             # Logging / Session Management
 ├── routing             # Model Routing
-└── safe_llm            # LLM Request implementation
+└── llm_request         # LLM Request implementation
 ```
 
 ### 4.1 Config Loading (`config`)
@@ -264,9 +264,9 @@ For OpenAI and Google AI, basic frameworks and contents are implemented, but the
 
 Note that this Rate Limit currently does not implement a global, dynamic control logic. It only implements per-launch counting based on a sliding window. This needs future refinement (marked as `@todo Future: global real-time limit checking` in code).
 
-### 4.5 LLM Requests (`safe_llm`)
+### 4.5 LLM Requests (`llm_request`)
 
-`src/utils/safe_llm` is primarily responsible for sending requests to the LLM. The workflow is as follows:
+`src/utils/llm_request` is primarily responsible for sending requests to the LLM. The workflow is as follows:
 
 ```py
 # - Main Agent
@@ -290,9 +290,9 @@ Details:
 
 ### 4.6 CLI
 
-`src/utils/cli/cli_printer.py` provides terminal color printing without other core logic.
+`src/utils/cli/printer.py` provides terminal color printing without other core logic.
 
-`src/utils/cli/interactive_cli.py` is based on `prompt_toolkit` (falling back to standard `input` if missing) to provide an interactive CLI mimicking git-style commands. Noteworthy points include:
+`src/utils/cli/cli.py` is based on `prompt_toolkit` (falling back to standard `input` if missing) to provide an interactive CLI mimicking git-style commands. Noteworthy points include:
 
 1. `_build_completer()` defines commands and their sub-command auto-completion.
 2. `run()` uses an infinite loop to implement the "CLI Loop", structured internally in two layers:
