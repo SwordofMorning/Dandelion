@@ -16,7 +16,6 @@ from .llm_provider import (
     LLMProvider,
     AnthropicProvider,
     OpenAIProvider,
-    GeminiProvider,
     create_provider,
 )
 
@@ -47,7 +46,6 @@ __all__ = [
     "LLMProvider",
     "AnthropicProvider",
     "OpenAIProvider",
-    "GeminiProvider",
     "create_provider",
     # Logging
     "AgentLogger",

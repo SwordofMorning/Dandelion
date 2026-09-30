@@ -22,7 +22,7 @@
  #
 
 import threading
-from ..llm_provider import AnthropicProvider, GeminiProvider, OpenAIProvider
+from ..llm_provider import AnthropicProvider, OpenAIProvider
 
 ##
  # @brief LLM request wrapper.
@@ -40,7 +40,7 @@ class SafeLLMClient:
      # @param api_key API key for the main agent.
      # @param base_url Base URL for the main agent.
      # @param model_id Model identifier for the main agent.
-     # @param sdk_type SDK type ("Anthropic", "OpenAI", "Gemini", "AI Studio", "NVIDIA").
+     # @param sdk_type SDK type ("Anthropic", "OpenAI").
      # @param all_models Full model list for sub-agent routing.
      # @param thinking "enabled" or "disabled" - extended thinking toggle for the main agent.
      # @param effort Reasoning effort: "low", "medium", "high", or "max".
@@ -83,15 +83,19 @@ class SafeLLMClient:
     def _create_provider(self, sdk_type, api_key, base_url, model_id,
                          thinking="disabled", effort="medium"):
         sdk = sdk_type.lower()
-        if sdk in ["ai studio", "gemini"]:
-            return GeminiProvider(api_key, base_url, model_id,
-                                  thinking=thinking, effort=effort)
-        elif sdk in ["openai", "nvidia"]:
+        if sdk in ["ai studio", "gemini", "google"]:
+            raise ValueError(
+                f"Google/Gemini SDK support has been removed. "
+                f"Please use SDK_TYPE='OpenAI' with Google's OpenAI-compatible endpoint instead."
+            )
+        elif sdk in ["openai"]:
             return OpenAIProvider(api_key, base_url, model_id,
                                   thinking=thinking, effort=effort)
-        else:
+        elif sdk in ["anthropic"]:
             return AnthropicProvider(api_key, base_url, model_id,
                                      thinking=thinking, effort=effort)
+        else:
+            raise ValueError(f"Unsupported SDK_TYPE: '{sdk_type}'. Supported types: 'OpenAI', 'Anthropic'.")
     # End-def
 
     ##
