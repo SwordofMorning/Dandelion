@@ -38,7 +38,8 @@ from src.tool import (
     ReadPdfTool, ReadImageTool
 )
 from src.tool.media import (
-    estimate_messages_tokens, count_media_in_messages, DEFAULT_MEDIA_LIMITS
+    estimate_messages_tokens, count_media_in_messages, attach_media_blocks,
+    DEFAULT_MEDIA_LIMITS
 )
 from src.utils.llm_request.calibration import usage_total_tokens, update_ratio, ratio_cap
 
@@ -200,6 +201,10 @@ class MyAgent:
         self._pending_media_reserve = 0
         # Number of media blocks consumed in the current turn.
         self._pending_media_count = 0
+        # Media payloads read during the current turn. They are hydrated into
+        # the outgoing request as SIBLING parts of the tool_result, and are
+        # never persisted in history (history keeps the pointer text only).
+        self._pending_media_blocks = []
         # Local estimate captured right before the last request, used as the
         # denominator of the post-call calibration.
         self._last_send_est = 0.0
@@ -963,8 +968,12 @@ class MyAgent:
         #     block (memory + task state) is counted in the token budget.
         self._compact_context()
 
-        # Pure append-only copy, ZERO mutations.
+        # Pure append-only copy, ZERO mutations, plus the hydrated media parts
+        # read during this turn (siblings of their tool_result, never nested).
         req_messages = self.history.copy()
+        if self._pending_media_blocks:
+            req_messages = attach_media_blocks(req_messages, self._pending_media_blocks)
+        # End-if
 
         # 2. Main LLM API Call
         # Send-time safety clamp: even if the heuristic estimate undershoots
@@ -1020,6 +1029,7 @@ class MyAgent:
 
         if err is not None:
             print(f"[-] API Error: {err}")
+            self._pending_media_blocks = []
             return False, err
 
         # ----- @par 2-b. Post-call context calibration -----
@@ -1036,6 +1046,9 @@ class MyAgent:
 
         # 3. Handle Output or Tools
         if resp.stop_reason != "tool_use":
+            # Turn finished: the hydrated media parts are no longer needed (the
+            # pointer text stays in history, so a re-read is always possible).
+            self._pending_media_blocks = []
             return False, None
 
         # Handle Tools
@@ -1081,10 +1094,15 @@ class MyAgent:
                 pending_media_reserve = max(pending_media_reserve, media_cost)
                 pending_media_count += 1
 
-                # NOTE: the block is NOT tagged with a cost on purpose: the
-                # pointer text is the single accounting source, so any later
-                # scan of history cannot double count it.
-                media_block = output.get("block") or {}
+                # The tool_result itself carries TEXT ONLY (summary + pointer):
+                # history must stay free of base64, and an inline part nested
+                # inside tool_result.content is dropped by the gateway. The
+                # block is kept aside and hydrated as a SIBLING part of this
+                # user message when the request is built.
+                media_block = output.get("block")
+                if media_block:
+                    self._pending_media_blocks.append(media_block)
+                # End-if
 
                 results.append({
                     "type": "tool_result",
@@ -1092,7 +1110,6 @@ class MyAgent:
                     "content": [
                         {"type": "text", "text": output.get("summary", "")},
                         {"type": "text", "text": output.get("pointer", "")},
-                        media_block,
                     ],
                 })
                 cli.print(f"    Media attached: {output.get('kind')} "
@@ -1136,11 +1153,10 @@ class MyAgent:
 
         self.session.save_history(self.history)
 
-        # The media cost now lives in the history pointers, so the transient
-        # reservation is no longer needed (and must not be double counted).
-        # Keeping it until the NEXT send is what covers the in-flight window
-        # where the tool result exists but history has not been re-read yet.
-        self._pending_media_tokens = pending_media_cost
+        # The media cost now lives in the history pointers (the markers), so the
+        # transient value must be dropped here: keeping it would double count
+        # the very same media for every later estimate.
+        self._pending_media_tokens = 0
         self._pending_media_reserve = 0
         self._pending_media_count = 0
         return True, None
@@ -1162,6 +1178,8 @@ class MyAgent:
      #
     def reload_history(self):
         self.history = self.session.load_history()
+        # Session switched: hydrated media belongs to the previous session.
+        self._pending_media_blocks = []
         # Session switched: memory relevance cache must be recomputed because
         # the session tier (and possibly the whole history) changed.
         self._memories_key = None

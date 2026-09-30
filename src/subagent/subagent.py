@@ -11,7 +11,7 @@ import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
 from src.tool.media import (estimate_messages_tokens, count_media_in_messages,
-                            DEFAULT_MEDIA_LIMITS)
+                            attach_media_blocks, DEFAULT_MEDIA_LIMITS)
 
 ##
  # @brief Implement of Subagent.
@@ -50,6 +50,10 @@ class SubAgent(ISubAgent):
         self._messages = []
         # Media blocks consumed in the current tool round (per-request cap).
         self._pending_media_count = 0
+        # Media payloads read by this SubAgent: hydrated as SIBLING parts of the
+        # tool_result for every request of the loop, never nested inside it
+        # (nested inline parts are dropped by the gateway).
+        self._pending_media_blocks = []
 
         self.system_prompt = self._build_system_prompt(role_prompt)
         # NOTE: media slots are computed in available_media_slots() below.
@@ -74,6 +78,16 @@ class SubAgent(ISubAgent):
      # @return int slots (>= 0).
      #
     def available_media_slots(self):
+        # A SubAgent starts with a FRESH, private message list, so the only
+        # media that counts against it is what IT has loaded itself. Using the
+        # main agent's history here would wrongly consume the whole per-request
+        # allowance (the parent session may carry many media pointers), which
+        # used to make every SubAgent media read fail with "maximum number of
+        # media blocks" even on the first call.
+        if not self._pending_media_count:
+            return int(self.config.get("MEDIA_LIMITS", {}).get(
+                "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
+
         limit = int(self.config.get("MEDIA_LIMITS", {}).get(
             "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
         used = count_media_in_messages(self._messages) + self._pending_media_count
@@ -162,7 +176,7 @@ class SubAgent(ISubAgent):
 
                 payload = {
                     "tools": self.tool_schemas,
-                    "messages": messages,
+                    "messages": attach_media_blocks(messages, self._pending_media_blocks),
                     "max_tokens": int(self.config.get("MAX_TOKENS", 8000)),
                     "system": self.system_prompt
                 }
@@ -231,18 +245,22 @@ class SubAgent(ISubAgent):
 
                         print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
 
-                        # Media result: the block travels in THIS tool_result only;
-                        # the private message list therefore keeps the base64 data
-                        # and is discarded together with the SubAgent.
+                        # Media result: the payload is kept aside and hydrated as
+                        # a sibling part of this user message on every request of
+                        # the loop; the private list stores TEXT ONLY (same
+                        # placement rule as the main agent).
                         if isinstance(output, dict) and output.get("kind") in ("image", "document"):
                             self._pending_media_count += 1
+                            media_block = output.get("block")
+                            if media_block:
+                                self._pending_media_blocks.append(media_block)
+                            # End-if
                             results.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,
                                 "content": [
                                     {"type": "text", "text": output.get("summary", "")},
                                     {"type": "text", "text": output.get("pointer", "")},
-                                    output.get("block"),
                                 ],
                             })
                         else:

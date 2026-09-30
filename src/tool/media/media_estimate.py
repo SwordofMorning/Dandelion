@@ -458,6 +458,49 @@ def count_media_in_messages(messages):
 # End-def
 
 ##
+ # @brief Return a COPY of `messages` whose last message also carries the media
+ # blocks, as SIBLING parts of the tool_result (never nested inside it).
+ #
+ # @param messages Message list (main agent history or SubAgent messages).
+ # @param blocks Media blocks to attach (usually 1-2 per read).
+ #
+ # @return New message list; the input list and its messages are not mutated.
+ #
+ # @note Placement matters on the Anthropic-to-Gemini gateways: an inline
+ # image/document part NESTED inside a tool_result.content list is dropped
+ # (the model then answers from the text pointer alone and may hallucinate),
+ # while the SAME part placed as a sibling of the tool_result in the same user
+ # message is delivered correctly. Measured on Sub2API -> Antigravity ->
+ # Gemini: nested = input_tokens 468 and wrong reading; sibling = 1542 tokens
+ # and the correct reading.
+ #
+def attach_media_blocks(messages, blocks):
+    if not blocks:
+        return messages
+    # End-if
+
+    out = list(messages or [])
+
+    # Preferred shape: append the parts to the message that owns the tool_result.
+    if out and isinstance(out[-1], dict):
+        last = dict(out[-1])
+        content = last.get("content")
+        if isinstance(content, list) and any(
+            isinstance(item, dict) and item.get("type") == "tool_result" for item in content
+        ):
+            last["content"] = list(content) + list(blocks)
+            out[-1] = last
+            return out
+        # End-if
+    # End-if
+
+    # Fallback: a dedicated user message (merging providers normalise this into
+    # the previous user message anyway).
+    out.append({"role": "user", "content": list(blocks)})
+    return out
+# End-def
+
+##
  # ========================================
  # @section VII. Generic text estimation for SubAgents
  # ========================================
