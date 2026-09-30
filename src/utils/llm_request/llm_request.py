@@ -40,7 +40,7 @@ class SafeLLMClient:
      # @param api_key API key for the main agent.
      # @param base_url Base URL for the main agent.
      # @param model_id Model identifier for the main agent.
-     # @param sdk_type SDK type ("Anthropic", "OpenAI", "Gemini", "AI Studio", "NVIDIA").
+     # @param sdk_type SDK type ("Anthropic", "OpenAI").
      # @param all_models Full model list for sub-agent routing.
      # @param thinking "enabled" or "disabled" - extended thinking toggle for the main agent.
      # @param effort Reasoning effort: "low", "medium", "high", or "max".
@@ -88,7 +88,7 @@ class SafeLLMClient:
                 f"Google/Gemini SDK support has been removed. "
                 f"Please use SDK_TYPE='OpenAI' with Google's OpenAI-compatible endpoint instead."
             )
-        elif sdk in ["openai", "nvidia"]:
+        elif sdk in ["openai"]:
             return OpenAIProvider(api_key, base_url, model_id,
                                   thinking=thinking, effort=effort)
         elif sdk in ["anthropic"]:
