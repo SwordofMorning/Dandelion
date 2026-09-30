@@ -320,13 +320,14 @@ jobs:
           path: upload_stage
           include-hidden-files: true
 
-  # 3. Release Job: Release And Upload Assets
+  # 3. Release Job: Package, Sign, and optionally publish Release
   release:
     needs: [meta, build]
-    if: needs.meta.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
@@ -357,7 +358,46 @@ jobs:
           echo "Assets to upload:"
           ls -l "$RELEASE_DIR"
 
+      - name: Generate Checksums
+        run: |
+          cd "$GITHUB_WORKSPACE/release_assets"
+          sha256sum dandelion-*.zip > SHA256SUMS.txt
+          echo "Generated SHA256SUMS.txt:"
+          cat SHA256SUMS.txt
+
+      - name: Import GPG Key
+        if: env.HAVE_GPG_KEY != ''
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+        env:
+          HAVE_GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Sign Checksums with GPG
+        if: env.HAVE_GPG_KEY != ''
+        run: |
+          cd "$GITHUB_WORKSPACE/release_assets"
+          gpg --batch --yes --detach-sign --armor SHA256SUMS.txt
+          echo "Generated SHA256SUMS.txt.asc"
+        env:
+          HAVE_GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Attest Build Provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'release_assets/*'
+
+      - name: Upload Packaged Assets (CI Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dandelion-packages-${{ needs.meta.outputs.tag }}
+          path: release_assets
+          include-hidden-files: true
+
       - name: Create Release
+        if: needs.meta.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
