@@ -466,6 +466,73 @@ class SessionManager:
     # End-def
 
     ##
+     # @brief Read the context-calibration ratio of the current session.
+     #
+     # @return float ratio (>= 1.0); 1.0 when unset or unreadable.
+     #
+     # @note Persisted so the correction survives a session resume; a missing
+     # value simply restarts the calibration from the conservative default.
+     #
+    def get_calibration_ratio(self):
+        if not self.current_session_dir:
+            return 1.0
+        # End-if
+
+        meta_file = os.path.join(self.current_session_dir, "meta.log")
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            # End-with
+            value = float(meta.get("calib_ratio", 1.0))
+        except Exception:
+            return 1.0
+        # End-try
+
+        return max(value, 1.0)
+    # End-def
+
+    ##
+     # @brief Persist the context-calibration ratio of the current session.
+     #
+     # @param ratio New ratio (values below 1.0 are ignored: calibration may
+     # only raise the local estimate, never lower it).
+     #
+     # @note Best effort: a corrupt or read-only meta.log must never break the
+     # turn, so failures are reported as a warning only.
+     #
+    def set_calibration_ratio(self, ratio):
+        if not self.current_session_dir:
+            return
+        # End-if
+
+        try:
+            ratio = float(ratio)
+        except (TypeError, ValueError):
+            return
+        # End-try
+        if ratio < 1.0:
+            return
+        # End-if
+
+        meta_file = os.path.join(self.current_session_dir, "meta.log")
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            # End-with
+            if not isinstance(meta, dict):
+                return
+            # End-if
+            if abs(float(meta.get("calib_ratio", 1.0)) - ratio) < 1e-6:
+                return
+            # End-if
+            meta["calib_ratio"] = ratio
+            self._write_meta(self.current_session_dir, meta)
+        except Exception as e:
+            print(f"[-] Warning: failed to persist calib_ratio: {e}")
+        # End-try
+    # End-def
+
+    ##
      # @brief Load chat history (used to construct payload).
      # 
      # @return history.log (json format), or empty one.

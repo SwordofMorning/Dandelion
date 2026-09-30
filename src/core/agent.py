@@ -34,8 +34,13 @@ from src.tool import (
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
     ReadExcelTool, WriteExcelTool,
     StateTool, MemoryTool,
-    SSHTool, TimeTool
+    SSHTool, TimeTool,
+    ReadPdfTool, ReadImageTool
 )
+from src.tool.media import (
+    estimate_messages_tokens, count_media_in_messages, DEFAULT_MEDIA_LIMITS
+)
+from src.utils.llm_request.calibration import usage_total_tokens, update_ratio, ratio_cap
 
 # Create a module-level CLIPrinter instance for convenience
 cli = CLIPrinter()
@@ -47,11 +52,38 @@ cli = CLIPrinter()
 _DYN_CTX_START = "[Dandelion Context"
 _DYN_CTX_END = "[Dandelion Context End]"
 
+# Media pointer cost marker: "[... cost=<n> tokens ...]" written into history by
+# the media tools (see src/tool/media/media_base.py). Used to derive the media
+# share of the context ledger from history instead of a mutable counter, so
+# compaction / resume / rollback all converge automatically.
+_MEDIA_COST_RE = re.compile(r"\[Multimodal asset:[^\]]*?cost=([\d,]+) tokens[^\]]*\]")
+
 # Main-agent LLM call retry policy: 1 initial attempt + _LLM_RETRY_COUNT retries.
 # Uniform for all error types (400/401/429/500/connection errors) per design
 # decision; exponential backoff (seconds) between attempts.
 _LLM_RETRY_COUNT = 3
 _LLM_RETRY_BACKOFF = (2, 4, 8)
+
+##
+ # @brief Sum the media cost markers found in one text fragment.
+ #
+ # @param text Text that may contain one or more "[Multimodal asset: ... ]"
+ # pointers (adjacent pointers are merged by _normalize_messages, so a single
+ # string can legitimately carry several markers).
+ #
+ # @return int total cost in tokens (0 when no marker is present).
+ #
+def _marker_cost(text):
+    total = 0
+    for raw in _MEDIA_COST_RE.findall(text):
+        try:
+            total += int(raw.replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        # End-try
+    # End-for
+    return total
+# End-def
 
 ##
  # @brief Strip previously injected [Dandelion Context] blocks from a user
@@ -157,6 +189,34 @@ class MyAgent:
         # budget accounts for the real request overhead without rebuilding.
         self._last_system_prompt = ""
 
+        # ----- Media / calibration state -----
+        # Media cost is derived from the pointer markers in history; only the
+        # in-flight window (tool ran, result not yet appended to history) needs
+        # an explicit transient value.
+        self._pending_media_tokens = 0
+        # Provisional cost cap for tools that must reserve budget BEFORE the
+        # result exists (base64 inflates the payload by ~1.37x; the formula also
+        # rounds up, so the cap stays conservative).
+        self._pending_media_reserve = 0
+        # Number of media blocks consumed in the current turn.
+        self._pending_media_count = 0
+        # Local estimate captured right before the last request, used as the
+        # denominator of the post-call calibration.
+        self._last_send_est = 0.0
+
+        # Post-call calibration ratio (only grows, capped by config). It corrects
+        # the systematic gap between the local heuristic and the provider count;
+        # it never lowers the estimate, so "local >= provider" still holds.
+        self._calib_ratio = 1.0
+        getter = getattr(self.session, "get_calibration_ratio", None)
+        if callable(getter):
+            try:
+                self._calib_ratio = max(float(getter() or 1.0), 1.0)
+            except Exception:
+                self._calib_ratio = 1.0
+            # End-try
+        # End-if
+
         # ----- @par 3. Load Tools -----
 
         # Init tools for Main Agent.
@@ -210,6 +270,38 @@ class MyAgent:
             ssh_tool.get_name(): ssh_tool
         }
 
+        # ----- @par 1-b. Multimodal (media) Tools -----
+
+        # Registered ONLY when the active model declares media support through
+        # its "file" whitelist. A text-only model never sees the media tools.
+        media_exts = self.config.get("MEDIA_EXTS", []) or []
+        media_limits = self.config.get("MEDIA_LIMITS", {}) or {}
+        media_tools = []
+
+        if ".pdf" in media_exts:
+            read_pdf_tool = ReadPdfTool(
+                workspace_dir=self.workspace_dir,
+                host=self,
+                session_dir_fn=lambda: self.session.current_session_dir,
+                media_limits=media_limits,
+                file_exts=media_exts,
+            )
+            media_tools.append(read_pdf_tool)
+            all_tools[read_pdf_tool.get_name()] = read_pdf_tool
+        # End-if
+
+        if any(ext != ".pdf" for ext in media_exts):
+            read_image_tool = ReadImageTool(
+                workspace_dir=self.workspace_dir,
+                host=self,
+                session_dir_fn=lambda: self.session.current_session_dir,
+                media_limits=media_limits,
+                file_exts=media_exts,
+            )
+            media_tools.append(read_image_tool)
+            all_tools[read_image_tool.get_name()] = read_image_tool
+        # End-if
+
         # ----- @par 2. Subagent Pool and Tools -----
 
         self.pool = SubAgentPool(
@@ -236,6 +328,8 @@ class MyAgent:
             state_tool, memory_tool,
             ssh_tool, time_tool
         ]
+        # Media tools join the main-agent toolset only when registered above.
+        tool_list.extend(media_tools)
 
         for t in tool_list:
             self.tools[t.get_name()] = t
@@ -355,25 +449,182 @@ class MyAgent:
      #
      # @param history Message list to estimate; defaults to self.history.
      #
-     # @return Estimated token count (float).
+     # @return Estimated token count (float), already calibrated.
+     #
+     # @note Media handling (both directions must hold):
+     # - image/document blocks are NEVER character-counted and their base64 data
+     #   is never touched (the provider charges by pixels, not by payload size);
+     # - media cost is derived from the "[Multimodal asset: ... cost=N tokens]"
+     #   markers inside history pointers, so compaction, resume and rollback all
+     #   converge without any bookkeeping;
+     # - only the in-flight window (tool result produced, not yet in history) is
+     #   covered by the transient _pending_media_tokens / _pending_media_reserve.
+     #
+     # @note The calibration ratio is applied LAST and only upward:
+     # ratio >= 1.0 is enforced at update time (see calibration.update_ratio).
      #
     def _estimate_tokens(self, history=None):
         history = history if history is not None else self.history
+
+        # ----- @par 1. Text part (heuristic, unchanged) -----
+
+        ascii_chars, non_ascii_chars, media_cost = self._scan_history(history)
+
+        # ----- @par 2. Media part (conservative, never base64 derived) -----
+
+        media_cost += max(self._pending_media_tokens, self._pending_media_reserve)
+
+        base = ascii_chars / 4.0 + non_ascii_chars / 1.5 + media_cost
+
+        # ----- @par 3. Post-call calibration (upward only) -----
+
+        return max(base, base * self._calib_ratio)
+    # End-def
+
+    ##
+     # @brief Walk a history/message tree and collect text chars + media cost.
+     #
+     # @param history Message list.
+     #
+     # @return (ascii_chars, non_ascii_chars, media_cost)
+     #
+     # @note Media blocks contribute their recorded cost only; a base64 payload
+     # is never counted as text, which is what keeps the budget meaningful.
+     #
+    @staticmethod
+    def _scan_history(history):
         ascii_chars = 0
         non_ascii_chars = 0
-        for m in history:
-            content = m.get("content", "")
-            if isinstance(content, list):
-                content = str(content)
-            for ch in str(content):
-                if ord(ch) < 128:
-                    ascii_chars += 1
-                else:
-                    non_ascii_chars += 1
+        media_cost = 0
+
+        def scan(value):
+            nonlocal ascii_chars, non_ascii_chars, media_cost
+
+            # 1. Plain text (including media pointers).
+            if isinstance(value, str):
+                for ch in value:
+                    if ord(ch) < 128:
+                        ascii_chars += 1
+                    else:
+                        non_ascii_chars += 1
+                    # End-if
+                # End-for
+                media_cost += _marker_cost(value)
+                return
+            # End-if
+
+            # 2. Structured block.
+            if isinstance(value, dict):
+                btype = value.get("type")
+
+                # Media block: NEVER count the payload. The cost of this block
+                # is already carried by its pointer text (single source of
+                # truth), so adding anything here would double count. The
+                # `return` keeps base64 out of the character estimator.
+                if btype in ("image", "document"):
+                    return
                 # End-if
-            # End-for
+
+                # Tool result / nested content: recurse into the payload.
+                if btype == "tool_result":
+                    scan(value.get("content", ""))
+                    return
+                # End-if
+
+                if btype == "text":
+                    scan(value.get("text", ""))
+                    return
+                # End-if
+
+                # Unknown block: count its text-ish fields, skipping base64.
+                for key, item in value.items():
+                    if key == "data" and isinstance(item, str):
+                        continue
+                    # End-if
+                    scan(item)
+                # End-for
+                return
+            # End-if
+
+            # 3. Containers.
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    scan(item)
+                # End-for
+            # End-if
+        # End-def scan
+
+        for msg in history or []:
+            if isinstance(msg, dict):
+                scan(msg.get("content", ""))
+            else:
+                scan(msg)
+            # End-if
         # End-for
-        return ascii_chars / 4.0 + non_ascii_chars / 1.5
+
+        return ascii_chars, non_ascii_chars, media_cost
+    # End-def
+
+    ##
+     # @brief Remaining token budget for media admission checks.
+     #
+     # @return int tokens available in the current context (>= 0).
+     #
+     # @note Read-only hook for the media tools; the tools never mutate the
+     # budget, they only refuse when the payload does not fit.
+     #
+    def available_token_budget(self):
+        try:
+            remaining = self._soft_token_limit() - self._estimate_tokens()
+        except Exception:
+            return 0
+        # End-try
+        return max(int(remaining), 0)
+    # End-def
+
+    ##
+     # @brief Remaining media slots in the current request.
+     #
+     # @return int slots (>= 0), or None when the model has no media support.
+     #
+    def available_media_slots(self):
+        limit = int(self.config.get("MEDIA_LIMITS", {}).get(
+            "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
+        # History contributes through its pointers; the current turn contributes
+        # through the transient counter (its blocks are not in history yet).
+        used = count_media_in_messages(self.history) + self._pending_media_count
+        return max(limit - used, 0)
+    # End-def
+
+    ##
+     # @brief Update the calibration ratio from a finished request.
+     #
+     # @param measured Total tokens reported by the provider usage object.
+     #
+    def _update_calibration(self, measured):
+        cap = ratio_cap(self.config)
+        new_ratio, observed = update_ratio(
+            self._calib_ratio, self._last_send_est, measured, cap)
+
+        # Audit trail: the observation (including the "healthy" case where the
+        # provider needed fewer tokens than the local estimate expects).
+        self.session.log_api_call("CONTEXT CALIBRATION", {
+            "local_est": int(self._last_send_est),
+            "measured": int(measured),
+            "observed_ratio": round(observed, 4),
+            "ratio": round(new_ratio, 4),
+            "ratio_cap": cap,
+        })
+
+        self._calib_ratio = new_ratio
+        setter = getattr(self.session, "set_calibration_ratio", None)
+        if callable(setter):
+            try:
+                setter(new_ratio)
+            except Exception:
+                pass
+            # End-try
+        # End-if
     # End-def
 
     ##
@@ -733,6 +984,11 @@ class MyAgent:
             "system": system_prompt
         }
 
+        # Denominator of the post-call calibration: the local estimate of the
+        # payload that is about to be sent (media markers included). Captured
+        # here because later mutation of history must not affect it.
+        self._last_send_est = self._estimate_tokens()
+
         # PRE-call logging is now handled inside SafeLLMClient -> Provider
         # (after thinking injection), so we only log POST here.
 
@@ -766,6 +1022,15 @@ class MyAgent:
             print(f"[-] API Error: {err}")
             return False, err
 
+        # ----- @par 2-b. Post-call context calibration -----
+        # The provider reports the real input size; the local heuristic is then
+        # corrected UPWARD only (ratio >= 1) so "local >= provider" always holds.
+        # A response without usage (other SDK paths) simply skips the step.
+        measured = usage_total_tokens(getattr(resp, "usage", None))
+        if measured > 0:
+            self._update_calibration(measured)
+        # End-if
+
         self.history.append({"role": "assistant", "content": resp.content})
         self.session.save_history(self.history)
 
@@ -776,6 +1041,12 @@ class MyAgent:
         # Handle Tools
         results = []
 
+        # Media blocks produced by this round, kept OUT of history (only their
+        # pointer text is persisted) and reserved against the token budget.
+        pending_media_cost = 0
+        pending_media_reserve = 0
+        pending_media_count = 0
+
         # Tools Iterator.
         for block in resp.content:
             if block.type != "tool_use":
@@ -785,6 +1056,11 @@ class MyAgent:
             handler = self.tools.get(block.name)
 
             if handler:
+                # Media tools must check the budget BEFORE building the payload
+                # (the result it produces cannot be discarded afterwards), so the
+                # already-reserved cost of this round is exposed first.
+                self._pending_media_reserve = pending_media_reserve
+                self._pending_media_count = pending_media_count
                 success, output = handler.execute(**block.input)
                 # A successful memory write changes what _get_memories() would
                 # load for the next tool-loop iteration; drop the cache so the
@@ -794,6 +1070,36 @@ class MyAgent:
                     self._invalidate_memories_cache()
             else:
                 success, output = False, f"Unknown tool: {block.name}"
+
+            # ----- Media result dispatch -----
+            # A media tool returns a structured dict: the base64 block stays OUT
+            # of history (only the pointer text is persisted), and the block is
+            # attached to THIS round's tool_result so the model can see it now.
+            if isinstance(output, dict) and output.get("kind") in ("image", "document"):
+                media_cost = int(output.get("media_cost", 0) or 0)
+                pending_media_cost += media_cost
+                pending_media_reserve = max(pending_media_reserve, media_cost)
+                pending_media_count += 1
+
+                # NOTE: the block is NOT tagged with a cost on purpose: the
+                # pointer text is the single accounting source, so any later
+                # scan of history cannot double count it.
+                media_block = output.get("block") or {}
+
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": [
+                        {"type": "text", "text": output.get("summary", "")},
+                        {"type": "text", "text": output.get("pointer", "")},
+                        media_block,
+                    ],
+                })
+                cli.print(f"    Media attached: {output.get('kind')} "
+                          f"(~{media_cost} tokens, history keeps the pointer only)",
+                          level="info")
+                continue
+            # End-if
 
             output_str = str(output)
             cli.print(f"    Result length: {len(output_str)} chars", level="debug")
@@ -829,6 +1135,14 @@ class MyAgent:
             self.history.append({"role": "user", "content": "You indicated a tool use but provided no valid tool calls."})
 
         self.session.save_history(self.history)
+
+        # The media cost now lives in the history pointers, so the transient
+        # reservation is no longer needed (and must not be double counted).
+        # Keeping it until the NEXT send is what covers the in-flight window
+        # where the tool result exists but history has not been re-read yet.
+        self._pending_media_tokens = pending_media_cost
+        self._pending_media_reserve = 0
+        self._pending_media_count = 0
         return True, None
     # End-def
 

@@ -10,6 +10,8 @@
 import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
+from src.tool.media import (estimate_messages_tokens, count_media_in_messages,
+                            DEFAULT_MEDIA_LIMITS)
 
 ##
  # @brief Implement of Subagent.
@@ -43,7 +45,15 @@ class SubAgent(ISubAgent):
         self.sub_results = []
         self.routing_context = routing_context or {}
 
+        # Live view of the SubAgent's own message list, so available_token_budget()
+        # can estimate the remaining window without extra plumbing.
+        self._messages = []
+        # Media blocks consumed in the current tool round (per-request cap).
+        self._pending_media_count = 0
+
         self.system_prompt = self._build_system_prompt(role_prompt)
+        # NOTE: media slots are computed in available_media_slots() below.
+
 
         if self.depth < self.max_depth:
             # Lazy import to prevent circular dependency
@@ -58,6 +68,18 @@ class SubAgent(ISubAgent):
         # End-if
     # End-def
     
+    ##
+     # @brief Remaining media slots in the current SubAgent request.
+     #
+     # @return int slots (>= 0).
+     #
+    def available_media_slots(self):
+        limit = int(self.config.get("MEDIA_LIMITS", {}).get(
+            "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
+        used = count_media_in_messages(self._messages) + self._pending_media_count
+        return max(limit - used, 0)
+    # End-def
+
     ##
      # @brief Generate subagent's system prompt.
      # Role + Recursion depth + Security rules.
@@ -129,6 +151,9 @@ class SubAgent(ISubAgent):
         print(f"    Task: {task_description[:80]}...")
 
         messages = [{"role": "user", "content": task_description}]
+        # Published for available_token_budget() (media tools read it before
+        # deciding whether a document/image fits in the SubAgent context).
+        self._messages = messages
 
         # Agent's loop.
         try:
@@ -205,15 +230,33 @@ class SubAgent(ISubAgent):
                         # End-if
 
                         print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
-                        results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": output
-                        })
+
+                        # Media result: the block travels in THIS tool_result only;
+                        # the private message list therefore keeps the base64 data
+                        # and is discarded together with the SubAgent.
+                        if isinstance(output, dict) and output.get("kind") in ("image", "document"):
+                            self._pending_media_count += 1
+                            results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": [
+                                    {"type": "text", "text": output.get("summary", "")},
+                                    {"type": "text", "text": output.get("pointer", "")},
+                                    output.get("block"),
+                                ],
+                            })
+                        else:
+                            results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": output
+                            })
+                        # End-if
                     # End-if
                 # End-for Tool iterator.
 
                 # Error Handle 2 : Block Empty User Message
+                self._pending_media_count = 0
                 if results:
                     messages.append({"role": "user", "content": results})
                 else:
@@ -251,7 +294,8 @@ class SubAgent(ISubAgent):
             max_depth_reached = max([max_depth_reached] + [r.depth_reached for r in self.sub_results])
 
         print(f"[*] [SubAgent:{self.subagent_id}] Completed in {elapsed:.1f}s "
-              f"({tool_calls_made} tool calls, depth={max_depth_reached})")
+              f"({tool_calls_made} tool calls, depth={max_depth_reached}, "
+              f"~{int(estimate_messages_tokens(messages))} tokens)")
 
         return SubAgentResult(
             subagent_id=self.subagent_id,
