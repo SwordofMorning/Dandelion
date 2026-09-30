@@ -52,7 +52,7 @@ main.py
 
 The `mk/` directory is relatively straightforward. Additionally, `mk/lib/paths.py` provides workspace root localization for the program. Therefore, let's start with the project's build process. If you are not interested in the build process, you can skip directly to the [next chapter](#3-src-overview).
 
-The build tool used is Nuitka (standalone mode). It compiles only the "small files" in the project to C; larger files (e.g., various Google SDKs) are included in the build artifact by directly copying their Python source code.
+The build tool used is Nuitka (standalone mode). It compiles only the "small files" in the project to C; larger files are included in the build artifact by directly copying their Python source code.
 
 For local builds, you can directly use the following commands:
 
@@ -91,10 +91,10 @@ Basic configurations are defined in `mk/config/build.config`, among which the fo
 
 ```sh
 # Nuitka config: Do not compile these heavy SDKs and libraries to C.
-nofollow_imports = pydantic,anthropic,openai,google,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
+nofollow_imports = pydantic,anthropic,openai,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
 
 # Custom config: Manually copy these packages to the dist folder (bypassing Nuitka).
-copy_packages = pydantic,anthropic,openai,google,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
+copy_packages = pydantic,anthropic,openai,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
 
 # Custom config: Force compile standard libraries required by the bypassed packages.
 include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3
@@ -108,7 +108,7 @@ Also, the configuration contains:
 windows_jobs = 2
 ```
 
-This prevents potential Out-of-Memory errors on GHA Windows platforms (MSVC uses significant heap space for large single compilation units, triggering "C1002: compiler is out of heap space"). It manually restricts the number of `make -j` tasks, especially for handling large Python files (mainly Google SDKs).
+This prevents potential Out-of-Memory errors on GHA Windows platforms (MSVC uses significant heap space for large single compilation units, triggering "C1002: compiler is out of heap space"). It manually restricts the number of `make -j` tasks.
 
 Furthermore, the `[build]` section defines `entry = main.py`, `output_dir = build`, `cache_dir = .nuitka-cache`, `icon`, and `company/description` (written into Windows PE resources). The `[sign]` section currently has `enabled = false`, serving as a placeholder for code signing reserved in `make sign`.
 
@@ -249,11 +249,11 @@ Details:
 
 ### 4.3 API Requests (`llm_provider`)
 
-`src/utils/llm_provider` derives API request formats for OpenAI, Anthropic, and Google AI SDKs. `base.py` provides universal base class methods, from which the rest are derived. `SafeLLMClient._create_provider()` selects them based on `SDK_TYPE`.
+`src/utils/llm_provider` derives API request formats for OpenAI and Anthropic SDKs. `base.py` provides universal base class methods, from which the rest are derived. `SafeLLMClient._create_provider()` selects them based on `SDK_TYPE`.
 
-For the Anthropic API, the Reasoning Effort (Think Level) utilized by DeepSeek adopts OpenAI/Google-style `low`, `med`, `high` strings instead of Anthropic's specific "Think Budget" (thinking/effort injection logic is handled inside the Provider).
+For the Anthropic API, the Reasoning Effort (Think Level) utilized by DeepSeek adopts OpenAI-style `low`, `med`, `high` strings instead of Anthropic's specific "Think Budget" (thinking/effort injection logic is handled inside the Provider).
 
-For OpenAI and Google AI, basic frameworks and contents are implemented, but they need future updates for Response API and Interactive API (TODO).
+For OpenAI, basic frameworks and contents are implemented, but they need future updates for Response API (TODO). Note: Google/Gemini is now integrated exclusively via OpenAI-compatible endpoints, removing native Google SDK dependencies.
 
 ### 4.4 Model Routing (`routing`)
 

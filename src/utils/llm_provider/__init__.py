@@ -9,19 +9,17 @@
 from .base import LLMProvider
 from .anthropic import AnthropicProvider
 from .openai import OpenAIProvider
-from .gemini import GeminiProvider
 
 __all__ = [
     "LLMProvider",
     "AnthropicProvider",
     "OpenAIProvider",
-    "GeminiProvider",
 ]
 
 ##
  # @brief Factory function to create a provider instance based on SDK type.
  # 
- # @param sdk_type One of "anthropic", "openai", "gemini", "ai studio", "nvidia".
+ # @param sdk_type One of "anthropic", "openai", "nvidia".
  # @param api_key API key for the provider.
  # @param base_url Base URL (optional).
  # @param model_id Model identifier.
@@ -33,10 +31,15 @@ __all__ = [
  # 
 def create_provider(sdk_type, api_key, base_url, model_id):
     sdk = sdk_type.lower()
-    if sdk in ["ai studio", "gemini"]:
-        return GeminiProvider(api_key, base_url, model_id)
+    if sdk in ["ai studio", "gemini", "google"]:
+        raise ValueError(
+            f"Google/Gemini SDK support has been removed. "
+            f"Please use SDK_TYPE='OpenAI' with Google's OpenAI-compatible endpoint instead."
+        )
     elif sdk in ["openai", "nvidia"]:
         return OpenAIProvider(api_key, base_url, model_id)
-    else:
+    elif sdk in ["anthropic"]:
         return AnthropicProvider(api_key, base_url, model_id)
+    else:
+        raise ValueError(f"Unsupported SDK_TYPE: '{sdk_type}'. Supported types: 'OpenAI', 'Anthropic'.")
 # End-def

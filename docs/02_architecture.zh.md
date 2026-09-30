@@ -52,7 +52,7 @@ main.py
 
 `mk/` 相对简单，并且 `mk/lib/paths.py` 还为程序提供了工作区根目录定位的工作，因此我们先从项目的构建流程入手。如果你对工程构建没有兴趣，可以直接跳转到[下一章](#三src概览)。
 
-构建工具选用 Nuitka（standalone 模式），只对项目中的"小文件"进行编译；较大的文件（例如，Google 的一系列 SDK）则采用拷贝 Python 源码的方式添加到构建产物中。
+构建工具选用 Nuitka（standalone 模式），只对项目中的"小文件"进行编译；较大的文件则采用拷贝 Python 源码的方式添加到构建产物中。
 
 对于本地的构建，可以直接使用命令：
 
@@ -91,10 +91,10 @@ main.py
 
 ```sh
 # Nuitka config: Do not compile these heavy SDKs and libraries to C.
-nofollow_imports = pydantic,anthropic,openai,google,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
+nofollow_imports = pydantic,anthropic,openai,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
 
 # Custom config: Manually copy these packages to the dist folder (bypassing Nuitka).
-copy_packages = pydantic,anthropic,openai,google,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
+copy_packages = pydantic,anthropic,openai,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
 
 # Custom config: Force compile standard libraries required by the bypassed packages.
 include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3
@@ -108,7 +108,7 @@ include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,htm
 windows_jobs = 2
 ```
 
-这里是为了避免 GHA 的 Windows 平台潜在的内存不足（MSVC 对单个编译单元堆占用大，会触发 "C1002: compiler is out of heap space"），而手动限制 `make -j` 的任务数量——针对大的 Python 文件，还是指 Google 的 SDK。
+这里是为了避免 GHA 的 Windows 平台潜在的内存不足（MSVC 对单个编译单元堆占用大，会触发 "C1002: compiler is out of heap space"），而手动限制 `make -j` 的任务数量。
 
 此外，`[build]` 段还定义了 `entry = main.py`、`output_dir = build`、`cache_dir = .nuitka-cache`、`icon`、`company/description`（写入 Windows PE 版本资源）等；`[sign]` 段目前 `enabled = false`，对应 `make sign` 预留的软件签名。
 
@@ -249,11 +249,11 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ### 4.3 各 API 请求 llm_provider
 
-`src/utils/llm_provider` 下针对 OpenAI、Anthropic 和 Google AI 的不同 SDK 的 API 请求格式进行了派生。其中 `base.py` 提供了通用的基类方法，剩下的几个类由它派生而来，`SafeLLMClient._create_provider()` 按 `SDK_TYPE` 选择。
+`src/utils/llm_provider` 下针对 OpenAI 和 Anthropic 的不同 SDK/API 请求格式进行了派生。其中 `base.py` 提供了通用的基类方法，剩下的几个类由它派生而来，`SafeLLMClient._create_provider()` 按 `SDK_TYPE` 选择。
 
-对于 Anthropic API 来说，其中 DeepSeek 使用的 Reasoning Effort (Think Level) 采用 OpenAI/Google 风格的 `low`、`med`、`high` 等字符，而不是像 Anthropic 一样使用 Think Budget（`thinking/effort` 注入逻辑在 Provider 内完成）。
+对于 Anthropic API 来说，其中 DeepSeek 使用的 Reasoning Effort (Think Level) 采用 OpenAI 风格的 `low`、`med`、`high` 等字符，而不是像 Anthropic 一样使用 Think Budget（`thinking/effort` 注入逻辑在 Provider 内完成）。
 
-对于 OpenAI 和 Google AI 来说，其实现了基本的框架与内容，后续需要更新为 Response API 和 Interactive API（TODO）。
+对于 OpenAI 来说，其实现了基本的框架与内容，后续需要更新为 Response API（TODO）。注：Google/Gemini 已全部通过 OpenAI-compatible 规范接入，移除了原生 Google SDK。
 
 ### 4.4 模型路由 routing
 
