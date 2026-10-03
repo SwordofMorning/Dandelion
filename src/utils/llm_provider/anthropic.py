@@ -10,10 +10,10 @@ from .base import LLMProvider
 # Mapping from abstract effort level to Anthropic-compatible budget_tokens
 # Used when thinking=enabled to control reasoning token budget
 EFFORT_TO_BUDGET_TOKENS = {
-    "low": 1024,
-    "medium": 4096,
-    "high": 8192,
-    "max": 16384,
+    "low": 8000,
+    "medium": 16000,
+    "high": 32000,
+    "max": 64000,
 }
 DEFAULT_EFFORT = "medium"
 
