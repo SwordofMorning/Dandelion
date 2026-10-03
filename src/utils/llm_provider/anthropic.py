@@ -10,12 +10,22 @@ from .base import LLMProvider
 # Mapping from abstract effort level to Anthropic-compatible budget_tokens
 # Used when thinking=enabled to control reasoning token budget
 EFFORT_TO_BUDGET_TOKENS = {
-    "low": 1024,
-    "medium": 4096,
-    "high": 8192,
-    "max": 16384,
+    "low": 8000,
+    "medium": 16000,
+    "high": 32000,
+    "max": 64000,
 }
 DEFAULT_EFFORT = "medium"
+
+# The SDK refuses NON-STREAMING requests whose max_tokens implies more than ten
+# minutes of generation (see _base_client._calculate_nonstreaming_timeout:
+# expected = 3600 * max_tokens / 128000 must stay <= 600), i.e. it raises for
+# max_tokens > 21333 unless the caller passes an explicit timeout. Callers that
+# legitimately need a larger cap (the compaction summary shares max_tokens with
+# the thinking budget) are served through the streaming API instead, which the
+# SDK recommends for long requests; the stream is drained silently so a
+# non-streaming caller still gets the final message.
+SDK_NONSTREAMING_MAX_TOKENS = 21333
 
 ##
  # @brief Anthropic API Class.
@@ -71,6 +81,18 @@ class AnthropicProvider(LLMProvider):
                 payload["output_config"] = {"effort": self.effort}
             else:
                 budget = EFFORT_TO_BUDGET_TOKENS.get(self.effort, EFFORT_TO_BUDGET_TOKENS["medium"])
+
+                # @note max_tokens covers thinking + answer, and the API requires
+                # budget_tokens < max_tokens. A caller whose cap is not larger than
+                # the thinking budget (a small summarization call, for instance)
+                # would otherwise surface this only as a provider 400, so warn here.
+                cap = payload.get("max_tokens")
+                if isinstance(cap, int) and 0 < cap <= budget:
+                    print(f"[-] Warning: max_tokens={cap} <= thinking budget_tokens="
+                          f"{budget} ({self.model_id}); the provider may reject this "
+                          f"request. Raise max_tokens or lower the effort level.")
+                # End-if
+
                 payload["thinking"] = {
                     "type": "enabled",
                     "budget_tokens": budget
@@ -101,6 +123,19 @@ class AnthropicProvider(LLMProvider):
 
         # 3. Request.
         try:
+            cap = payload.get("max_tokens")
+            if isinstance(cap, int) and cap > SDK_NONSTREAMING_MAX_TOKENS:
+                # @note Large caps are rejected by the SDK on the non-streaming
+                # path, so run them through the streaming API and drain the stream
+                # without printing: the caller still receives the final message.
+                with self.client.messages.stream(**payload) as stream:
+                    for _ in stream:
+                        pass
+                    # End-for
+                # End-with
+                return stream.get_final_message(), None
+            # End-if
+
             resp = self.client.messages.create(**payload)
             return resp, None
         except Exception as e:

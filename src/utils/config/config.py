@@ -105,6 +105,147 @@ def _parse_effort(model_data: dict, model_id: str = "") -> str:
 
 ##
  # ========================================
+ # @section I-b. Media (multimodal) metadata
+ # ========================================
+ #
+
+# Media limit keys accepted inside a model entry of MODEL_LIST.
+_MEDIA_LIMIT_KEYS = {
+    "max_image_bytes": (int, None),
+    "max_pdf_bytes": (int, None),
+    "max_pdf_pages": (int, 1),
+    "max_media_per_request": (int, 1),
+    "pdf_tokens_per_page": (int, 1),
+    "image_cost_factor": (float, 0.0001),
+    "pdf_cost_factor": (float, 0.0001),
+    "media_cost_fallback": (int, 1),
+    "calib_ratio_cap": (float, 1.0),
+}
+
+##
+ # @brief Parse and validate the *file* extension whitelist of a model entry.
+ #
+ # @param model_data Model metadata (json).
+ # @param model_id Model ID.
+ #
+ # @return list of lower-case extensions ([] when absent or invalid).
+ #
+ # @note Absent or empty means "this model does not accept media input": the
+ # agent then does not register the media tools for it.
+ #
+def _parse_media_extensions(model_data, model_id=""):
+    raw = model_data.get("file")
+    if raw is None:
+        return []
+    # End-if
+
+    if not isinstance(raw, (list, tuple)):
+        print(f"[-] Warning: model '{model_id}': 'file' must be a list of "
+              f"extensions; ignoring it.")
+        return []
+    # End-if
+
+    exts = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        # End-if
+        ext = item.strip().lower()
+        if not ext:
+            continue
+        # End-if
+        if not ext.startswith("."):
+            ext = "." + ext
+        # End-if
+        if ext not in exts:
+            exts.append(ext)
+        # End-if
+    # End-for
+
+    return exts
+# End-def
+
+##
+ # @brief Parse a byte-size value that may carry a unit suffix.
+ #
+ # @param value Raw config value (int, float, "15MB", "512KB", "1GB", "10485760").
+ #
+ # @return int bytes, or None when the value cannot be parsed.
+ #
+def _parse_byte_size(value):
+    if isinstance(value, bool):
+        return None
+    # End-if
+    if isinstance(value, (int, float)):
+        return int(value)
+    # End-if
+    if not isinstance(value, str):
+        return None
+    # End-if
+
+    text = value.strip().lower()
+    for suffix, scale in (("gb", 1024 ** 3), ("mb", 1024 ** 2), ("kb", 1024), ("b", 1)):
+        if text.endswith(suffix):
+            try:
+                return int(float(text[: -len(suffix)].strip()) * scale)
+            except ValueError:
+                return None
+            # End-try
+        # End-if
+    # End-for
+
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+    # End-try
+# End-def
+
+##
+ # @brief Parse and validate the media limit fields of a model entry.
+ #
+ # @param model_data Model metadata (json).
+ # @param model_id Model ID.
+ #
+ # @return dict of valid overrides (invalid values fall back to the defaults
+ # defined in src/tool/media/media_base.py).
+ #
+def _parse_media_limits(model_data, model_id=""):
+    limits = {}
+    for key, (cast, minimum) in _MEDIA_LIMIT_KEYS.items():
+        if key not in model_data:
+            continue
+        # End-if
+        raw = model_data.get(key)
+        if key.endswith("_bytes"):
+            # Byte caps accept unit suffixes such as "15MB" for readability.
+            value = _parse_byte_size(raw)
+            if value is None:
+                print(f"[-] Warning: model '{model_id}': invalid {key}={raw!r}; "
+                      f"using default.")
+                continue
+            # End-if
+        else:
+            try:
+                value = cast(raw)
+            except (TypeError, ValueError):
+                print(f"[-] Warning: model '{model_id}': invalid {key}={raw!r}; "
+                      f"using default.")
+                continue
+            # End-try
+        # End-if
+        if minimum is not None and value < minimum:
+            print(f"[-] Warning: model '{model_id}': {key}={raw!r} below the "
+                  f"minimum {minimum}; using default.")
+            continue
+        # End-if
+        limits[key] = value
+    # End-for
+    return limits
+# End-def
+
+##
+ # ========================================
  # @section II. Main Config Loader
  # ========================================
  #
@@ -192,6 +333,10 @@ def load_api_config(file_path):
             thinking = _parse_thinking(model_data, model_id)
             effort   = _parse_effort(model_data, model_id)
 
+            # Parse media (multimodal) metadata.
+            media_exts = _parse_media_extensions(model_data, model_id)
+            media_limits = _parse_media_limits(model_data, model_id)
+
             # Enrich model data with provider info.
             enriched_model = {
                 "provider_name": section,
@@ -202,6 +347,9 @@ def load_api_config(file_path):
                 # Ensure canonical values override any raw values from **model_data.
                 "thinking": thinking,
                 "effort": effort,
+                # Media support (empty list = text-only model).
+                "file": media_exts,
+                "media_limits": media_limits,
             }
             all_models.append(enriched_model)
 
@@ -238,6 +386,12 @@ def load_api_config(file_path):
         # Think Level
         "THINKING": active_profile.get("thinking", "disabled"),
         "EFFORT": active_profile.get("effort", "medium"),
+        # Media (multimodal) support of the active model
+        "MEDIA_EXTS": active_profile.get("file", []),
+        "MEDIA_LIMITS": active_profile.get("media_limits", {}),
+        "ACTIVE_MODEL_PROFILE": active_profile,
+        # Post-call context calibration ceiling (see llm_request/calibration.py)
+        "CALIB_RATIO_CAP": active_profile.get("media_limits", {}).get("calib_ratio_cap", 1.6),
     }
 # End-def
 

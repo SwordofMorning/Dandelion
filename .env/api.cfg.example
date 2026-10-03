@@ -14,6 +14,25 @@ TAVILY_API_KEY=
 ; ============================================================
 ; Part 2: Provider Profiles & Model Registries
 ; ============================================================
+;
+; Media (multimodal) support is declared per model, so a text-only model never
+; receives media tools. Optional keys inside a MODEL_LIST entry:
+;
+;   "file": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"],
+;       Extension whitelist. Omit it (or use []) for text-only models: the
+;       read_image / read_pdf tools are then NOT registered for that model.
+;
+;   "max_image_bytes": "15MB",     Single image size cap (int bytes or "15MB").
+;   "max_pdf_bytes": "15MB",       Single PDF size cap.
+;   "max_pdf_pages": 100,          Page cap for one PDF request (no page slicing).
+;   "max_media_per_request": 8,    How many media blocks one request may carry.
+;   "pdf_tokens_per_page": 258,    Cost estimate per PDF page (budget ledger).
+;   "image_cost_factor": 1.2,      Safety factor on the image cost estimate.
+;   "pdf_cost_factor": 1.2,        Safety factor on the PDF cost estimate.
+;   "media_cost_fallback": 2000,   Cost assumed when a media size is unknown.
+;   "calib_ratio_cap": 1.6,        Upper bound of the context calibration ratio.
+;
+; All keys are optional; the defaults above apply when they are absent.
 
 [DeepSeek]
 SDK_TYPE="Anthropic"
@@ -41,6 +60,35 @@ MODEL_LIST = [
         "RPD": 500,
         "thinking": "enabled",
         "effort": "max"
+    }
+    ]
+
+; Example multimodal profile (Gemini through an Anthropic-compatible gateway).
+; SDK_TYPE stays "Anthropic": the gateway converts document/image blocks into
+; the native Gemini vision input, so no Google SDK is required here.
+[Gemini]
+SDK_TYPE="Anthropic"
+BASE_URL=https://example-gateway.invalid/v1
+API_KEY=
+MODEL_LIST = [
+    {
+        "model_id": "gemini-3.8-flash",
+        "conditions": ["reasoning", "long_context", "complex"],
+        "file": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"],
+        "max_image_bytes": "15MB",
+        "max_pdf_bytes": "15MB",
+        "max_pdf_pages": 100,
+        "max_media_per_request": 8,
+        "pdf_tokens_per_page": 258,
+        "image_cost_factor": 1.2,
+        "pdf_cost_factor": 1.2,
+        "max_token": 64000,
+        "max_context_tokens": 1000000,
+        "TPM": 0,
+        "RPM": 60,
+        "RPD": 1000,
+        "thinking": "disabled",
+        "effort": "medium"
     }
     ]
 
