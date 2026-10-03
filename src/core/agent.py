@@ -59,11 +59,146 @@ _DYN_CTX_END = "[Dandelion Context End]"
 # compaction / resume / rollback all converge automatically.
 _MEDIA_COST_RE = re.compile(r"\[Multimodal asset:[^\]]*?cost=([\d,]+) tokens[^\]]*\]")
 
+# Compaction summary budget: thinking and the summary share ONE max_tokens pool,
+# so the cap must cover both the provider thinking budget (EFFORT_TO_BUDGET_TOKENS
+# max = 64000) and the summary itself. 128000 keeps a 64k thinking chain plus 64k
+# of summary room. Overridable per profile with COMPACT_SUMMARY_MAX_TOKENS.
+DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 128000
+
+# A response shorter than this is a FAILED summarization, never content. An empty
+# summary used to be written into history verbatim, silently dropping the
+# compacted middle of the conversation (measured incident 2026/09/30: the model
+# burned the whole 2000-token output budget on thinking and returned no text, so
+# ~578k tokens of context disappeared while the log said "compacted successfully").
+MIN_COMPACT_SUMMARY_CHARS = 40
+
+# Lower bound accepted for COMPACT_SUMMARY_MAX_TOKENS (guards against a profile
+# value of 0 or a negative number silently disabling the summary).
+MIN_COMPACT_SUMMARY_MAX_TOKENS = 1024
+
 # Main-agent LLM call retry policy: 1 initial attempt + _LLM_RETRY_COUNT retries.
 # Uniform for all error types (400/401/429/500/connection errors) per design
 # decision; exponential backoff (seconds) between attempts.
 _LLM_RETRY_COUNT = 3
 _LLM_RETRY_BACKOFF = (2, 4, 8)
+
+##
+ # @brief Classify a compaction summary response.
+ #
+ # @param text Extracted text (client.extract_text result), may be None.
+ # @param stop_reason Provider stop reason ("end_turn", "max_tokens", ...).
+ # @param err Error string returned by safe_request, or None.
+ #
+ # @return (status, reason): "ok" (usable summary), "truncated" (usable but cut
+ #         by the output cap), "empty" (no usable text) or "error" (the request
+ #         itself failed).
+ #
+ # @note Pure helper shared by the compaction flow and the local smoke harness,
+ #       so the accepted/rejected matrix has exactly one definition.
+ #
+def classify_compaction_summary(text, stop_reason, err):
+    if err:
+        return "error", str(err)
+    # End-if
+
+    body = (text or "").strip()
+    if len(body) < MIN_COMPACT_SUMMARY_CHARS:
+        return "empty", f"summary text shorter than {MIN_COMPACT_SUMMARY_CHARS} chars"
+    # End-if
+
+    if stop_reason == "max_tokens":
+        return "truncated", "summary hit the output cap"
+    # End-if
+
+    return "ok", ""
+# End-def
+
+##
+ # @brief Resolve the output cap of the compaction summarization call.
+ #
+ # @param raw Raw COMPACT_SUMMARY_MAX_TOKENS value from the profile.
+ # @param profile_max_tokens The profile MAX_TOKENS (provider output limit).
+ #
+ # @return int usable output cap.
+ #
+ # @note The cap covers thinking + summary (they share max_tokens), so it must
+ #       stay above the provider thinking budget; the Anthropic provider warns
+ #       when a caller sends a smaller cap on a budget-based endpoint.
+ # @note The cap is never raised above the profile MAX_TOKENS: asking a provider
+ #       for more than its documented output limit is a 400 on some endpoints.
+ #
+def resolve_compact_summary_max_tokens(raw, profile_max_tokens=None):
+    if raw is None:
+        value = DEFAULT_COMPACT_SUMMARY_MAX_TOKENS
+    else:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            print(f"[-] Warning: invalid COMPACT_SUMMARY_MAX_TOKENS={raw!r}; "
+                  f"using {DEFAULT_COMPACT_SUMMARY_MAX_TOKENS}.")
+            value = DEFAULT_COMPACT_SUMMARY_MAX_TOKENS
+        # End-try
+    # End-if
+
+    if value < MIN_COMPACT_SUMMARY_MAX_TOKENS:
+        print(f"[-] Warning: COMPACT_SUMMARY_MAX_TOKENS={value} is below "
+              f"{MIN_COMPACT_SUMMARY_MAX_TOKENS}; clamping.")
+        value = MIN_COMPACT_SUMMARY_MAX_TOKENS
+    # End-if
+
+    if profile_max_tokens is not None:
+        try:
+            profile_max = int(profile_max_tokens)
+        except (TypeError, ValueError):
+            profile_max = 0
+        # End-try
+        if 0 < profile_max < value:
+            print(f"[*] Compaction summary cap {value} exceeds the profile "
+                  f"MAX_TOKENS={profile_max}; using {profile_max}.")
+            value = profile_max
+        # End-if
+    # End-if
+
+    return value
+# End-def
+
+##
+ # @brief Build the history message that replaces the compacted middle.
+ #
+ # @param archive_path Full archive file path (always recorded, so the dropped
+ #                     context stays reachable by a human).
+ # @param status "ok" / "truncated" => summary present; "empty" / "error" =>
+ #               failure marker.
+ # @param summary_content Summary text (unused on failure).
+ # @param reason Failure reason (unused on success).
+ # @param kept_messages Number of trailing messages kept verbatim.
+ #
+ # @return dict: history message (role=user).
+ #
+ # @note The failure form never carries an empty <conversation_summary> tag: an
+ #       empty summary is indistinguishable from a real one to every later reader
+ #       (the model included), which is what made the 2026/09/30 incident silent.
+ #
+def build_compaction_message(archive_path, status, summary_content, reason, kept_messages):
+    if status in ("ok", "truncated"):
+        note = " (summary truncated by the output cap)" if status == "truncated" else ""
+        return {
+            "role": "user",
+            "content": (f"[System: Context compacted at {archive_path}{note}]\n\n"
+                        f"<conversation_summary>\n{summary_content}\n</conversation_summary>")
+        }
+    # End-if
+
+    return {
+        "role": "user",
+        "content": (f"[System: Context compaction FAILED at {archive_path} "
+                    f"(reason: {reason})]\n\n"
+                    f"No summary could be produced, so the earlier conversation was NOT "
+                    f"summarized. It is archived verbatim at the path above and the last "
+                    f"{kept_messages} message(s) were kept in context. Re-read the archive "
+                    f"if that history is needed.")
+    }
+# End-def
 
 ##
  # @brief Sum the media cost markers found in one text fragment.
@@ -752,35 +887,79 @@ class MyAgent:
             "Output strictly in XML format using the tags above."
         )
 
+        # @note thinking and the summary share ONE max_tokens pool: the cap must
+        # cover the provider thinking budget (up to 64k) plus the summary itself,
+        # hence the 128000 default. A cap the model cannot finish within comes back
+        # as stop_reason=max_tokens and is handled by the validation below.
+        summary_max_tokens = resolve_compact_summary_max_tokens(
+            self.config.get("COMPACT_SUMMARY_MAX_TOKENS"),
+            self.config.get("MAX_TOKENS"),
+        )
+
         summary_payload = {
             "messages": [{"role": "user", "content": summary_prompt + "\n\nHistory:\n" + summary_text}],
-            "max_tokens": 2000,
+            "max_tokens": summary_max_tokens,
             "system": "You are a concise memory summarization AI."
         }
 
-        # ----- @par 4. Request -----
+        # ----- @par 4. Request + validation -----
 
         resp, err = self.client.safe_request(summary_payload, log_tag="COMPRESSION SUMMARY")
-        if err:
-            print(f"[-] Compression failed: {err}. Falling back to basic snip.")
-            summary_content = "[Compression Failed. History snipped.]"
-        else:
-            summary_content = self.client.extract_text(resp.content)
+        summary_response_text = self.client.extract_text(resp.content) if resp else ""
+        status, reason = classify_compaction_summary(
+            summary_response_text,
+            getattr(resp, "stop_reason", None) if resp else None,
+            err,
+        )
+        summary_content = summary_response_text if status in ("ok", "truncated") else ""
 
-        summary_msg = {
-            "role": "user",
-            "content": (f"[System: Context compacted at {archive_path}]\n\n"
-                        f"<conversation_summary>\n{summary_content}\n</conversation_summary>")
-        }
+        if status == "empty":
+            print(f"[-] Compression failed: {reason}. Writing an explicit failure "
+                  f"marker instead of an empty summary.")
+        elif status == "error":
+            print(f"[-] Compression failed: {reason}.")
+        elif status == "truncated":
+            print(f"[-] Warning: compression summary hit the output cap "
+                  f"(max_tokens={summary_max_tokens}) and may be incomplete; "
+                  f"consider raising COMPACT_SUMMARY_MAX_TOKENS.")
+        # End-if
+
+        # ----- @par 5. History assembly -----
+
+        summary_msg = build_compaction_message(archive_path, status, summary_content,
+                                               reason, len(recent))
 
         self.history = head + [summary_msg] + recent
         self.session.save_history(self.history)
 
         # Invalidate memories cache: history changed (plain-text user messages may shift).
         self._invalidate_memories_cache()
-        print("[+] Context compacted successfully.")
+        if status in ("ok", "truncated"):
+            print(f"[+] Context compacted successfully (summary {len(summary_content)} chars).")
+        else:
+            print("[!] Context compaction finished WITHOUT a summary (failure marker "
+                  "written; the archive keeps the dropped history).")
+        # End-if
 
-        # ----- @par 5. Post -----
+        # ----- @par 6. Observability -----
+        #
+        # @note The main loop logs a POST record per call; the summarization call
+        # used to log its request only, which made a failed or truncated summary
+        # invisible in api.log (the 2026/09/30 incident had to be reconstructed
+        # from history afterwards).
+        self.session.log_api_call("POST LLM CALL - COMPRESSION SUMMARY", {
+            "status": status,
+            "reason": reason,
+            "stop_reason": getattr(resp, "stop_reason", None) if resp else None,
+            "block_types": [getattr(b, "type", None)
+                            for b in (getattr(resp, "content", None) or [])],
+            "summary_chars": len(summary_content),
+            "max_tokens": summary_max_tokens,
+            "kept_messages": len(recent),
+            "usage_total": usage_total_tokens(getattr(resp, "usage", None)) if resp else 0,
+        })
+
+        # ----- @par 7. Post -----
 
         # Post-compaction guard: if the budget is still exceeded (e.g. the
         # configured MAX_CONTEXT_TOKENS is below the system-prompt + tools
