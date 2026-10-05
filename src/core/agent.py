@@ -283,6 +283,9 @@ class MyAgent:
         # Inject thinking level.
         self.thinking = str(config.get("THINKING", "disabled")).strip().lower()
         self.effort = str(config.get("EFFORT", "medium")).strip().lower()
+        # Endpoint flavor (link terminal model family) used for the reasoning-effort
+        # injection; "auto" lets the provider detect it from base_url/model_id.
+        self.compat = str(config.get("COMPAT", "auto")).strip().lower()
 
         # Load history from the current session
         self.history = self.session.load_history()
@@ -299,6 +302,7 @@ class MyAgent:
             sub_list=self.config.get("SUB_LIST", []),
             thinking=self.thinking,
             effort=self.effort,
+            compat=self.compat,
             logger=self.session
         )
 

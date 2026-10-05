@@ -7,6 +7,9 @@
 
 from dataclasses import dataclass, field
 
+# @note Endpoint flavor vocabulary is owned by llm_provider/effort.py.
+from ..llm_provider.effort import FLAVOR_AUTO, VALID_FLAVORS
+
 ##
  # ========================================
  # @section I. Validation helpers (Same logic with config.py)
@@ -61,6 +64,27 @@ def _safe_effort(value, model_id: str = "") -> str:
 # End-def
 
 ##
+ # @brief Normalise an endpoint flavor (compat) value, falling back to ``"auto"``.
+ # 
+ # @param value Raw value of the "compat" field from model metadata.
+ # @param model_id Model ID.
+ #
+ # @return Endpoint flavor name, or "auto" on missing/invalid values (safe default).
+ #
+def _safe_compat(value, model_id: str = "") -> str:
+    if not isinstance(value, str):
+        print(f"[!] Model '{model_id}': 'compat' must be a string. "
+              f"Defaulting to '{FLAVOR_AUTO}'.")
+        return FLAVOR_AUTO
+    v = value.strip().lower()
+    if v != FLAVOR_AUTO and v not in VALID_FLAVORS:
+        print(f"[!] Model '{model_id}': invalid compat='{v}'. "
+              f"Defaulting to '{FLAVOR_AUTO}'.")
+        return FLAVOR_AUTO
+    return v
+# End-def
+
+##
  # ========================================
  # @section II. Dataclass
  # ========================================
@@ -83,6 +107,7 @@ class RegistryModelSpec:
     rpd: int = 0
     thinking: str = "disabled"
     effort: str = "medium"
+    compat: str = FLAVOR_AUTO
 # End-class
 
 ##
@@ -122,6 +147,7 @@ class ModelRegistry:
 
                 thinking = _safe_thinking(m.get("thinking", "disabled"), model_id)
                 effort   = _safe_effort(m.get("effort", "medium"), model_id)
+                compat   = _safe_compat(m.get("compat", FLAVOR_AUTO), model_id)
 
                 spec = RegistryModelSpec(
                     alias=alias,
@@ -136,6 +162,7 @@ class ModelRegistry:
                     rpd=m.get("RPD", 0),
                     thinking=thinking,
                     effort=effort,
+                    compat=compat,
                 )
                 self._specs[alias] = spec
                 self._ordered_aliases.append(alias)

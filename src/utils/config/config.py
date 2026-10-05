@@ -14,7 +14,8 @@
  #     "RPM": 10,
  #     "RPD": 500,
  #     "thinking": "enabled",
- #     "effort": "max"
+ #     "effort": "max",
+ #     "compat": "deepseek"
  # }
  # max_token:          Provider output limit (payload "max_tokens").
  #                     Reserved inside the compaction threshold so that
@@ -27,6 +28,10 @@
 import os
 import configparser
 import json
+
+# @note Endpoint flavor vocabulary is owned by llm_provider/effort.py so the
+# config layer, the model registry and the providers cannot drift apart.
+from ..llm_provider.effort import FLAVOR_AUTO, VALID_FLAVORS
 
 ##
  # ========================================
@@ -100,6 +105,41 @@ def _parse_effort(model_data: dict, model_id: str = "") -> str:
         return "medium"
 
     # 3. Return value of "effort" in metadata.
+    return value
+# End-def
+
+##
+ # @brief Extract and validate the *compat* (endpoint flavor) field.
+ # 
+ # @param model_data Model metadata (json).
+ # @param model_id Model ID.
+ #
+ # @return Endpoint flavor name, or "auto" on missing/invalid values.
+ # @retval auto when the field is absent, or when the value is not a valid flavor:
+ # the provider then detects the family from base_url / model_id keywords.
+ #
+def _parse_compat(model_data: dict, model_id: str = "") -> str:
+    # Get the declared endpoint flavor.
+    raw = model_data.get("compat", FLAVOR_AUTO)
+
+    # 1. Not a string.
+    if not isinstance(raw, str):
+        print(f"[!] Model '{model_id}': 'compat' must be a string, "
+              f"got {type(raw).__name__}. Defaulting to '{FLAVOR_AUTO}'.")
+        return FLAVOR_AUTO
+    # End-if
+
+    # Get value.
+    value = raw.strip().lower()
+    # 2. Invalid value.
+    if value != FLAVOR_AUTO and value not in VALID_FLAVORS:
+        print(f"[!] Model '{model_id}': invalid compat='{value}'. "
+              f"Expected one of {sorted(VALID_FLAVORS + (FLAVOR_AUTO,))}. "
+              f"Defaulting to '{FLAVOR_AUTO}'.")
+        return FLAVOR_AUTO
+    # End-if
+
+    # 3. Return the endpoint flavor.
     return value
 # End-def
 
@@ -333,6 +373,9 @@ def load_api_config(file_path):
             thinking = _parse_thinking(model_data, model_id)
             effort   = _parse_effort(model_data, model_id)
 
+            # Parse endpoint flavor (link terminal model family).
+            compat   = _parse_compat(model_data, model_id)
+
             # Parse media (multimodal) metadata.
             media_exts = _parse_media_extensions(model_data, model_id)
             media_limits = _parse_media_limits(model_data, model_id)
@@ -347,6 +390,7 @@ def load_api_config(file_path):
                 # Ensure canonical values override any raw values from **model_data.
                 "thinking": thinking,
                 "effort": effort,
+                "compat": compat,
                 # Media support (empty list = text-only model).
                 "file": media_exts,
                 "media_limits": media_limits,
@@ -386,6 +430,8 @@ def load_api_config(file_path):
         # Think Level
         "THINKING": active_profile.get("thinking", "disabled"),
         "EFFORT": active_profile.get("effort", "medium"),
+        # Endpoint flavor used for reasoning-effort injection ("auto" = detect it)
+        "COMPAT": active_profile.get("compat", FLAVOR_AUTO),
         # Media (multimodal) support of the active model
         "MEDIA_EXTS": active_profile.get("file", []),
         "MEDIA_LIMITS": active_profile.get("media_limits", {}),
