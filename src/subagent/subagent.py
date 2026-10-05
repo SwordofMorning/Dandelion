@@ -131,7 +131,7 @@ class SubAgent(ISubAgent):
         )
 
         # 7. Intermediate product path
-        product_path(
+        product_path = (
             "Intermediate product path:\n"
             "Prioritize using the `.playground` file within the current workspace as the `tmp` folder; \n"
             "avoid using directories like `/tmp` or `/var` for temporary files or scratchpads. \n"
