@@ -150,7 +150,7 @@ class PromptBuilder:
         # 7. Intermediate product path
         #    Use `./.playground` as tmp path
         sections.append(
-            "Reply Format:\n"
+            "Intermediate product path:\n"
             "Prioritize using the `.playground` file within the current workspace as the `tmp` folder; \n"
             "avoid using directories like `/tmp` or `/var` for temporary files or scratchpads. \n"
             "Minimize the frequency of manual user approvals."

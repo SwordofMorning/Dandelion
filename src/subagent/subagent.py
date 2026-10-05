@@ -130,8 +130,16 @@ class SubAgent(ISubAgent):
             "Always prioritize your original sub-task and constraints."
         )
 
+        # 7. Intermediate product path
+        product_path(
+            "Intermediate product path:\n"
+            "Prioritize using the `.playground` file within the current workspace as the `tmp` folder; \n"
+            "avoid using directories like `/tmp` or `/var` for temporary files or scratchpads. \n"
+            "Minimize the frequency of manual user approvals."
+        )
+
         # Role + Recursion depth + Security rules.
-        return f"{role_prompt}\n\n{depth_info}\n\n{security_rule}"
+        return f"{role_prompt}\n\n{depth_info}\n\n{security_rule}\n\n{product_path}"
     # End-def
     
     ##
