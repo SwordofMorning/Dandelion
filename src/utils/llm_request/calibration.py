@@ -69,6 +69,10 @@ def usage_total_tokens(usage):
     return total if found else 0
 # End-def
 
+# Default ceiling of the post-call calibration ratio: single source of truth
+# for both the consumer below and the configuration builder ("CALIB_RATIO_CAP").
+CALIB_RATIO_CAP_DEFAULT = 1.6
+
 ##
  # @brief Current calibration ratio ceiling.
  #
@@ -78,9 +82,9 @@ def usage_total_tokens(usage):
  #
 def ratio_cap(config):
     try:
-        cap = float((config or {}).get("CALIB_RATIO_CAP", 1.6))
+        cap = float((config or {}).get("CALIB_RATIO_CAP", CALIB_RATIO_CAP_DEFAULT))
     except (TypeError, ValueError):
-        cap = 1.6
+        cap = CALIB_RATIO_CAP_DEFAULT
     # End-try
     return max(cap, 1.0)
 # End-def

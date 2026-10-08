@@ -32,6 +32,9 @@ import json
 # @note Endpoint flavor vocabulary is owned by llm_provider/effort.py so the
 # config layer, the model registry and the providers cannot drift apart.
 from ..llm_provider.effort import FLAVOR_AUTO, VALID_FLAVORS
+# @note The calibration cap default is owned by llm_request/calibration.py so the
+# config layer and the estimator cannot drift apart.
+from ..llm_request.calibration import CALIB_RATIO_CAP_DEFAULT
 
 ##
  # ========================================
@@ -437,7 +440,8 @@ def load_api_config(file_path):
         "MEDIA_LIMITS": active_profile.get("media_limits", {}),
         "ACTIVE_MODEL_PROFILE": active_profile,
         # Post-call context calibration ceiling (see llm_request/calibration.py)
-        "CALIB_RATIO_CAP": active_profile.get("media_limits", {}).get("calib_ratio_cap", 1.6),
+        "CALIB_RATIO_CAP": active_profile.get("media_limits", {}).get(
+            "calib_ratio_cap", CALIB_RATIO_CAP_DEFAULT),
     }
 # End-def
 

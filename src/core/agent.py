@@ -331,11 +331,11 @@ class MyAgent:
         # ----- Media / calibration state -----
         # Media cost is derived from the pointer markers in history; only the
         # in-flight window (tool ran, result not yet appended to history) needs
-        # an explicit transient value.
-        self._pending_media_tokens = 0
-        # Provisional cost cap for tools that must reserve budget BEFORE the
-        # result exists (base64 inflates the payload by ~1.37x; the formula also
-        # rounds up, so the cap stays conservative).
+        # an explicit transient value: the provisional cost cap for tools that
+        # must check the budget BEFORE their result exists (base64 inflates the
+        # payload by ~1.37x; the formula also rounds up, so the cap stays
+        # conservative). It is mirrored before every tool execution and released
+        # both at the end of a successful round and on step() entry.
         self._pending_media_reserve = 0
         # Media payloads read during the current turn. They are hydrated into
         # the outgoing request as SIBLING parts of the tool_result, and are
@@ -599,7 +599,7 @@ class MyAgent:
      #   markers inside history pointers, so compaction, resume and rollback all
      #   converge without any bookkeeping;
      # - only the in-flight window (tool result produced, not yet in history) is
-     #   covered by the transient _pending_media_tokens / _pending_media_reserve.
+     #   covered by the transient _pending_media_reserve (see step()).
      #
      # @note The calibration ratio is applied LAST and only upward:
      # ratio >= 1.0 is enforced at update time (see calibration.update_ratio).
@@ -613,7 +613,7 @@ class MyAgent:
 
         # ----- @par 2. Media part (conservative, never base64 derived) -----
 
-        media_cost += max(self._pending_media_tokens, self._pending_media_reserve)
+        media_cost += self._pending_media_reserve
 
         base = ascii_chars / 4.0 + non_ascii_chars / 1.5 + media_cost
 
@@ -1129,6 +1129,16 @@ class MyAgent:
      #                          (_LLM_RETRY_COUNT) were exhausted. Breakout.
      #
     def step(self):
+        # 0. Drop the transient media accounting left behind by the previous
+        # round. The value is mirrored before every tool execution (media tools
+        # must see the cost already reserved in THIS round) and released at the
+        # end of a successful round, once the cost lives in the history markers.
+        # An aborted round (an exception inside the tool loop, the API-error
+        # return, a turn that ended right after a media read) would otherwise
+        # leave its last value behind and inflate every later _estimate_tokens()
+        # call, so the single entry point of a round clears it first.
+        self._pending_media_reserve = 0
+
         # 1. Build System Prompt (STATIC)
         # Dynamic content (task state / memories) is injected as a
         # [Dandelion Context] block appended to the newest plain-text
@@ -1239,7 +1249,6 @@ class MyAgent:
 
         # Media blocks produced by this round, kept OUT of history (only their
         # pointer text is persisted) and reserved against the token budget.
-        pending_media_cost = 0
         pending_media_reserve = 0
 
         # Tools Iterator.
@@ -1271,7 +1280,6 @@ class MyAgent:
             # attached to THIS round's tool_result so the model can see it now.
             if isinstance(output, dict) and output.get("kind") in ("image", "document"):
                 media_cost = int(output.get("media_cost", 0) or 0)
-                pending_media_cost += media_cost
                 pending_media_reserve = max(pending_media_reserve, media_cost)
 
                 # The tool_result itself carries TEXT ONLY (summary + pointer):
@@ -1336,7 +1344,6 @@ class MyAgent:
         # The media cost now lives in the history pointers (the markers), so the
         # transient value must be dropped here: keeping it would double count
         # the very same media for every later estimate.
-        self._pending_media_tokens = 0
         self._pending_media_reserve = 0
         return True, None
     # End-def
