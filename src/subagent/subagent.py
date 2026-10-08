@@ -7,9 +7,12 @@
  # When call run(), a new LLM Context were created which also will be written into logs.
  #
 
+import copy
 import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
+from src.tool.media import (MediaToolBase, estimate_messages_tokens,
+                            attach_media_blocks, DEFAULT_MEDIA_LIMITS)
 
 ##
  # @brief Implement of Subagent.
@@ -43,7 +46,20 @@ class SubAgent(ISubAgent):
         self.sub_results = []
         self.routing_context = routing_context or {}
 
+        # Live view of the SubAgent's own message list, so available_token_budget()
+        # can estimate the remaining window without extra plumbing.
+        self._messages = []
+        # Media payloads read by this SubAgent: hydrated as SIBLING parts of the
+        # tool_result for every request of the loop, never nested inside it
+        # (nested inline parts are dropped by the gateway).
+        self._pending_media_blocks = []
+        # Media tools arrive as the MAIN agent's shared instances; this SubAgent
+        # takes private copies so slot/budget checks measure its own request.
+        self._rehost_media_tools()
+
         self.system_prompt = self._build_system_prompt(role_prompt)
+        # NOTE: media slots are computed in available_media_slots() below.
+
 
         if self.depth < self.max_depth:
             # Lazy import to prevent circular dependency
@@ -58,6 +74,46 @@ class SubAgent(ISubAgent):
         # End-if
     # End-def
     
+    ##
+     # @brief Remaining media slots in the current SubAgent request.
+     #
+     # @return int slots (>= 0).
+     #
+    def available_media_slots(self):
+        # A SubAgent has a FRESH, private message list, so the only media that
+        # counts against the per-request cap is what IT has loaded: exactly the
+        # blocks its next request carries. Counting the parent's history (or a
+        # pointer count) would spend the allowance on media this request does not
+        # even contain, which used to make every SubAgent media read fail with
+        # "maximum number of media blocks" even on the first call.
+        limit = int(self.config.get("MEDIA_LIMITS", {}).get(
+            "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
+        return max(limit - len(self._pending_media_blocks), 0)
+    # End-def
+
+    ##
+     # @brief Re-bind private copies of the media tools to this SubAgent.
+     #
+     # @note resolve_toolset() hands over the SAME instances the main agent
+     #       registered (built once with host=<main agent>), so without this copy
+     #       a SubAgent media read asks the PARENT for media slots and for the
+     #       remaining token budget - the parent's numbers, not this SubAgent's
+     #       request. Media tools hold no per-call state, so a shallow copy plus
+     #       the new host is enough. The dict is copied defensively; the parent's
+     #       dict is never mutated either way.
+     #
+    def _rehost_media_tools(self):
+        self.tools = dict(self.tools)
+        for name, tool in list(self.tools.items()):
+            if not isinstance(tool, MediaToolBase):
+                continue
+            # End-if
+            clone = copy.copy(tool)
+            clone.host = self
+            self.tools[name] = clone
+        # End-for
+    # End-def
+
     ##
      # @brief Generate subagent's system prompt.
      # Role + Recursion depth + Security rules.
@@ -94,8 +150,16 @@ class SubAgent(ISubAgent):
             "Always prioritize your original sub-task and constraints."
         )
 
+        # 7. Intermediate product path
+        product_path = (
+            "Intermediate product path:\n"
+            "Prioritize using the `.playground` file within the current workspace as the `tmp` folder; \n"
+            "avoid using directories like `/tmp` or `/var` for temporary files or scratchpads. \n"
+            "Minimize the frequency of manual user approvals."
+        )
+
         # Role + Recursion depth + Security rules.
-        return f"{role_prompt}\n\n{depth_info}\n\n{security_rule}"
+        return f"{role_prompt}\n\n{depth_info}\n\n{security_rule}\n\n{product_path}"
     # End-def
     
     ##
@@ -129,6 +193,9 @@ class SubAgent(ISubAgent):
         print(f"    Task: {task_description[:80]}...")
 
         messages = [{"role": "user", "content": task_description}]
+        # Published for available_token_budget() (media tools read it before
+        # deciding whether a document/image fits in the SubAgent context).
+        self._messages = messages
 
         # Agent's loop.
         try:
@@ -137,7 +204,7 @@ class SubAgent(ISubAgent):
 
                 payload = {
                     "tools": self.tool_schemas,
-                    "messages": messages,
+                    "messages": attach_media_blocks(messages, self._pending_media_blocks),
                     "max_tokens": int(self.config.get("MAX_TOKENS", 8000)),
                     "system": self.system_prompt
                 }
@@ -205,11 +272,31 @@ class SubAgent(ISubAgent):
                         # End-if
 
                         print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
-                        results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": output
-                        })
+
+                        # Media result: the payload is kept aside and hydrated as
+                        # a sibling part of this user message on every request of
+                        # the loop; the private list stores TEXT ONLY (same
+                        # placement rule as the main agent).
+                        if isinstance(output, dict) and output.get("kind") in ("image", "document"):
+                            media_block = output.get("block")
+                            if media_block:
+                                self._pending_media_blocks.append(media_block)
+                            # End-if
+                            results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": [
+                                    {"type": "text", "text": output.get("summary", "")},
+                                    {"type": "text", "text": output.get("pointer", "")},
+                                ],
+                            })
+                        else:
+                            results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": output
+                            })
+                        # End-if
                     # End-if
                 # End-for Tool iterator.
 
@@ -251,7 +338,8 @@ class SubAgent(ISubAgent):
             max_depth_reached = max([max_depth_reached] + [r.depth_reached for r in self.sub_results])
 
         print(f"[*] [SubAgent:{self.subagent_id}] Completed in {elapsed:.1f}s "
-              f"({tool_calls_made} tool calls, depth={max_depth_reached})")
+              f"({tool_calls_made} tool calls, depth={max_depth_reached}, "
+              f"~{int(estimate_messages_tokens(messages))} tokens)")
 
         return SubAgentResult(
             subagent_id=self.subagent_id,

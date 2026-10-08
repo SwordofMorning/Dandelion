@@ -23,6 +23,7 @@
 
 import threading
 from ..llm_provider import AnthropicProvider, OpenAIProvider
+from ..llm_provider.effort import FLAVOR_AUTO
 
 ##
  # @brief LLM request wrapper.
@@ -44,21 +45,25 @@ class SafeLLMClient:
      # @param all_models Full model list for sub-agent routing.
      # @param thinking "enabled" or "disabled" - extended thinking toggle for the main agent.
      # @param effort Reasoning effort: "low", "medium", "high", or "max".
+     # @param compat Endpoint flavor of the main agent's link terminal family
+     # ("auto" detects it); see llm_provider/effort.py.
      # @param logger Optional SessionManager for logging final API payloads (post-injection).
      #
     def __init__(self, api_key, base_url, model_id, sdk_type="Anthropic",
                  all_models=None, sub_list=None,
                  thinking="disabled", effort="medium",
+                 compat=FLAVOR_AUTO,
                  logger=None):
         self.model_id = model_id
         self.sdk_type = sdk_type.lower()
         self.thinking = thinking
         self.effort = effort
+        self.compat = compat
         self.logger = logger
 
         # Setup Default Provider for Main Agent
         self.provider = self._create_provider(
-            self.sdk_type, api_key, base_url, model_id, thinking, effort
+            self.sdk_type, api_key, base_url, model_id, thinking, effort, compat
         )
 
         # Setup Router Components for SubAgents
@@ -81,7 +86,7 @@ class SafeLLMClient:
      # @brief Provider factory.
      #
     def _create_provider(self, sdk_type, api_key, base_url, model_id,
-                         thinking="disabled", effort="medium"):
+                         thinking="disabled", effort="medium", compat=FLAVOR_AUTO):
         sdk = sdk_type.lower()
         if sdk in ["ai studio", "gemini", "google"]:
             raise ValueError(
@@ -90,10 +95,10 @@ class SafeLLMClient:
             )
         elif sdk in ["openai"]:
             return OpenAIProvider(api_key, base_url, model_id,
-                                  thinking=thinking, effort=effort)
+                                  thinking=thinking, effort=effort, compat=compat)
         elif sdk in ["anthropic"]:
             return AnthropicProvider(api_key, base_url, model_id,
-                                     thinking=thinking, effort=effort)
+                                     thinking=thinking, effort=effort, compat=compat)
         else:
             raise ValueError(f"Unsupported SDK_TYPE: '{sdk_type}'. Supported types: 'OpenAI', 'Anthropic'.")
     # End-def
@@ -204,6 +209,7 @@ class SafeLLMClient:
                     spec.provider, spec.api_key, spec.base_url, spec.model_id,
                     thinking=spec.thinking,
                     effort=spec.effort,
+                    compat=spec.compat,
                 )
             return self._provider_cache[alias]
     # End-def

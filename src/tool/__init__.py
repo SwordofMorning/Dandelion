@@ -21,3 +21,5 @@ from .filesystem.list_directory_tool import ListDirectoryTool
 from .filesystem.edit_file_tool import EditFileTool
 from .web.web_search_tool import WebSearchTool
 from .system.time_tool import TimeTool
+from .media.pdf_tool import ReadPdfTool
+from .media.image_tool import ReadImageTool

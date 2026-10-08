@@ -41,6 +41,28 @@ class ISubAgent:
     # End-def
 
     ##
+     # @brief Remaining token budget for media admission checks.
+     #
+     # @return int tokens available in the SubAgent's own context.
+     #
+     # @note SubAgents have no compaction step, so the whole window minus the
+     # reserved output budget is available. The same conservative heuristic as
+     # the main agent is reused (media pointers contribute their marker cost).
+     #
+    def available_token_budget(self):
+        from src.tool.media import estimate_messages_tokens
+
+        try:
+            base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
+            reserved = int(self.config.get("MAX_TOKENS", 8192))
+            used = estimate_messages_tokens(getattr(self, "_messages", []) or [])
+            return max(int(base - reserved - used), 0)
+        except Exception:
+            return 0
+        # End-try
+    # End-def
+
+    ##
      # @brief SubAgent's loop.
      #
      # @param task_description SubAgent's task prompt.

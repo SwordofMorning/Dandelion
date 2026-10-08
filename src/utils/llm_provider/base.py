@@ -19,9 +19,12 @@ class LLMProvider(ABC):
      # @param model_id Model identifier.
      # @param thinking "enabled" or "disabled" - whether to enable extended thinking.
      # @param effort Reasoning effort level: "low", "medium", "high", or "max".
+     # @param compat Endpoint flavor ("auto", "anthropic", "anthropic-effort",
+     #        "deepseek", "openai", "gemini"); optional, see llm_provider/effort.py.
      #
     @abstractmethod
-    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort="medium"):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled",
+                 effort="medium", compat="auto"):
         pass
     # End-def
 

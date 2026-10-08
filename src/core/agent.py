@@ -34,8 +34,13 @@ from src.tool import (
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
     ReadExcelTool, WriteExcelTool,
     StateTool, MemoryTool,
-    SSHTool, TimeTool
+    SSHTool, TimeTool,
+    ReadPdfTool, ReadImageTool
 )
+from src.tool.media import (
+    estimate_messages_tokens, attach_media_blocks, DEFAULT_MEDIA_LIMITS
+)
+from src.utils.llm_request.calibration import usage_total_tokens, update_ratio, ratio_cap
 
 # Create a module-level CLIPrinter instance for convenience
 cli = CLIPrinter()
@@ -47,11 +52,173 @@ cli = CLIPrinter()
 _DYN_CTX_START = "[Dandelion Context"
 _DYN_CTX_END = "[Dandelion Context End]"
 
+# Media pointer cost marker: "[... cost=<n> tokens ...]" written into history by
+# the media tools (see src/tool/media/media_base.py). Used to derive the media
+# share of the context ledger from history instead of a mutable counter, so
+# compaction / resume / rollback all converge automatically.
+_MEDIA_COST_RE = re.compile(r"\[Multimodal asset:[^\]]*?cost=([\d,]+) tokens[^\]]*\]")
+
+# Compaction summary budget: thinking and the summary share ONE max_tokens pool,
+# so the cap must cover both the provider thinking budget (EFFORT_TO_BUDGET_TOKENS
+# max = 64000) and the summary itself. 128000 keeps a 64k thinking chain plus 64k
+# of summary room. Overridable per profile with COMPACT_SUMMARY_MAX_TOKENS.
+DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 128000
+
+# A response shorter than this is a FAILED summarization, never content. An empty
+# summary used to be written into history verbatim, silently dropping the
+# compacted middle of the conversation (measured incident 2026/09/30: the model
+# burned the whole 2000-token output budget on thinking and returned no text, so
+# ~578k tokens of context disappeared while the log said "compacted successfully").
+MIN_COMPACT_SUMMARY_CHARS = 40
+
+# Lower bound accepted for COMPACT_SUMMARY_MAX_TOKENS (guards against a profile
+# value of 0 or a negative number silently disabling the summary).
+MIN_COMPACT_SUMMARY_MAX_TOKENS = 1024
+
 # Main-agent LLM call retry policy: 1 initial attempt + _LLM_RETRY_COUNT retries.
 # Uniform for all error types (400/401/429/500/connection errors) per design
 # decision; exponential backoff (seconds) between attempts.
 _LLM_RETRY_COUNT = 3
 _LLM_RETRY_BACKOFF = (2, 4, 8)
+
+##
+ # @brief Classify a compaction summary response.
+ #
+ # @param text Extracted text (client.extract_text result), may be None.
+ # @param stop_reason Provider stop reason ("end_turn", "max_tokens", ...).
+ # @param err Error string returned by safe_request, or None.
+ #
+ # @return (status, reason): "ok" (usable summary), "truncated" (usable but cut
+ #         by the output cap), "empty" (no usable text) or "error" (the request
+ #         itself failed).
+ #
+ # @note Pure helper shared by the compaction flow and the local smoke harness,
+ #       so the accepted/rejected matrix has exactly one definition.
+ #
+def classify_compaction_summary(text, stop_reason, err):
+    if err:
+        return "error", str(err)
+    # End-if
+
+    body = (text or "").strip()
+    if len(body) < MIN_COMPACT_SUMMARY_CHARS:
+        return "empty", f"summary text shorter than {MIN_COMPACT_SUMMARY_CHARS} chars"
+    # End-if
+
+    if stop_reason == "max_tokens":
+        return "truncated", "summary hit the output cap"
+    # End-if
+
+    return "ok", ""
+# End-def
+
+##
+ # @brief Resolve the output cap of the compaction summarization call.
+ #
+ # @param raw Raw COMPACT_SUMMARY_MAX_TOKENS value from the profile.
+ # @param profile_max_tokens The profile MAX_TOKENS (provider output limit).
+ #
+ # @return int usable output cap.
+ #
+ # @note The cap covers thinking + summary (they share max_tokens), so it must
+ #       stay above the provider thinking budget; the Anthropic provider warns
+ #       when a caller sends a smaller cap on a budget-based endpoint.
+ # @note The cap is never raised above the profile MAX_TOKENS: asking a provider
+ #       for more than its documented output limit is a 400 on some endpoints.
+ #
+def resolve_compact_summary_max_tokens(raw, profile_max_tokens=None):
+    if raw is None:
+        value = DEFAULT_COMPACT_SUMMARY_MAX_TOKENS
+    else:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            print(f"[-] Warning: invalid COMPACT_SUMMARY_MAX_TOKENS={raw!r}; "
+                  f"using {DEFAULT_COMPACT_SUMMARY_MAX_TOKENS}.")
+            value = DEFAULT_COMPACT_SUMMARY_MAX_TOKENS
+        # End-try
+    # End-if
+
+    if value < MIN_COMPACT_SUMMARY_MAX_TOKENS:
+        print(f"[-] Warning: COMPACT_SUMMARY_MAX_TOKENS={value} is below "
+              f"{MIN_COMPACT_SUMMARY_MAX_TOKENS}; clamping.")
+        value = MIN_COMPACT_SUMMARY_MAX_TOKENS
+    # End-if
+
+    if profile_max_tokens is not None:
+        try:
+            profile_max = int(profile_max_tokens)
+        except (TypeError, ValueError):
+            profile_max = 0
+        # End-try
+        if 0 < profile_max < value:
+            print(f"[*] Compaction summary cap {value} exceeds the profile "
+                  f"MAX_TOKENS={profile_max}; using {profile_max}.")
+            value = profile_max
+        # End-if
+    # End-if
+
+    return value
+# End-def
+
+##
+ # @brief Build the history message that replaces the compacted middle.
+ #
+ # @param archive_path Full archive file path (always recorded, so the dropped
+ #                     context stays reachable by a human).
+ # @param status "ok" / "truncated" => summary present; "empty" / "error" =>
+ #               failure marker.
+ # @param summary_content Summary text (unused on failure).
+ # @param reason Failure reason (unused on success).
+ # @param kept_messages Number of trailing messages kept verbatim.
+ #
+ # @return dict: history message (role=user).
+ #
+ # @note The failure form never carries an empty <conversation_summary> tag: an
+ #       empty summary is indistinguishable from a real one to every later reader
+ #       (the model included), which is what made the 2026/09/30 incident silent.
+ #
+def build_compaction_message(archive_path, status, summary_content, reason, kept_messages):
+    if status in ("ok", "truncated"):
+        note = " (summary truncated by the output cap)" if status == "truncated" else ""
+        return {
+            "role": "user",
+            "content": (f"[System: Context compacted at {archive_path}{note}]\n\n"
+                        f"<conversation_summary>\n{summary_content}\n</conversation_summary>")
+        }
+    # End-if
+
+    return {
+        "role": "user",
+        "content": (f"[System: Context compaction FAILED at {archive_path} "
+                    f"(reason: {reason})]\n\n"
+                    f"No summary could be produced, so the earlier conversation was NOT "
+                    f"summarized. It is archived verbatim at the path above and the last "
+                    f"{kept_messages} message(s) were kept in context. Re-read the archive "
+                    f"if that history is needed.")
+    }
+# End-def
+
+##
+ # @brief Sum the media cost markers found in one text fragment.
+ #
+ # @param text Text that may contain one or more "[Multimodal asset: ... ]"
+ # pointers (adjacent pointers are merged by _normalize_messages, so a single
+ # string can legitimately carry several markers).
+ #
+ # @return int total cost in tokens (0 when no marker is present).
+ #
+def _marker_cost(text):
+    total = 0
+    for raw in _MEDIA_COST_RE.findall(text):
+        try:
+            total += int(raw.replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        # End-try
+    # End-for
+    return total
+# End-def
 
 ##
  # @brief Strip previously injected [Dandelion Context] blocks from a user
@@ -115,6 +282,9 @@ class MyAgent:
         # Inject thinking level.
         self.thinking = str(config.get("THINKING", "disabled")).strip().lower()
         self.effort = str(config.get("EFFORT", "medium")).strip().lower()
+        # Endpoint flavor (link terminal model family) used for the reasoning-effort
+        # injection; "auto" lets the provider detect it from base_url/model_id.
+        self.compat = str(config.get("COMPAT", "auto")).strip().lower()
 
         # Load history from the current session
         self.history = self.session.load_history()
@@ -131,6 +301,7 @@ class MyAgent:
             sub_list=self.config.get("SUB_LIST", []),
             thinking=self.thinking,
             effort=self.effort,
+            compat=self.compat,
             logger=self.session
         )
 
@@ -156,6 +327,36 @@ class MyAgent:
         # Last built system prompt, reused by _soft_token_limit() so the token
         # budget accounts for the real request overhead without rebuilding.
         self._last_system_prompt = ""
+
+        # ----- Media / calibration state -----
+        # Media cost is derived from the pointer markers in history; only the
+        # in-flight window (tool ran, result not yet appended to history) needs
+        # an explicit transient value: the provisional cost cap for tools that
+        # must check the budget BEFORE their result exists (base64 inflates the
+        # payload by ~1.37x; the formula also rounds up, so the cap stays
+        # conservative). It is mirrored before every tool execution and released
+        # both at the end of a successful round and on step() entry.
+        self._pending_media_reserve = 0
+        # Media payloads read during the current turn. They are hydrated into
+        # the outgoing request as SIBLING parts of the tool_result, and are
+        # never persisted in history (history keeps the pointer text only).
+        self._pending_media_blocks = []
+        # Local estimate captured right before the last request, used as the
+        # denominator of the post-call calibration.
+        self._last_send_est = 0.0
+
+        # Post-call calibration ratio (only grows, capped by config). It corrects
+        # the systematic gap between the local heuristic and the provider count;
+        # it never lowers the estimate, so "local >= provider" still holds.
+        self._calib_ratio = 1.0
+        getter = getattr(self.session, "get_calibration_ratio", None)
+        if callable(getter):
+            try:
+                self._calib_ratio = max(float(getter() or 1.0), 1.0)
+            except Exception:
+                self._calib_ratio = 1.0
+            # End-try
+        # End-if
 
         # ----- @par 3. Load Tools -----
 
@@ -210,6 +411,38 @@ class MyAgent:
             ssh_tool.get_name(): ssh_tool
         }
 
+        # ----- @par 1-b. Multimodal (media) Tools -----
+
+        # Registered ONLY when the active model declares media support through
+        # its "file" whitelist. A text-only model never sees the media tools.
+        media_exts = self.config.get("MEDIA_EXTS", []) or []
+        media_limits = self.config.get("MEDIA_LIMITS", {}) or {}
+        media_tools = []
+
+        if ".pdf" in media_exts:
+            read_pdf_tool = ReadPdfTool(
+                workspace_dir=self.workspace_dir,
+                host=self,
+                session_dir_fn=lambda: self.session.current_session_dir,
+                media_limits=media_limits,
+                file_exts=media_exts,
+            )
+            media_tools.append(read_pdf_tool)
+            all_tools[read_pdf_tool.get_name()] = read_pdf_tool
+        # End-if
+
+        if any(ext != ".pdf" for ext in media_exts):
+            read_image_tool = ReadImageTool(
+                workspace_dir=self.workspace_dir,
+                host=self,
+                session_dir_fn=lambda: self.session.current_session_dir,
+                media_limits=media_limits,
+                file_exts=media_exts,
+            )
+            media_tools.append(read_image_tool)
+            all_tools[read_image_tool.get_name()] = read_image_tool
+        # End-if
+
         # ----- @par 2. Subagent Pool and Tools -----
 
         self.pool = SubAgentPool(
@@ -236,6 +469,8 @@ class MyAgent:
             state_tool, memory_tool,
             ssh_tool, time_tool
         ]
+        # Media tools join the main-agent toolset only when registered above.
+        tool_list.extend(media_tools)
 
         for t in tool_list:
             self.tools[t.get_name()] = t
@@ -355,25 +590,185 @@ class MyAgent:
      #
      # @param history Message list to estimate; defaults to self.history.
      #
-     # @return Estimated token count (float).
+     # @return Estimated token count (float), already calibrated.
+     #
+     # @note Media handling (both directions must hold):
+     # - image/document blocks are NEVER character-counted and their base64 data
+     #   is never touched (the provider charges by pixels, not by payload size);
+     # - media cost is derived from the "[Multimodal asset: ... cost=N tokens]"
+     #   markers inside history pointers, so compaction, resume and rollback all
+     #   converge without any bookkeeping;
+     # - only the in-flight window (tool result produced, not yet in history) is
+     #   covered by the transient _pending_media_reserve (see step()).
+     #
+     # @note The calibration ratio is applied LAST and only upward:
+     # ratio >= 1.0 is enforced at update time (see calibration.update_ratio).
      #
     def _estimate_tokens(self, history=None):
         history = history if history is not None else self.history
+
+        # ----- @par 1. Text part (heuristic, unchanged) -----
+
+        ascii_chars, non_ascii_chars, media_cost = self._scan_history(history)
+
+        # ----- @par 2. Media part (conservative, never base64 derived) -----
+
+        media_cost += self._pending_media_reserve
+
+        base = ascii_chars / 4.0 + non_ascii_chars / 1.5 + media_cost
+
+        # ----- @par 3. Post-call calibration (upward only) -----
+
+        return max(base, base * self._calib_ratio)
+    # End-def
+
+    ##
+     # @brief Walk a history/message tree and collect text chars + media cost.
+     #
+     # @param history Message list.
+     #
+     # @return (ascii_chars, non_ascii_chars, media_cost)
+     #
+     # @note Media blocks contribute their recorded cost only; a base64 payload
+     # is never counted as text, which is what keeps the budget meaningful.
+     #
+    @staticmethod
+    def _scan_history(history):
         ascii_chars = 0
         non_ascii_chars = 0
-        for m in history:
-            content = m.get("content", "")
-            if isinstance(content, list):
-                content = str(content)
-            for ch in str(content):
-                if ord(ch) < 128:
-                    ascii_chars += 1
-                else:
-                    non_ascii_chars += 1
+        media_cost = 0
+
+        def scan(value):
+            nonlocal ascii_chars, non_ascii_chars, media_cost
+
+            # 1. Plain text (including media pointers).
+            if isinstance(value, str):
+                for ch in value:
+                    if ord(ch) < 128:
+                        ascii_chars += 1
+                    else:
+                        non_ascii_chars += 1
+                    # End-if
+                # End-for
+                media_cost += _marker_cost(value)
+                return
+            # End-if
+
+            # 2. Structured block.
+            if isinstance(value, dict):
+                btype = value.get("type")
+
+                # Media block: NEVER count the payload. The cost of this block
+                # is already carried by its pointer text (single source of
+                # truth), so adding anything here would double count. The
+                # `return` keeps base64 out of the character estimator.
+                if btype in ("image", "document"):
+                    return
                 # End-if
-            # End-for
+
+                # Tool result / nested content: recurse into the payload.
+                if btype == "tool_result":
+                    scan(value.get("content", ""))
+                    return
+                # End-if
+
+                if btype == "text":
+                    scan(value.get("text", ""))
+                    return
+                # End-if
+
+                # Unknown block: count its text-ish fields, skipping base64.
+                for key, item in value.items():
+                    if key == "data" and isinstance(item, str):
+                        continue
+                    # End-if
+                    scan(item)
+                # End-for
+                return
+            # End-if
+
+            # 3. Containers.
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    scan(item)
+                # End-for
+            # End-if
+        # End-def scan
+
+        for msg in history or []:
+            if isinstance(msg, dict):
+                scan(msg.get("content", ""))
+            else:
+                scan(msg)
+            # End-if
         # End-for
-        return ascii_chars / 4.0 + non_ascii_chars / 1.5
+
+        return ascii_chars, non_ascii_chars, media_cost
+    # End-def
+
+    ##
+     # @brief Remaining token budget for media admission checks.
+     #
+     # @return int tokens available in the current context (>= 0).
+     #
+     # @note Read-only hook for the media tools; the tools never mutate the
+     # budget, they only refuse when the payload does not fit.
+     #
+    def available_token_budget(self):
+        try:
+            remaining = self._soft_token_limit() - self._estimate_tokens()
+        except Exception:
+            return 0
+        # End-try
+        return max(int(remaining), 0)
+    # End-def
+
+    ##
+     # @brief Remaining media slots in the current request.
+     #
+     # @return int slots (>= 0), or None when the model has no media support.
+     #
+    def available_media_slots(self):
+        limit = int(self.config.get("MEDIA_LIMITS", {}).get(
+            "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
+        # Only the media blocks the NEXT request actually carries count against
+        # the per-request cap, and _pending_media_blocks holds exactly those (this
+        # turn's payloads, dropped when the turn ends). History keeps pointer TEXT
+        # only, so counting it here would spend the per-request allowance on every
+        # media read the session ever made and lock the media tools out for good.
+        used = len(self._pending_media_blocks)
+        return max(limit - used, 0)
+    # End-def
+
+    ##
+     # @brief Update the calibration ratio from a finished request.
+     #
+     # @param measured Total tokens reported by the provider usage object.
+     #
+    def _update_calibration(self, measured):
+        cap = ratio_cap(self.config)
+        new_ratio, observed = update_ratio(
+            self._calib_ratio, self._last_send_est, measured, cap)
+
+        # Audit trail: the observation (including the "healthy" case where the
+        # provider needed fewer tokens than the local estimate expects).
+        self.session.log_api_call("CONTEXT CALIBRATION", {
+            "local_est": int(self._last_send_est),
+            "measured": int(measured),
+            "observed_ratio": round(observed, 4),
+            "ratio": round(new_ratio, 4),
+            "ratio_cap": cap,
+        })
+
+        self._calib_ratio = new_ratio
+        setter = getattr(self.session, "set_calibration_ratio", None)
+        if callable(setter):
+            try:
+                setter(new_ratio)
+            except Exception:
+                pass
+            # End-try
+        # End-if
     # End-def
 
     ##
@@ -496,35 +891,79 @@ class MyAgent:
             "Output strictly in XML format using the tags above."
         )
 
+        # @note thinking and the summary share ONE max_tokens pool: the cap must
+        # cover the provider thinking budget (up to 64k) plus the summary itself,
+        # hence the 128000 default. A cap the model cannot finish within comes back
+        # as stop_reason=max_tokens and is handled by the validation below.
+        summary_max_tokens = resolve_compact_summary_max_tokens(
+            self.config.get("COMPACT_SUMMARY_MAX_TOKENS"),
+            self.config.get("MAX_TOKENS"),
+        )
+
         summary_payload = {
             "messages": [{"role": "user", "content": summary_prompt + "\n\nHistory:\n" + summary_text}],
-            "max_tokens": 2000,
+            "max_tokens": summary_max_tokens,
             "system": "You are a concise memory summarization AI."
         }
 
-        # ----- @par 4. Request -----
+        # ----- @par 4. Request + validation -----
 
         resp, err = self.client.safe_request(summary_payload, log_tag="COMPRESSION SUMMARY")
-        if err:
-            print(f"[-] Compression failed: {err}. Falling back to basic snip.")
-            summary_content = "[Compression Failed. History snipped.]"
-        else:
-            summary_content = self.client.extract_text(resp.content)
+        summary_response_text = self.client.extract_text(resp.content) if resp else ""
+        status, reason = classify_compaction_summary(
+            summary_response_text,
+            getattr(resp, "stop_reason", None) if resp else None,
+            err,
+        )
+        summary_content = summary_response_text if status in ("ok", "truncated") else ""
 
-        summary_msg = {
-            "role": "user",
-            "content": (f"[System: Context compacted at {archive_path}]\n\n"
-                        f"<conversation_summary>\n{summary_content}\n</conversation_summary>")
-        }
+        if status == "empty":
+            print(f"[-] Compression failed: {reason}. Writing an explicit failure "
+                  f"marker instead of an empty summary.")
+        elif status == "error":
+            print(f"[-] Compression failed: {reason}.")
+        elif status == "truncated":
+            print(f"[-] Warning: compression summary hit the output cap "
+                  f"(max_tokens={summary_max_tokens}) and may be incomplete; "
+                  f"consider raising COMPACT_SUMMARY_MAX_TOKENS.")
+        # End-if
+
+        # ----- @par 5. History assembly -----
+
+        summary_msg = build_compaction_message(archive_path, status, summary_content,
+                                               reason, len(recent))
 
         self.history = head + [summary_msg] + recent
         self.session.save_history(self.history)
 
         # Invalidate memories cache: history changed (plain-text user messages may shift).
         self._invalidate_memories_cache()
-        print("[+] Context compacted successfully.")
+        if status in ("ok", "truncated"):
+            print(f"[+] Context compacted successfully (summary {len(summary_content)} chars).")
+        else:
+            print("[!] Context compaction finished WITHOUT a summary (failure marker "
+                  "written; the archive keeps the dropped history).")
+        # End-if
 
-        # ----- @par 5. Post -----
+        # ----- @par 6. Observability -----
+        #
+        # @note The main loop logs a POST record per call; the summarization call
+        # used to log its request only, which made a failed or truncated summary
+        # invisible in api.log (the 2026/09/30 incident had to be reconstructed
+        # from history afterwards).
+        self.session.log_api_call("POST LLM CALL - COMPRESSION SUMMARY", {
+            "status": status,
+            "reason": reason,
+            "stop_reason": getattr(resp, "stop_reason", None) if resp else None,
+            "block_types": [getattr(b, "type", None)
+                            for b in (getattr(resp, "content", None) or [])],
+            "summary_chars": len(summary_content),
+            "max_tokens": summary_max_tokens,
+            "kept_messages": len(recent),
+            "usage_total": usage_total_tokens(getattr(resp, "usage", None)) if resp else 0,
+        })
+
+        # ----- @par 7. Post -----
 
         # Post-compaction guard: if the budget is still exceeded (e.g. the
         # configured MAX_CONTEXT_TOKENS is below the system-prompt + tools
@@ -690,6 +1129,16 @@ class MyAgent:
      #                          (_LLM_RETRY_COUNT) were exhausted. Breakout.
      #
     def step(self):
+        # 0. Drop the transient media accounting left behind by the previous
+        # round. The value is mirrored before every tool execution (media tools
+        # must see the cost already reserved in THIS round) and released at the
+        # end of a successful round, once the cost lives in the history markers.
+        # An aborted round (an exception inside the tool loop, the API-error
+        # return, a turn that ended right after a media read) would otherwise
+        # leave its last value behind and inflate every later _estimate_tokens()
+        # call, so the single entry point of a round clears it first.
+        self._pending_media_reserve = 0
+
         # 1. Build System Prompt (STATIC)
         # Dynamic content (task state / memories) is injected as a
         # [Dandelion Context] block appended to the newest plain-text
@@ -712,8 +1161,12 @@ class MyAgent:
         #     block (memory + task state) is counted in the token budget.
         self._compact_context()
 
-        # Pure append-only copy, ZERO mutations.
+        # Pure append-only copy, ZERO mutations, plus the hydrated media parts
+        # read during this turn (siblings of their tool_result, never nested).
         req_messages = self.history.copy()
+        if self._pending_media_blocks:
+            req_messages = attach_media_blocks(req_messages, self._pending_media_blocks)
+        # End-if
 
         # 2. Main LLM API Call
         # Send-time safety clamp: even if the heuristic estimate undershoots
@@ -732,6 +1185,11 @@ class MyAgent:
             "max_tokens": max_tokens,
             "system": system_prompt
         }
+
+        # Denominator of the post-call calibration: the local estimate of the
+        # payload that is about to be sent (media markers included). Captured
+        # here because later mutation of history must not affect it.
+        self._last_send_est = self._estimate_tokens()
 
         # PRE-call logging is now handled inside SafeLLMClient -> Provider
         # (after thinking injection), so we only log POST here.
@@ -764,17 +1222,34 @@ class MyAgent:
 
         if err is not None:
             print(f"[-] API Error: {err}")
+            self._pending_media_blocks = []
             return False, err
+
+        # ----- @par 2-b. Post-call context calibration -----
+        # The provider reports the real input size; the local heuristic is then
+        # corrected UPWARD only (ratio >= 1) so "local >= provider" always holds.
+        # A response without usage (other SDK paths) simply skips the step.
+        measured = usage_total_tokens(getattr(resp, "usage", None))
+        if measured > 0:
+            self._update_calibration(measured)
+        # End-if
 
         self.history.append({"role": "assistant", "content": resp.content})
         self.session.save_history(self.history)
 
         # 3. Handle Output or Tools
         if resp.stop_reason != "tool_use":
+            # Turn finished: the hydrated media parts are no longer needed (the
+            # pointer text stays in history, so a re-read is always possible).
+            self._pending_media_blocks = []
             return False, None
 
         # Handle Tools
         results = []
+
+        # Media blocks produced by this round, kept OUT of history (only their
+        # pointer text is persisted) and reserved against the token budget.
+        pending_media_reserve = 0
 
         # Tools Iterator.
         for block in resp.content:
@@ -785,6 +1260,10 @@ class MyAgent:
             handler = self.tools.get(block.name)
 
             if handler:
+                # Media tools must check the budget BEFORE building the payload
+                # (the result it produces cannot be discarded afterwards), so the
+                # already-reserved cost of this round is exposed first.
+                self._pending_media_reserve = pending_media_reserve
                 success, output = handler.execute(**block.input)
                 # A successful memory write changes what _get_memories() would
                 # load for the next tool-loop iteration; drop the cache so the
@@ -794,6 +1273,38 @@ class MyAgent:
                     self._invalidate_memories_cache()
             else:
                 success, output = False, f"Unknown tool: {block.name}"
+
+            # ----- Media result dispatch -----
+            # A media tool returns a structured dict: the base64 block stays OUT
+            # of history (only the pointer text is persisted), and the block is
+            # attached to THIS round's tool_result so the model can see it now.
+            if isinstance(output, dict) and output.get("kind") in ("image", "document"):
+                media_cost = int(output.get("media_cost", 0) or 0)
+                pending_media_reserve = max(pending_media_reserve, media_cost)
+
+                # The tool_result itself carries TEXT ONLY (summary + pointer):
+                # history must stay free of base64, and an inline part nested
+                # inside tool_result.content is dropped by the gateway. The
+                # block is kept aside and hydrated as a SIBLING part of this
+                # user message when the request is built.
+                media_block = output.get("block")
+                if media_block:
+                    self._pending_media_blocks.append(media_block)
+                # End-if
+
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": [
+                        {"type": "text", "text": output.get("summary", "")},
+                        {"type": "text", "text": output.get("pointer", "")},
+                    ],
+                })
+                cli.print(f"    Media attached: {output.get('kind')} "
+                          f"(~{media_cost} tokens, history keeps the pointer only)",
+                          level="info")
+                continue
+            # End-if
 
             output_str = str(output)
             cli.print(f"    Result length: {len(output_str)} chars", level="debug")
@@ -829,6 +1340,11 @@ class MyAgent:
             self.history.append({"role": "user", "content": "You indicated a tool use but provided no valid tool calls."})
 
         self.session.save_history(self.history)
+
+        # The media cost now lives in the history pointers (the markers), so the
+        # transient value must be dropped here: keeping it would double count
+        # the very same media for every later estimate.
+        self._pending_media_reserve = 0
         return True, None
     # End-def
 
@@ -848,6 +1364,8 @@ class MyAgent:
      #
     def reload_history(self):
         self.history = self.session.load_history()
+        # Session switched: hydrated media belongs to the previous session.
+        self._pending_media_blocks = []
         # Session switched: memory relevance cache must be recomputed because
         # the session tier (and possibly the whole history) changed.
         self._memories_key = None

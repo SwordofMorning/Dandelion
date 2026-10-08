@@ -147,7 +147,16 @@ class PromptBuilder:
             "4. Applies to user-facing summaries and code-explanation answers."
         )
 
-        # 7. Memory System Guide (static, cache-friendly)
+        # 7. Intermediate product path
+        #    Use `./.playground` as tmp path
+        sections.append(
+            "Intermediate product path:\n"
+            "Prioritize using the `.playground` file within the current workspace as the `tmp` folder; \n"
+            "avoid using directories like `/tmp` or `/var` for temporary files or scratchpads. \n"
+            "Minimize the frequency of manual user approvals."
+        )
+
+        # 8. Memory System Guide (static, cache-friendly)
         #    Dynamic content (memory index / relevant memories / task state)
         #    is injected as a "[Dandelion Context]" block appended to
         #    the newest plain-text user message (see MyAgent._inject_dynamic_

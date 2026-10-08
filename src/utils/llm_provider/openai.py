@@ -7,23 +7,22 @@
  #
 
 import json
+
 from .base import LLMProvider
 
-# Mapping from abstract effort level to OpenAI reasoning_effort string
-# Only applied when thinking=enabled. Standard GPT models will ignore this parameter.
-# Note: "max" maps to "high" because OpenAI doesn't support "xhigh" broadly
-# (only o3/o4 series models support "xhigh", so we stay safe with "high")
-EFFORT_TO_REASONING_EFFORT = {
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "max": "high",
-}
-DEFAULT_EFFORT = "medium"
+# @note Effort vocabulary and every mapping table live in effort.py, so all
+# providers translate the same abstract level the same way. The alias below keeps
+# the historical name working for existing callers.
+from .effort import (
+    DEFAULT_EFFORT,
+    FLAVOR_AUTO,
+    EFFORT_TO_OPENAI_EFFORT as EFFORT_TO_REASONING_EFFORT,
+)
 
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, api_key, base_url, model_id, thinking="disabled", effort=DEFAULT_EFFORT):
+    def __init__(self, api_key, base_url, model_id, thinking="disabled",
+                 effort=DEFAULT_EFFORT, compat=FLAVOR_AUTO):
         """
         Args:
             api_key: API key for the provider
@@ -31,6 +30,9 @@ class OpenAIProvider(LLMProvider):
             model_id: Model identifier
             thinking: "enabled" or "disabled" - whether to enable extended thinking
             effort: Reasoning effort level: "low", "medium", "high", or "max"
+            compat: Endpoint flavor; accepted for interface parity with
+                AnthropicProvider. This provider always speaks reasoning_effort,
+                so the flavor is stored but not used to pick keys yet.
         """
         try:
             import openai
@@ -44,6 +46,7 @@ class OpenAIProvider(LLMProvider):
         self.model_id = model_id
         self.thinking = thinking
         self.effort = effort
+        self.compat = compat
 
         # Detect endpoints that do not support the reasoning_effort parameter.
         # NVIDIA's OpenAI-compatible endpoint hosts models (e.g. z-ai, glm-5.2)
