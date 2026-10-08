@@ -38,8 +38,7 @@ from src.tool import (
     ReadPdfTool, ReadImageTool
 )
 from src.tool.media import (
-    estimate_messages_tokens, count_media_in_messages, attach_media_blocks,
-    DEFAULT_MEDIA_LIMITS
+    estimate_messages_tokens, attach_media_blocks, DEFAULT_MEDIA_LIMITS
 )
 from src.utils.llm_request.calibration import usage_total_tokens, update_ratio, ratio_cap
 
@@ -338,8 +337,6 @@ class MyAgent:
         # result exists (base64 inflates the payload by ~1.37x; the formula also
         # rounds up, so the cap stays conservative).
         self._pending_media_reserve = 0
-        # Number of media blocks consumed in the current turn.
-        self._pending_media_count = 0
         # Media payloads read during the current turn. They are hydrated into
         # the outgoing request as SIBLING parts of the tool_result, and are
         # never persisted in history (history keeps the pointer text only).
@@ -734,9 +731,12 @@ class MyAgent:
     def available_media_slots(self):
         limit = int(self.config.get("MEDIA_LIMITS", {}).get(
             "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
-        # History contributes through its pointers; the current turn contributes
-        # through the transient counter (its blocks are not in history yet).
-        used = count_media_in_messages(self.history) + self._pending_media_count
+        # Only the media blocks the NEXT request actually carries count against
+        # the per-request cap, and _pending_media_blocks holds exactly those (this
+        # turn's payloads, dropped when the turn ends). History keeps pointer TEXT
+        # only, so counting it here would spend the per-request allowance on every
+        # media read the session ever made and lock the media tools out for good.
+        used = len(self._pending_media_blocks)
         return max(limit - used, 0)
     # End-def
 
@@ -1241,7 +1241,6 @@ class MyAgent:
         # pointer text is persisted) and reserved against the token budget.
         pending_media_cost = 0
         pending_media_reserve = 0
-        pending_media_count = 0
 
         # Tools Iterator.
         for block in resp.content:
@@ -1256,7 +1255,6 @@ class MyAgent:
                 # (the result it produces cannot be discarded afterwards), so the
                 # already-reserved cost of this round is exposed first.
                 self._pending_media_reserve = pending_media_reserve
-                self._pending_media_count = pending_media_count
                 success, output = handler.execute(**block.input)
                 # A successful memory write changes what _get_memories() would
                 # load for the next tool-loop iteration; drop the cache so the
@@ -1275,7 +1273,6 @@ class MyAgent:
                 media_cost = int(output.get("media_cost", 0) or 0)
                 pending_media_cost += media_cost
                 pending_media_reserve = max(pending_media_reserve, media_cost)
-                pending_media_count += 1
 
                 # The tool_result itself carries TEXT ONLY (summary + pointer):
                 # history must stay free of base64, and an inline part nested
@@ -1341,7 +1338,6 @@ class MyAgent:
         # the very same media for every later estimate.
         self._pending_media_tokens = 0
         self._pending_media_reserve = 0
-        self._pending_media_count = 0
         return True, None
     # End-def
 

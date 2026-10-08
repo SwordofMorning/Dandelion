@@ -7,10 +7,11 @@
  # When call run(), a new LLM Context were created which also will be written into logs.
  #
 
+import copy
 import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
-from src.tool.media import (estimate_messages_tokens, count_media_in_messages,
+from src.tool.media import (MediaToolBase, estimate_messages_tokens,
                             attach_media_blocks, DEFAULT_MEDIA_LIMITS)
 
 ##
@@ -48,12 +49,13 @@ class SubAgent(ISubAgent):
         # Live view of the SubAgent's own message list, so available_token_budget()
         # can estimate the remaining window without extra plumbing.
         self._messages = []
-        # Media blocks consumed in the current tool round (per-request cap).
-        self._pending_media_count = 0
         # Media payloads read by this SubAgent: hydrated as SIBLING parts of the
         # tool_result for every request of the loop, never nested inside it
         # (nested inline parts are dropped by the gateway).
         self._pending_media_blocks = []
+        # Media tools arrive as the MAIN agent's shared instances; this SubAgent
+        # takes private copies so slot/budget checks measure its own request.
+        self._rehost_media_tools()
 
         self.system_prompt = self._build_system_prompt(role_prompt)
         # NOTE: media slots are computed in available_media_slots() below.
@@ -78,20 +80,38 @@ class SubAgent(ISubAgent):
      # @return int slots (>= 0).
      #
     def available_media_slots(self):
-        # A SubAgent starts with a FRESH, private message list, so the only
-        # media that counts against it is what IT has loaded itself. Using the
-        # main agent's history here would wrongly consume the whole per-request
-        # allowance (the parent session may carry many media pointers), which
-        # used to make every SubAgent media read fail with "maximum number of
-        # media blocks" even on the first call.
-        if not self._pending_media_count:
-            return int(self.config.get("MEDIA_LIMITS", {}).get(
-                "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
-
+        # A SubAgent has a FRESH, private message list, so the only media that
+        # counts against the per-request cap is what IT has loaded: exactly the
+        # blocks its next request carries. Counting the parent's history (or a
+        # pointer count) would spend the allowance on media this request does not
+        # even contain, which used to make every SubAgent media read fail with
+        # "maximum number of media blocks" even on the first call.
         limit = int(self.config.get("MEDIA_LIMITS", {}).get(
             "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
-        used = count_media_in_messages(self._messages) + self._pending_media_count
-        return max(limit - used, 0)
+        return max(limit - len(self._pending_media_blocks), 0)
+    # End-def
+
+    ##
+     # @brief Re-bind private copies of the media tools to this SubAgent.
+     #
+     # @note resolve_toolset() hands over the SAME instances the main agent
+     #       registered (built once with host=<main agent>), so without this copy
+     #       a SubAgent media read asks the PARENT for media slots and for the
+     #       remaining token budget - the parent's numbers, not this SubAgent's
+     #       request. Media tools hold no per-call state, so a shallow copy plus
+     #       the new host is enough. The dict is copied defensively; the parent's
+     #       dict is never mutated either way.
+     #
+    def _rehost_media_tools(self):
+        self.tools = dict(self.tools)
+        for name, tool in list(self.tools.items()):
+            if not isinstance(tool, MediaToolBase):
+                continue
+            # End-if
+            clone = copy.copy(tool)
+            clone.host = self
+            self.tools[name] = clone
+        # End-for
     # End-def
 
     ##
@@ -258,7 +278,6 @@ class SubAgent(ISubAgent):
                         # the loop; the private list stores TEXT ONLY (same
                         # placement rule as the main agent).
                         if isinstance(output, dict) and output.get("kind") in ("image", "document"):
-                            self._pending_media_count += 1
                             media_block = output.get("block")
                             if media_block:
                                 self._pending_media_blocks.append(media_block)
@@ -282,7 +301,6 @@ class SubAgent(ISubAgent):
                 # End-for Tool iterator.
 
                 # Error Handle 2 : Block Empty User Message
-                self._pending_media_count = 0
                 if results:
                     messages.append({"role": "user", "content": results})
                 else:
