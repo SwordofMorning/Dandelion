@@ -40,40 +40,10 @@ BASE_URL=https://api.deepseek.com/anthropic
 API_KEY=
 MODEL_LIST = [
     {
-        "model_id": "deepseek-v4-pro",
-        "conditions": ["reasoning", "long_context", "complex"],
-        "max_token": 160000,
-        "max_context_tokens": 819200,
-        "TPM": 0,
-        "RPM": 10,
-        "RPD": 500,
-        "thinking": "enabled",
-        "effort": "max"
-    },
-    {
         "model_id": "deepseek-v4-flash",
         "conditions": ["tool_heavy", "long_context", "simple"],
         "max_token": 160000,
-        "max_context_tokens": 819200,
-        "TPM": 1000000,
-        "RPM": 10,
-        "RPD": 500,
-        "thinking": "enabled",
-        "effort": "max"
-    }
-    ]
-
-; Example multimodal profile (Gemini through an Anthropic-compatible gateway).
-; SDK_TYPE stays "Anthropic": the gateway converts document/image blocks into
-; the native Gemini vision input, so no Google SDK is required here.
-[Gemini]
-SDK_TYPE="Anthropic"
-BASE_URL=https://example-gateway.invalid/v1
-API_KEY=
-MODEL_LIST = [
-    {
-        "model_id": "gemini-3.8-flash",
-        "conditions": ["reasoning", "long_context", "complex"],
+        "max_context_tokens": 419200,
         "file": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"],
         "max_image_bytes": "15MB",
         "max_pdf_bytes": "15MB",
@@ -82,75 +52,12 @@ MODEL_LIST = [
         "pdf_tokens_per_page": 258,
         "image_cost_factor": 1.2,
         "pdf_cost_factor": 1.2,
-        "max_token": 64000,
-        "max_context_tokens": 1000000,
-        "TPM": 0,
-        "RPM": 60,
-        "RPD": 1000,
-        "thinking": "disabled",
-        "effort": "medium"
-    }
-    ]
-
-[OpenRouter]
-SDK_TYPE="Anthropic"
-BASE_URL=https://openrouter.ai/api
-API_KEY=
-MODEL_LIST = [
-    {
-        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "conditions": ["long_context", "tool_heavy", "complex"],
-        "max_token": 160000,
-        "max_context_tokens": 819200,
+        "media_cost_fallback": 2000,
+        "calib_ratio_cap": 1.6,
         "TPM": 1000000,
-        "RPM": 10,
-        "RPD": 500,
-        "thinking": "disabled",
-        "effort": "medium"
-    }
-    ]
-
-[AIStudio]
-SDK_TYPE="OpenAI"
-BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-API_KEY=
-MODEL_LIST = [
-    {
-        "model_id": "gemma-4-31b-it",
-        "conditions": ["reasoning", "tool_heavy", "long_context", "complex"],
-        "max_token": 8000,
-        "max_context_tokens": 16000,
-        "TPM": 16000,
-        "RPM": 30,
-        "RPD": 14400
-    },
-    {
-        "model_id": "gemini-3.1-flash-lite",
-        "conditions": ["simple"],
-        "max_token": 8000,
-        "max_context_tokens": 200000,
-        "TPM": 250000,
-        "RPM": 15,
-        "RPD": 500,
+        "RPM": 1000,
+        "RPD": 50000,
         "thinking": "enabled",
-        "effort": "low"
-    }
-    ]
-
-[Nvidia]
-SDK_TYPE="OpenAI"
-BASE_URL=https://integrate.api.nvidia.com/v1
-API_KEY=
-MODEL_LIST = [
-    {
-        "model_id": "z-ai/glm-5.2",
-        "conditions": ["complex"],
-        "max_token": 160000,
-        "max_context_tokens": 819200,
-        "TPM": 1000000,
-        "RPM": 40,
-        "RPD": 0,
-        "thinking": "enabled",
-        "effort": "medium"
+        "effort": "max"
     }
     ]
