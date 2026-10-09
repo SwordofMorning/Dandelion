@@ -254,6 +254,7 @@ class AnthropicProvider(LLMProvider):
             payload["reasoning_effort"] = level
             payload["thinking_level"] = level
             payload["thinkingLevel"] = level
+            payload["output_config"] = {"effort": level}
         elif flavor == FLAVOR_ANTHROPIC_EFFORT:
             # Opt-in: native Claude that supports output_config.effort.
             payload["output_config"] = {
