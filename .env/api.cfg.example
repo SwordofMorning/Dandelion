@@ -3,10 +3,10 @@
 ; ============================================================
 [Main]
 ; Specify the actual model_id to be used by the main agent
-MAIN_AGENT=deepseek-v4-pro
+MAIN_AGENT=deepseek-v4-flash
 SUB_LIST=[
-    "deepseek-v4-pro",
-    "deepseek-v4-flash"
+    "deepseek-v4-flash",
+    gemini-3.8-flash-tiered
     ]
 ; Search Tool
 TAVILY_API_KEY=
@@ -43,7 +43,35 @@ MODEL_LIST = [
         "model_id": "deepseek-v4-flash",
         "conditions": ["tool_heavy", "long_context", "simple"],
         "max_token": 160000,
-        "max_context_tokens": 419200,
+        "max_context_tokens": 819200,
+        "file": [".png", ".jpg", ".jpeg", ".webp"],
+        "max_image_bytes": "15MB",
+        "max_pdf_bytes": "15MB",
+        "max_pdf_pages": 100,
+        "max_media_per_request": 8,
+        "pdf_tokens_per_page": 258,
+        "image_cost_factor": 1.2,
+        "pdf_cost_factor": 1.2,
+        "media_cost_fallback": 2000,
+        "calib_ratio_cap": 1.6,
+        "TPM": 1000000,
+        "RPM": 1000,
+        "RPD": 50000,
+        "thinking": "enabled",
+        "effort": "max"
+    }
+    ]
+
+[Sub2API]
+SDK_TYPE="OpenAI"
+BASE_URL=
+API_KEY=
+MODEL_LIST = [
+    {
+        "model_id": "gemini-3.8-flash-tiered",
+        "conditions": ["reasoning", "tool_heavy", "long_context", "simple"],
+        "max_token": 128000,
+        "max_context_tokens": 819200,
         "file": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"],
         "max_image_bytes": "15MB",
         "max_pdf_bytes": "15MB",
