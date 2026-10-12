@@ -580,6 +580,21 @@ class MyAgent:
      # @retval (False, err_str) An API error occurred and all bounded retries
      #                          (_LLM_RETRY_COUNT) were exhausted. Breakout.
      #
+    ##
+     # @brief Display token usage metrics in muted gray (Ubuntu / VSCode SSH style).
+     #
+    @staticmethod
+    def _print_token_usage(usage_info):
+        if not usage_info:
+            return
+        # End-if
+        cli.print(
+            f"{cli.C_GRAY}    Token: {usage_info['total']} | Input: {usage_info['input']} | "
+            f"Output: {usage_info['output']} | Cached: {usage_info['cached']}{cli.C_RESET}",
+            level="debug"
+        )
+    # End-def
+
     def step(self):
         # 1. Build System Prompt (STATIC)
         # Dynamic content (task state / memories) is injected as a
@@ -634,12 +649,10 @@ class MyAgent:
 
             total_tokens = 0
             if err is None:
-                # Succeeded! Extract usage and display real-time context token metrics:
+                # Succeeded! Extract usage:
                 usage_info = extract_usage_tokens(getattr(resp, "usage", None))
                 self.last_usage = usage_info
                 total_tokens = usage_info["total"]
-                print(f"Token: {usage_info['total']} | Input: {usage_info['input']} | "
-                      f"Output: {usage_info['output']} | Cached: {usage_info['cached']}")
             # End-if
 
             # Check if compression is triggered:
@@ -670,7 +683,8 @@ class MyAgent:
             # End-if
 
             if err is None:
-                # Succeeded and within token limits
+                # Succeeded and within token limits: media payload consumed, clear for subsequent rounds
+                self._pending_media_blocks = []
                 break
             # End-if
 
@@ -696,7 +710,9 @@ class MyAgent:
             # Turn finished: the hydrated media parts are no longer needed (the
             # pointer text stays in history, so a re-read is always possible).
             self._pending_media_blocks = []
+            self._print_token_usage(self.last_usage)
             return False, None
+        # End-if
 
         # Handle Tools
         results = []
@@ -752,7 +768,7 @@ class MyAgent:
             # End-if
 
             output_str = str(output)
-            cli.print(f"    Result length: {len(output_str)} chars", level="debug")
+            cli.print(f"{cli.C_GRAY}    Result length: {len(output_str)} chars{cli.C_RESET}", level="debug")
             
             # --- Large Output Offload ---
             # Prevents context explosion and delays the need for compression.
@@ -785,6 +801,7 @@ class MyAgent:
             self.history.append({"role": "user", "content": "You indicated a tool use but provided no valid tool calls."})
 
         self.session.save_history(self.history)
+        self._print_token_usage(self.last_usage)
         return True, None
     # End-def
 
