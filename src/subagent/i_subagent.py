@@ -50,16 +50,7 @@ class ISubAgent:
      # the main agent is reused (media pointers contribute their marker cost).
      #
     def available_token_budget(self):
-        from src.tool.media import estimate_messages_tokens
-
-        try:
-            base = int(self.config.get("MAX_CONTEXT_TOKENS", 128000))
-            reserved = int(self.config.get("MAX_TOKENS", 8192))
-            used = estimate_messages_tokens(getattr(self, "_messages", []) or [])
-            return max(int(base - reserved - used), 0)
-        except Exception:
-            return 0
-        # End-try
+        return None
     # End-def
 
     ##
