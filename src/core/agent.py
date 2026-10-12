@@ -647,23 +647,25 @@ class MyAgent:
             # POST-call logging (per attempt: failed attempts record the error).
             self.session.log_api_call("POST LLM CALL - MAIN", resp if resp else {"error": err})
 
-            total_tokens = 0
             if err is None:
-                # Succeeded! Extract usage:
+                # Succeeded! The media blocks in this request have been delivered
+                self._pending_media_blocks = []
                 usage_info = extract_usage_tokens(getattr(resp, "usage", None))
                 self.last_usage = usage_info
-                total_tokens = usage_info["total"]
+                break
             # End-if
 
-            # Check if compression is triggered:
-            # 1. Upstream context overflow error (err matches overflow keywords)
-            # 2. OR measured total tokens exceeds configured max_context_tokens
-            if self._if_compress(err=err, total_tokens=total_tokens) and compactions_done < max_compactions:
+            # Check if this error is due to context window overflow
+            if self.compressor.is_overflow_error(err) and compactions_done < max_compactions:
                 compactions_done += 1
-                reason = f"API overflow error: {err}" if err else f"Tokens ({total_tokens}) exceeded max_context_tokens ({self.compressor.max_context_tokens})"
-                print(f"\n[!] Context threshold reached: {reason}")
+                print(f"\n[!] Context overflow detected: {err}")
                 print(f"[*] Triggering reactive context compaction ({compactions_done}/{max_compactions})...")
                 new_hist, stats = self.compressor.compress(self.history)
+                if stats.get("status") == "archive_failed":
+                    self._pending_media_blocks = []
+                    return False, f"Compaction archive failed: {stats.get('error')}"
+                # End-if
+
                 if new_hist is not None:
                     self.history = new_hist
                     self.session.save_history(self.history)
@@ -682,12 +684,6 @@ class MyAgent:
                 # End-if
             # End-if
 
-            if err is None:
-                # Succeeded and within token limits: media payload consumed, clear for subsequent rounds
-                self._pending_media_blocks = []
-                break
-            # End-if
-
             if attempt < max_attempts:
                 wait = _LLM_RETRY_BACKOFF[attempt - 1]
                 print(f"[-] API Error: {err} (attempt {attempt}/{max_attempts})")
@@ -704,6 +700,24 @@ class MyAgent:
 
         self.history.append({"role": "assistant", "content": resp.content})
         self.session.save_history(self.history)
+
+        # Post-response compaction check:
+        # If the successful turn pushed total context past max_context_tokens,
+        # compact now so that subsequent turns stay within budget without discarding resp.
+        total_tokens = self.last_usage.get("total", 0)
+        if self._if_compress(err=None, total_tokens=total_tokens):
+            reason = f"Tokens ({total_tokens}) exceeded max_context_tokens ({self.compressor.max_context_tokens})"
+            print(f"\n[!] Context threshold reached: {reason}")
+            new_hist, stats = self.compressor.compress(self.history)
+            if stats.get("status") == "archive_failed":
+                return False, f"Compaction archive failed: {stats.get('error')}"
+            # End-if
+            if new_hist is not None:
+                self.history = new_hist
+                self.session.save_history(self.history)
+                self._invalidate_memories_cache()
+            # End-if
+        # End-if
 
         # 3. Handle Output or Tools
         if resp.stop_reason != "tool_use":

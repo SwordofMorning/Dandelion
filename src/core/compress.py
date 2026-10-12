@@ -279,7 +279,12 @@ def extract_usage_tokens(usage) -> dict:
     if total is not None:
         total_val = int(total)
     else:
-        total_val = input_val + output_val + (int(cache_read) if cache_read else 0)
+        total_val = (
+            input_val
+            + output_val
+            + (int(cache_read) if cache_read else 0)
+            + (int(cache_create) if cache_create else 0)
+        )
     # End-if
 
     return {
@@ -430,12 +435,17 @@ class ContextCompressor:
 
         # 2. Backup raw history before any modification
         archive_dir = os.path.join(self.session.current_session_dir, "archives")
-        os.makedirs(archive_dir, exist_ok=True)
         archive_path = self._archive_path(archive_dir, len(history))
-        with open(archive_path, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2,
-                      default=self.session._default_serializer)
-        # End-with
+        try:
+            os.makedirs(archive_dir, exist_ok=True)
+            with open(archive_path, "w", encoding="utf-8") as f:
+                json.dump(history, f, ensure_ascii=False, indent=2,
+                          default=self.session._default_serializer)
+            # End-with
+        except OSError as e:
+            print(f"[-] Compaction archive failed: {e}")
+            return None, {"status": "archive_failed", "error": str(e)}
+        # End-try
 
         # 3. Separate Head
         head = self._trim_head_for_tool_use(history, self.head_size)
@@ -457,6 +467,11 @@ class ContextCompressor:
         if start_recent_idx is None or start_recent_idx <= trimmed_head_size:
             start_recent_idx = max(trimmed_head_size + 1, len(history) - self.recent_size)
         # End-if
+
+        # Guard against splitting a tool_use / tool_result pair across middle and recent
+        while start_recent_idx > trimmed_head_size and msg_ends_with_tool_use(history[start_recent_idx - 1]):
+            start_recent_idx -= 1
+        # End-while
 
         recent = history[start_recent_idx:]
         middle = history[trimmed_head_size:start_recent_idx]
@@ -536,15 +551,29 @@ class ContextCompressor:
         )
         summary_content = summary_response_text if status in ("ok", "truncated") else ""
 
-        if status == "empty":
-            print(f"[-] Compression failed: {reason}. Preserving history with failure marker.")
-        elif status == "error":
-            print(f"[-] Compression failed: {reason}.")
+        if status in ("empty", "error"):
+            print(f"[-] Compression failed: {reason}. Preserving original history without truncation.")
+            self.session.log_api_call("POST LLM CALL - COMPRESSION SUMMARY", {
+                "status": status,
+                "reason": reason,
+                "stop_reason": getattr(resp, "stop_reason", None) if resp else None,
+                "summary_chars": 0,
+                "max_tokens": summary_max_tokens,
+                "compressed_turns": 0,
+                "retained_turns": len(history),
+                "archive_path": archive_path,
+            })
+            return None, {
+                "status": status,
+                "reason": reason,
+                "compressed_turns": 0,
+                "archive_path": archive_path,
+            }
         elif status == "truncated":
             print(f"[-] Warning: compression summary hit output cap ({summary_max_tokens} tokens).")
         # End-if
 
-        # 9. Assemble new history
+        # 9. Assemble new history (only when summarization succeeded or was truncated)
         summary_msg = build_compaction_message(
             archive_path, status, summary_content, reason, len(recent) + len(remaining_middle)
         )
