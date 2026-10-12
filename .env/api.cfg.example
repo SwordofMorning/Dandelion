@@ -21,7 +21,7 @@ TAVILY_API_KEY=tvly-
 ; ============================================================
 
 [DeepSeek]
-SDK_TYPE="Anthropic"
+SDK_TYPE="Message"
 BASE_URL=https://api.deepseek.com/anthropic
 API_KEY=sk-
 MODEL_LIST = [
@@ -51,7 +51,7 @@ MODEL_LIST = [
     ]
 
 [Sub2API_Antigravity]
-SDK_TYPE="Anthropic"
+SDK_TYPE="Message"
 BASE_URL=
 API_KEY=sk-
 MODEL_LIST = [
