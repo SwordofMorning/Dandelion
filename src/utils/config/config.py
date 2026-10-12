@@ -6,16 +6,27 @@
  #
  # @note Model metadata (json) like:
  # {
- #     "model_id": "deepseek-v4-pro",
- #     "conditions": ["reasoning", "long_context", "complex"],
- #     "max_token": 819200,
- #     "max_context_tokens": 819200,
- #     "TPM": 0,
- #     "RPM": 10,
- #     "RPD": 500,
- #     "thinking": "enabled",
- #     "effort": "max",
- #     "compat": "deepseek"
+ #     "provider": {
+ #         "model_id": "deepseek-v4-pro",
+ #         "compat": "deepseek"
+ #     },
+ #     "basic": {
+ #         "name": "deepseek-v4-pro",
+ #         "conditions": ["reasoning", "long_context", "complex"],
+ #         "max_token": 819200,
+ #         "max_context_tokens": 819200
+ #     },
+ #     "reasoning": {
+ #         "thinking": "enabled",
+ #         "effort": "max"
+ #     },
+ #     "media": {
+ #         "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+ #         "max_image_bytes": "15MB",
+ #         "max_pdf_bytes": "15MB",
+ #         "max_pdf_pages": 100,
+ #         "max_media_per_request": 8
+ #     }
  # }
  # max_token:          Provider output limit (payload "max_tokens").
  #                     Reserved inside the compaction threshold so that
@@ -158,11 +169,6 @@ _MEDIA_LIMIT_KEYS = {
     "max_pdf_bytes": (int, None),
     "max_pdf_pages": (int, 1),
     "max_media_per_request": (int, 1),
-    "pdf_tokens_per_page": (int, 1),
-    "image_cost_factor": (float, 0.0001),
-    "pdf_cost_factor": (float, 0.0001),
-    "media_cost_fallback": (int, 1),
-    "calib_ratio_cap": (float, 1.0),
 }
 
 ##
@@ -289,9 +295,124 @@ def _parse_media_limits(model_data, model_id=""):
 
 ##
  # ========================================
- # @section II. Main Config Loader
+ # @section II. Model Entry & Config Loader
  # ========================================
  #
+
+##
+ # @brief Parse and validate a single structured model entry.
+ #
+ # Expected structure:
+ # {
+ #     "provider": {"model_id": "...", "compat": "auto"},
+ #     "basic": {"name": "...", "conditions": [...], "max_token": N, "max_context_tokens": M},
+ #     "reasoning": {"thinking": "...", "effort": "..."},
+ #     "media": {"file": [...], "max_image_bytes": ...}
+ # }
+ #
+ # @param model_data Raw model dict from JSON.
+ # @param section Section/provider name for logging.
+ #
+ # @return Parsed dict or None if invalid.
+ #
+def _parse_model_entry(model_data: dict, section: str = ""):
+    if not isinstance(model_data, dict):
+        print(f"[-] FATAL: Section '[{section}]': model entry must be a dictionary.")
+        return None
+    # End-if
+
+    # Breaking change check: legacy flat structure is rejected
+    if "model_id" in model_data and "basic" not in model_data:
+        print(f"[-] FATAL: Section '[{section}]': legacy flat model configuration detected for "
+              f"model_id='{model_data.get('model_id')}'. Flat config is deprecated and rejected. "
+              f"Please migrate to structured nodes: 'provider', 'basic', 'reasoning', 'media'.")
+        return None
+    # End-if
+
+    if "provider" not in model_data or "basic" not in model_data:
+        print(f"[-] FATAL: Section '[{section}]': model entry missing required 'provider' or 'basic' node.")
+        return None
+    # End-if
+
+    # 1. Provider node
+    provider_node = model_data.get("provider")
+    if not isinstance(provider_node, dict):
+        print(f"[-] FATAL: Section '[{section}]': 'provider' node must be a dictionary.")
+        return None
+    # End-if
+    model_id = str(provider_node.get("model_id", "")).strip()
+    if not model_id:
+        print(f"[-] FATAL: Section '[{section}]': 'provider.model_id' must be specified.")
+        return None
+    # End-if
+
+    # 2. Basic node
+    basic_node = model_data.get("basic")
+    if not isinstance(basic_node, dict):
+        print(f"[-] FATAL: Section '[{section}]': 'basic' node must be a dictionary.")
+        return None
+    # End-if
+    name = str(basic_node.get("name", "")).strip()
+    if not name:
+        print(f"[-] FATAL: Section '[{section}]': 'basic.name' must be specified.")
+        return None
+    # End-if
+
+    raw_conditions = basic_node.get("conditions", [])
+    if isinstance(raw_conditions, list):
+        conditions = [str(c).strip() for c in raw_conditions if isinstance(c, str) and c.strip()]
+    else:
+        conditions = []
+    # End-if
+
+    try:
+        max_token = int(basic_node.get("max_token", 8192))
+        if max_token <= 0:
+            max_token = 8192
+    except (TypeError, ValueError):
+        max_token = 8192
+    # End-try
+
+    try:
+        max_context_tokens = int(basic_node.get("max_context_tokens", 128000))
+        if max_context_tokens <= 0:
+            max_context_tokens = 128000
+    except (TypeError, ValueError):
+        max_context_tokens = 128000
+    # End-try
+
+    # 3. Endpoint flavor (compat)
+    compat = _parse_compat(provider_node, name)
+
+    # 4. Reasoning node (optional)
+    reasoning_node = model_data.get("reasoning", {})
+    if not isinstance(reasoning_node, dict):
+        reasoning_node = {}
+    # End-if
+    thinking = _parse_thinking(reasoning_node, name)
+    effort   = _parse_effort(reasoning_node, name)
+
+    # 5. Media node (optional)
+    media_node = model_data.get("media", {})
+    if not isinstance(media_node, dict):
+        media_node = {}
+    # End-if
+    media_exts = _parse_media_extensions(media_node, name)
+    media_limits = _parse_media_limits(media_node, name)
+
+    return {
+        "name": name,
+        "model_id": model_id,
+        "compat": compat,
+        "conditions": conditions,
+        "max_token": max_token,
+        "max_context_tokens": max_context_tokens,
+        "thinking": thinking,
+        "effort": effort,
+        "file": media_exts,
+        "media_limits": media_limits,
+    }
+# End-def
 
 ##
  # @brief Load config.
@@ -320,9 +441,10 @@ def load_api_config(file_path):
         return None
     # End-if
 
-    # In "Main" section, not specify MAIN_AGENT.
-    main_agent_id = config.get("Main", "MAIN_AGENT", fallback="")
-    if not main_agent_id:
+    # In "Main" section, MAIN_AGENT specifies model name (alias)
+    main_agent_name = config.get("Main", "MAIN_AGENT", fallback="").strip()
+    if not main_agent_name:
+        print("[-] FATAL: In 'Main' section, MAIN_AGENT is not specified.")
         return None
     # End-if
 
@@ -343,6 +465,7 @@ def load_api_config(file_path):
     # ----- @par 2. LLM Providers Section -----
 
     all_models = []
+    registered_names = set()
     active_profile = None
 
     # Iterate through all sections to parse providers and find the main agent.
@@ -359,29 +482,29 @@ def load_api_config(file_path):
         raw_models = config.get(section, "MODEL_LIST", fallback="[]")
         try:
             model_list = json.loads(raw_models)
-        except json.JSONDecodeError:
-            model_list = []
+        except json.JSONDecodeError as e:
+            print(f"[-] FATAL: Section '[{section}]': MODEL_LIST JSON decode error: {e}")
+            return None
         # End-try
 
+        if not isinstance(model_list, list):
+            print(f"[-] FATAL: Section '[{section}]': MODEL_LIST must be a list.")
+            return None
+        # End-if
+
         # Iterate through all models in model list of section [xx].
-        for model_data in model_list:
-            if not isinstance(model_data, dict):
-                continue
+        for raw_model in model_list:
+            parsed = _parse_model_entry(raw_model, section)
+            if parsed is None:
+                return None
+            # End-if
 
-            model_id = model_data.get("model_id", "")
-            if not model_id:
-                continue
-
-            # Parse thinking level.
-            thinking = _parse_thinking(model_data, model_id)
-            effort   = _parse_effort(model_data, model_id)
-
-            # Parse endpoint flavor (link terminal model family).
-            compat   = _parse_compat(model_data, model_id)
-
-            # Parse media (multimodal) metadata.
-            media_exts = _parse_media_extensions(model_data, model_id)
-            media_limits = _parse_media_limits(model_data, model_id)
+            model_name = parsed["name"]
+            if model_name in registered_names:
+                print(f"[-] FATAL: Duplicate model name '{model_name}' defined in section '[{section}]'.")
+                return None
+            # End-if
+            registered_names.add(model_name)
 
             # Enrich model data with provider info.
             enriched_model = {
@@ -389,19 +512,12 @@ def load_api_config(file_path):
                 "sdk_type": sdk_type,
                 "base_url": base_url,
                 "api_key": api_key,
-                **model_data,
-                # Ensure canonical values override any raw values from **model_data.
-                "thinking": thinking,
-                "effort": effort,
-                "compat": compat,
-                # Media support (empty list = text-only model).
-                "file": media_exts,
-                "media_limits": media_limits,
+                **parsed,
             }
             all_models.append(enriched_model)
 
             # Check if this is the target main agent.
-            if model_id == main_agent_id:
+            if model_name == main_agent_name:
                 active_profile = enriched_model
             # End-if
         # End-for model in model_list.
@@ -409,7 +525,7 @@ def load_api_config(file_path):
 
     # Main Agent must configure in any MODEL_LIST with any provider (section).
     if not active_profile:
-        print(f"[-] FATAL: Main Agent '{main_agent_id}' not found in any MODEL_LIST.")
+        print(f"[-] FATAL: Main Agent '{main_agent_name}' not found in any MODEL_LIST.")
         return None
     # End-if
 
@@ -422,26 +538,26 @@ def load_api_config(file_path):
         "ANTHROPIC_BASE_URL": active_profile["base_url"],
         # Legacy key name support
         "ANTHROPIC_API_KEY": active_profile["api_key"],
+        "NAME": active_profile["name"],
         "MODEL_ID": active_profile["model_id"],
-        "MAX_TOKENS": active_profile.get("max_token", 8192),
+        "MAX_TOKENS": active_profile["max_token"],
         # Context window / compaction threshold (per-model)
-        "MAX_CONTEXT_TOKENS": active_profile.get("max_context_tokens", 128000),
+        "MAX_CONTEXT_TOKENS": active_profile["max_context_tokens"],
         "SUB_LIST": sub_list,
         "ALL_MODELS": all_models,
         # Search api key
         "TAVILY_API_KEY": tavily_api_key,
         # Think Level
-        "THINKING": active_profile.get("thinking", "disabled"),
-        "EFFORT": active_profile.get("effort", "medium"),
+        "THINKING": active_profile["thinking"],
+        "EFFORT": active_profile["effort"],
         # Endpoint flavor used for reasoning-effort injection ("auto" = detect it)
-        "COMPAT": active_profile.get("compat", FLAVOR_AUTO),
+        "COMPAT": active_profile["compat"],
         # Media (multimodal) support of the active model
-        "MEDIA_EXTS": active_profile.get("file", []),
-        "MEDIA_LIMITS": active_profile.get("media_limits", {}),
+        "MEDIA_EXTS": active_profile["file"],
+        "MEDIA_LIMITS": active_profile["media_limits"],
         "ACTIVE_MODEL_PROFILE": active_profile,
         # Post-call context calibration ceiling (see llm_request/calibration.py)
-        "CALIB_RATIO_CAP": active_profile.get("media_limits", {}).get(
-            "calib_ratio_cap", CALIB_RATIO_CAP_DEFAULT),
+        "CALIB_RATIO_CAP": CALIB_RATIO_CAP_DEFAULT,
     }
 # End-def
 

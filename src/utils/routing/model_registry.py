@@ -102,9 +102,6 @@ class RegistryModelSpec:
     api_key: str = ""
     max_tokens: int = 8192
     conditions: list = field(default_factory=list)
-    tpm: int = 0
-    rpm: int = 0
-    rpd: int = 0
     thinking: str = "disabled"
     effort: str = "medium"
     compat: str = FLAVOR_AUTO
@@ -136,18 +133,18 @@ class ModelRegistry:
      # @param sub_list models in SUB_LIST.
      #
     def _load(self, all_models, sub_list):
-        # Create lookup dict for quick model matching
-        model_lookup = {m.get("model_id"): m for m in all_models}
+        # Create lookup dict keyed by model name for alias matching
+        model_lookup = {m.get("name"): m for m in all_models}
 
         # Strictly follow the priority in SUB_LIST
-        for model_id in sub_list:
-            if model_id in model_lookup:
-                m = model_lookup[model_id]
-                alias = model_id
+        for alias in sub_list:
+            if alias in model_lookup:
+                m = model_lookup[alias]
+                model_id = m.get("model_id", "")
 
-                thinking = _safe_thinking(m.get("thinking", "disabled"), model_id)
-                effort   = _safe_effort(m.get("effort", "medium"), model_id)
-                compat   = _safe_compat(m.get("compat", FLAVOR_AUTO), model_id)
+                thinking = _safe_thinking(m.get("thinking", "disabled"), alias)
+                effort   = _safe_effort(m.get("effort", "medium"), alias)
+                compat   = _safe_compat(m.get("compat", FLAVOR_AUTO), alias)
 
                 spec = RegistryModelSpec(
                     alias=alias,
@@ -157,9 +154,6 @@ class ModelRegistry:
                     api_key=m.get("api_key", ""),
                     max_tokens=m.get("max_token", 8192),
                     conditions=m.get("conditions", []),
-                    tpm=m.get("TPM", 0),
-                    rpm=m.get("RPM", 0),
-                    rpd=m.get("RPD", 0),
                     thinking=thinking,
                     effort=effort,
                     compat=compat,

@@ -41,7 +41,7 @@ def main():
         workspace_dir=base_dir()
     )
 
-    print(f"[+] Agent Initialization Successful. Model: {config['MODEL_ID']}")
+    print(f"[+] Agent Initialization Successful. Model: {config.get('NAME', config['MODEL_ID'])}")
     print(f"[+] MAX_TOKENS={config['MAX_TOKENS']}, MAX_CONTEXT_TOKENS={config['MAX_CONTEXT_TOKENS']}")
 
     # 4. Start CLI

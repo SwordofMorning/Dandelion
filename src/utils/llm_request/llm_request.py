@@ -71,14 +71,12 @@ class SafeLLMClient:
         self._cache_lock = threading.Lock()
         self._registry = None
         self._policy = None
-        self._rate_limiter = None
 
         if all_models and sub_list:
-            from ..routing import ModelRegistry, RoutingPolicy, RateLimiter
+            from ..routing import ModelRegistry, RoutingPolicy
 
-            self._rate_limiter = RateLimiter()
             self._registry = ModelRegistry(all_models, sub_list)
-            self._policy = RoutingPolicy(self._registry, self._rate_limiter)
+            self._policy = RoutingPolicy(self._registry)
         # End-if
     # End-def
 
@@ -277,10 +275,6 @@ class SafeLLMClient:
             if attempt == max_retries:
                 # Iterate all models; candidates come from `get_fallback_chain`.
                 for fallback_alias in self._policy.get_fallback_chain(current_alias):
-                    # If exhausted limits, ignore this one.
-                    if not self._rate_limiter.acquire(fallback_alias, estimated_tokens):
-                        continue
-
                     # Try to copy payload and request.
                     print(f"[Router] Falling back to '{fallback_alias}'...")
                     fb_provider = self._get_cached_provider(fallback_alias)

@@ -24,9 +24,6 @@ from .logging import AgentLogger, SessionManager
 
 # Routing utilities
 from .routing import (
-    RateLimiter,
-    RateLimitConfig,
-    UsageWindow,
     ModelRegistry,
     RegistryModelSpec,
     RoutingPolicy,
@@ -51,9 +48,6 @@ __all__ = [
     "AgentLogger",
     "SessionManager",
     # Routing
-    "RateLimiter",
-    "RateLimitConfig",
-    "UsageWindow",
     "ModelRegistry",
     "RegistryModelSpec",
     "RoutingPolicy",
