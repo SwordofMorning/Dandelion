@@ -3,89 +3,79 @@
 ; ============================================================
 [Main]
 ; Specify the actual model_id to be used by the main agent
-MAIN_AGENT=deepseek-v4-flash
+MAIN_AGENT=gemini-3.8-flash
 SUB_LIST=[
-    "deepseek-v4-flash",
-    gemini-3.8-flash-tiered
+    "gemini-3.8-flash"
     ]
 ; Search Tool
-TAVILY_API_KEY=
+TAVILY_API_KEY=tvly-
 
 ; ============================================================
 ; Part 2: Provider Profiles & Model Registries
+; 
+; @ SDK_TYPE:
+;   "Message" (Anthropic) or "Chat Completions" (OpenAI).
+;   do not support "Responses" (OpenAI New), "Interactions" (Gemini New) or "Generate Content"(Gemini)
+; @ BASE_URL:
+;   URL to LLM provider.
 ; ============================================================
-;
-; Media (multimodal) support is declared per model, so a text-only model never
-; receives media tools. Optional keys inside a MODEL_LIST entry:
-;
-;   "file": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"],
-;       Extension whitelist. Omit it (or use []) for text-only models: the
-;       read_image / read_pdf tools are then NOT registered for that model.
-;
-;   "max_image_bytes": "15MB",     Single image size cap (int bytes or "15MB").
-;   "max_pdf_bytes": "15MB",       Single PDF size cap.
-;   "max_pdf_pages": 100,          Page cap for one PDF request (no page slicing).
-;   "max_media_per_request": 8,    How many media blocks one request may carry.
-;   "pdf_tokens_per_page": 258,    Cost estimate per PDF page (budget ledger).
-;   "image_cost_factor": 1.2,      Safety factor on the image cost estimate.
-;   "pdf_cost_factor": 1.2,        Safety factor on the PDF cost estimate.
-;   "media_cost_fallback": 2000,   Cost assumed when a media size is unknown.
-;   "calib_ratio_cap": 1.6,        Upper bound of the context calibration ratio.
-;
-; All keys are optional; the defaults above apply when they are absent.
 
 [DeepSeek]
 SDK_TYPE="Anthropic"
 BASE_URL=https://api.deepseek.com/anthropic
-API_KEY=
+API_KEY=sk-
 MODEL_LIST = [
     {
-        "model_id": "deepseek-v4-flash",
-        "conditions": ["tool_heavy", "long_context", "simple"],
-        "max_token": 160000,
-        "max_context_tokens": 819200,
-        "file": [".png", ".jpg", ".jpeg", ".webp"],
-        "max_image_bytes": "15MB",
-        "max_pdf_bytes": "15MB",
-        "max_pdf_pages": 100,
-        "max_media_per_request": 8,
-        "pdf_tokens_per_page": 258,
-        "image_cost_factor": 1.2,
-        "pdf_cost_factor": 1.2,
-        "media_cost_fallback": 2000,
-        "calib_ratio_cap": 1.6,
-        "TPM": 1000000,
-        "RPM": 1000,
-        "RPD": 50000,
-        "thinking": "enabled",
-        "effort": "max"
+        "provider": {
+            "model_id": "deepseek-v4-flash",
+            "compat": "deepseek"
+        },
+        "basic": {
+            "name": "deepseek-v4",
+            "conditions": ["tool_heavy", "long_context", "simple"],
+            "max_token": 160000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "max"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
     }
     ]
 
-[Sub2API]
-SDK_TYPE="OpenAI"
+[Sub2API_Antigravity]
+SDK_TYPE="Anthropic"
 BASE_URL=
-API_KEY=
+API_KEY=sk-
 MODEL_LIST = [
     {
-        "model_id": "gemini-3.8-flash-tiered",
-        "conditions": ["reasoning", "tool_heavy", "long_context", "simple"],
-        "max_token": 128000,
-        "max_context_tokens": 819200,
-        "file": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"],
-        "max_image_bytes": "15MB",
-        "max_pdf_bytes": "15MB",
-        "max_pdf_pages": 100,
-        "max_media_per_request": 8,
-        "pdf_tokens_per_page": 258,
-        "image_cost_factor": 1.2,
-        "pdf_cost_factor": 1.2,
-        "media_cost_fallback": 2000,
-        "calib_ratio_cap": 1.6,
-        "TPM": 1000000,
-        "RPM": 1000,
-        "RPD": 50000,
-        "thinking": "enabled",
-        "effort": "max"
+        "provider": {
+            "model_id": "gemini-3.8-flash-tiered",
+            "compat": "gemini"
+        },
+        "basic": {
+            "name": "gemini-3.8-flash",
+            "conditions": ["reasoning", "tool_heavy", "long_context", "simple"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "high"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
     }
     ]
