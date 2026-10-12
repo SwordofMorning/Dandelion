@@ -9,5 +9,10 @@
 from .memory import MemoryManager
 from .skill import SkillManager
 from .sysprompt import PromptBuilder
-from .compress import ContextCompressor, is_context_overflow_error, extract_usage_tokens
+from .compress import (
+    ContextCompressor,
+    CompressCondition,
+    is_context_overflow_error,
+    extract_usage_tokens,
+)
 from .agent import MyAgent

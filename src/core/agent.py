@@ -175,6 +175,7 @@ class MyAgent:
 
         # ----- Context compressor & usage metrics -----
         self.compressor = ContextCompressor(self.client, self.session, self.config)
+        self._if_compress = self.compressor.condition
         self.last_usage = {"total": 0, "input": 0, "output": 0, "cached": 0}
 
         # Media payloads read during the current turn. They are hydrated into
@@ -631,19 +632,23 @@ class MyAgent:
             # POST-call logging (per attempt: failed attempts record the error).
             self.session.log_api_call("POST LLM CALL - MAIN", resp if resp else {"error": err})
 
+            total_tokens = 0
             if err is None:
                 # Succeeded! Extract usage and display real-time context token metrics:
                 usage_info = extract_usage_tokens(getattr(resp, "usage", None))
                 self.last_usage = usage_info
+                total_tokens = usage_info["total"]
                 print(f"Token: {usage_info['total']} | Input: {usage_info['input']} | "
                       f"Output: {usage_info['output']} | Cached: {usage_info['cached']}")
-                break
             # End-if
 
-            # Check if this error is due to context window overflow
-            if self.compressor.is_overflow_error(err) and compactions_done < max_compactions:
+            # Check if compression is triggered:
+            # 1. Upstream context overflow error (err matches overflow keywords)
+            # 2. OR measured total tokens exceeds configured max_context_tokens
+            if self._if_compress(err=err, total_tokens=total_tokens) and compactions_done < max_compactions:
                 compactions_done += 1
-                print(f"\n[!] Context overflow detected: {err}")
+                reason = f"API overflow error: {err}" if err else f"Tokens ({total_tokens}) exceeded max_context_tokens ({self.compressor.max_context_tokens})"
+                print(f"\n[!] Context threshold reached: {reason}")
                 print(f"[*] Triggering reactive context compaction ({compactions_done}/{max_compactions})...")
                 new_hist, stats = self.compressor.compress(self.history)
                 if new_hist is not None:
@@ -662,6 +667,11 @@ class MyAgent:
                 else:
                     print("[-] Context cannot be compacted further.")
                 # End-if
+            # End-if
+
+            if err is None:
+                # Succeeded and within token limits
+                break
             # End-if
 
             if attempt < max_attempts:

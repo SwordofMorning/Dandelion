@@ -292,6 +292,37 @@ def extract_usage_tokens(usage) -> dict:
 
 
 ##
+ # @brief Condition evaluator for triggering context compaction.
+ # Evaluates whether compression should run based on:
+ # 1. Provider context overflow error (error message matches overflow keywords).
+ # 2. Real token usage exceeds the configured max_context_tokens threshold.
+ #
+class CompressCondition:
+    def __init__(self, max_context_tokens: int = 128000):
+        self.max_context_tokens = max_context_tokens
+    # End-def
+
+    def __call__(self, err: str = None, total_tokens: int = 0) -> bool:
+        return self.should_compress(err=err, total_tokens=total_tokens)
+    # End-def
+
+    def should_compress(self, err: str = None, total_tokens: int = 0) -> bool:
+        # 1. Upstream provider reported context overflow error
+        if err and is_context_overflow_error(err):
+            return True
+        # End-if
+
+        # 2. Measured tokens exceeded configured max_context_tokens
+        if self.max_context_tokens and total_tokens > self.max_context_tokens:
+            return True
+        # End-if
+
+        return False
+    # End-def
+# End-class
+
+
+##
  # @brief Context compressor class.
  # Implements reactive error-driven compaction with 80% smooth sliding retention.
  #
@@ -301,9 +332,15 @@ class ContextCompressor:
         self.session = session_manager
         self.config = config
 
+        self.max_context_tokens = int(config.get("MAX_CONTEXT_TOKENS", 128000))
+        self.condition = CompressCondition(self.max_context_tokens)
         self.head_size = int(config.get("COMPACT_HEAD_SIZE", DEFAULT_HEAD_SIZE))
         self.recent_size = int(config.get("COMPACT_RECENT_SIZE", DEFAULT_RECENT_SIZE))
         self.target_reduction = float(config.get("COMPACT_TARGET_REDUCTION", DEFAULT_TARGET_REDUCTION))
+    # End-def
+
+    def should_compress(self, err: str = None, total_tokens: int = 0) -> bool:
+        return self.condition.should_compress(err=err, total_tokens=total_tokens)
     # End-def
 
     def is_overflow_error(self, error_str: str) -> bool:
