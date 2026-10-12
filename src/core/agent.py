@@ -296,7 +296,7 @@ class MyAgent:
             api_key=self.config["ANTHROPIC_API_KEY"],
             base_url=self.config["ANTHROPIC_BASE_URL"],
             model_id=self.config["MODEL_ID"],
-            sdk_type=self.config.get("SDK_TYPE", "Anthropic"),
+            sdk_type=self.config.get("SDK_TYPE", "Message"),
             all_models=self.config.get("ALL_MODELS", []),
             sub_list=self.config.get("SUB_LIST", []),
             thinking=self.thinking,

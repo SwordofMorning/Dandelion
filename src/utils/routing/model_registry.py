@@ -148,7 +148,7 @@ class ModelRegistry:
 
                 spec = RegistryModelSpec(
                     alias=alias,
-                    provider=m.get("sdk_type", "Anthropic"),
+                    provider=m.get("sdk_type", "Message"),
                     model_id=model_id,
                     base_url=m.get("base_url", ""),
                     api_key=m.get("api_key", ""),

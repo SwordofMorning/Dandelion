@@ -474,7 +474,7 @@ def load_api_config(file_path):
             continue
 
         # Get base info in section [xx].
-        sdk_type = config.get(section, "SDK_TYPE", fallback="Anthropic").strip('"\'')
+        sdk_type = config.get(section, "SDK_TYPE", fallback="Message").strip('"\'')
         base_url = config.get(section, "BASE_URL", fallback="")
         api_key = config.get(section, "API_KEY", fallback="")
 

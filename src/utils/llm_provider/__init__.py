@@ -19,27 +19,30 @@ __all__ = [
 ##
  # @brief Factory function to create a provider instance based on SDK type.
  # 
- # @param sdk_type One of "anthropic", "openai", "nvidia".
+ # @param sdk_type Protocol / SDK type: "Message" (Anthropic) or "Chat Completions" (OpenAI).
  # @param api_key API key for the provider.
  # @param base_url Base URL (optional).
  # @param model_id Model identifier.
  #
  # @return LLMProvider instance.
  #
- # @todo Need to use SDK/API type (ResponseAPI, AnthropicAPI, InteractionsAPI ...) to create LLM provider;
- # Not user providers name anymore.
- # 
 def create_provider(sdk_type, api_key, base_url, model_id):
-    sdk = sdk_type.lower()
-    if sdk in ["ai studio", "gemini", "google"]:
-        raise ValueError(
-            f"Google/Gemini SDK support has been removed. "
-            f"Please use SDK_TYPE='OpenAI' with Google's OpenAI-compatible endpoint instead."
-        )
-    elif sdk in ["openai", "nvidia"]:
-        return OpenAIProvider(api_key, base_url, model_id)
-    elif sdk in ["anthropic"]:
+    sdk = str(sdk_type).strip().lower()
+    if sdk in ["message", "messages", "anthropic"]:
         return AnthropicProvider(api_key, base_url, model_id)
+    elif sdk in ["chat completions", "chat completion", "chat_completions", "openai", "nvidia"]:
+        return OpenAIProvider(api_key, base_url, model_id)
+    elif sdk in ["responses", "response"]:
+        raise ValueError("SDK_TYPE='Responses' (OpenAI Responses API) is not supported yet.")
+    elif sdk in ["interactions", "interaction"]:
+        raise ValueError("SDK_TYPE='Interactions' (Gemini Interactions API) is not supported yet.")
+    elif sdk in ["generate content", "generatecontent", "ai studio", "gemini", "google"]:
+        raise ValueError(
+            f"Google/Gemini native SDK support has been removed. "
+            f"Please use SDK_TYPE='Chat Completions' with Google's OpenAI-compatible endpoint instead."
+        )
     else:
-        raise ValueError(f"Unsupported SDK_TYPE: '{sdk_type}'. Supported types: 'OpenAI', 'Anthropic'.")
+        raise ValueError(
+            f"Unsupported SDK_TYPE: '{sdk_type}'. Supported types: 'Message' (Anthropic), 'Chat Completions' (OpenAI)."
+        )
 # End-def
