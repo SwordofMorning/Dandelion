@@ -716,7 +716,6 @@ class MyAgent:
             # attached to THIS round's tool_result so the model can see it now.
             if isinstance(output, dict) and output.get("kind") in ("image", "document"):
                 media_cost = int(output.get("media_cost", 0) or 0)
-                pending_media_reserve = max(pending_media_reserve, media_cost)
 
                 # The tool_result itself carries TEXT ONLY (summary + pointer):
                 # history must stay free of base64, and an inline part nested
