@@ -41,7 +41,7 @@ class SafeLLMClient:
      # @param api_key API key for the main agent.
      # @param base_url Base URL for the main agent.
      # @param model_id Model identifier for the main agent.
-     # @param sdk_type SDK type ("Anthropic", "OpenAI").
+     # @param sdk_type SDK type ("Message", "Chat Completions").
      # @param all_models Full model list for sub-agent routing.
      # @param thinking "enabled" or "disabled" - extended thinking toggle for the main agent.
      # @param effort Reasoning effort: "low", "medium", "high", or "max".
@@ -49,13 +49,13 @@ class SafeLLMClient:
      # ("auto" detects it); see llm_provider/effort.py.
      # @param logger Optional SessionManager for logging final API payloads (post-injection).
      #
-    def __init__(self, api_key, base_url, model_id, sdk_type="Anthropic",
+    def __init__(self, api_key, base_url, model_id, sdk_type="Message",
                  all_models=None, sub_list=None,
                  thinking="disabled", effort="medium",
                  compat=FLAVOR_AUTO,
                  logger=None):
         self.model_id = model_id
-        self.sdk_type = sdk_type.lower()
+        self.sdk_type = str(sdk_type).strip()
         self.thinking = thinking
         self.effort = effort
         self.compat = compat
@@ -71,14 +71,12 @@ class SafeLLMClient:
         self._cache_lock = threading.Lock()
         self._registry = None
         self._policy = None
-        self._rate_limiter = None
 
         if all_models and sub_list:
-            from ..routing import ModelRegistry, RoutingPolicy, RateLimiter
+            from ..routing import ModelRegistry, RoutingPolicy
 
-            self._rate_limiter = RateLimiter()
             self._registry = ModelRegistry(all_models, sub_list)
-            self._policy = RoutingPolicy(self._registry, self._rate_limiter)
+            self._policy = RoutingPolicy(self._registry)
         # End-if
     # End-def
 
@@ -87,20 +85,26 @@ class SafeLLMClient:
      #
     def _create_provider(self, sdk_type, api_key, base_url, model_id,
                          thinking="disabled", effort="medium", compat=FLAVOR_AUTO):
-        sdk = sdk_type.lower()
-        if sdk in ["ai studio", "gemini", "google"]:
-            raise ValueError(
-                f"Google/Gemini SDK support has been removed. "
-                f"Please use SDK_TYPE='OpenAI' with Google's OpenAI-compatible endpoint instead."
-            )
-        elif sdk in ["openai"]:
-            return OpenAIProvider(api_key, base_url, model_id,
-                                  thinking=thinking, effort=effort, compat=compat)
-        elif sdk in ["anthropic"]:
+        sdk = str(sdk_type).strip().lower()
+        if sdk in ["message", "messages", "anthropic"]:
             return AnthropicProvider(api_key, base_url, model_id,
                                      thinking=thinking, effort=effort, compat=compat)
+        elif sdk in ["chat completions", "chat completion", "chat_completions", "openai"]:
+            return OpenAIProvider(api_key, base_url, model_id,
+                                  thinking=thinking, effort=effort, compat=compat)
+        elif sdk in ["responses", "response"]:
+            raise ValueError("SDK_TYPE='Responses' (OpenAI Responses API) is not supported yet.")
+        elif sdk in ["interactions", "interaction"]:
+            raise ValueError("SDK_TYPE='Interactions' (Gemini Interactions API) is not supported yet.")
+        elif sdk in ["generate content", "generatecontent", "ai studio", "gemini", "google"]:
+            raise ValueError(
+                f"Google/Gemini native SDK support has been removed. "
+                f"Please use SDK_TYPE='Chat Completions' with Google's OpenAI-compatible endpoint instead."
+            )
         else:
-            raise ValueError(f"Unsupported SDK_TYPE: '{sdk_type}'. Supported types: 'OpenAI', 'Anthropic'.")
+            raise ValueError(
+                f"Unsupported SDK_TYPE: '{sdk_type}'. Supported types: 'Message' (Anthropic), 'Chat Completions' (OpenAI)."
+            )
     # End-def
 
     ##
@@ -277,10 +281,6 @@ class SafeLLMClient:
             if attempt == max_retries:
                 # Iterate all models; candidates come from `get_fallback_chain`.
                 for fallback_alias in self._policy.get_fallback_chain(current_alias):
-                    # If exhausted limits, ignore this one.
-                    if not self._rate_limiter.acquire(fallback_alias, estimated_tokens):
-                        continue
-
                     # Try to copy payload and request.
                     print(f"[Router] Falling back to '{fallback_alias}'...")
                     fb_provider = self._get_cached_provider(fallback_alias)

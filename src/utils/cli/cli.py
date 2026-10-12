@@ -905,7 +905,7 @@ class InteractiveCLI:
                 dirty_flag = "*" if self.staged_message.strip() else ""
 
                 # Fetch model name and format it to be clean (e.g. "nvidia/nemotron" -> "nemotron")
-                full_model_name = self.agent.config.get("MODEL_ID", "dandelion")
+                full_model_name = self.agent.config.get("NAME") or self.agent.config.get("MODEL_ID", "dandelion")
                 short_model_name = full_model_name.split("/")[-1] if "/" in full_model_name else full_model_name
 
                 # Linux-Style Colored Prompt Formatting

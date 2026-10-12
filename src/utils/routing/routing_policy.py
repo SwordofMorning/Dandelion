@@ -41,16 +41,9 @@ class RoutingPolicy:
     ##
      # @brief Constructor.
      #
-    def __init__(self, registry, rate_limiter):
+    def __init__(self, registry):
         self.registry = registry
-        self.rate_limiter = rate_limiter
         self.specs = registry.get_all_subagent_specs()
-
-        from .rate_limiter import RateLimitConfig
-        for spec in self.specs:
-            self.rate_limiter.register(spec.alias, RateLimitConfig(
-                tpm=spec.tpm, rpm=spec.rpm, rpd=spec.rpd
-            ))
     # End-def
 
     ##
@@ -102,10 +95,9 @@ class RoutingPolicy:
      # @param task_description Subagent's task description, used to call infer_conditions.
      # @param toolset_name Subagent's toolset, used to call infer_conditions.
      # @param depth Subagent's "SubSub" depth, used to call infer_conditions.
-     # @param estimated_tokens Estimated tokens.
+     # @param estimated_tokens Deprecated/unused token estimate.
      #
      # @return Selected model alias (str); None if no sub models defined.
-     # @throws RuntimeError when all sub-agent models are rate-limited.
      #
     def select_model(self, task_description: str, toolset_name: str, depth: int, estimated_tokens: int = 2000) -> str:
         if not self.specs:
@@ -113,23 +105,17 @@ class RoutingPolicy:
 
         task_conditions = self.infer_conditions(task_description, toolset_name, depth)
 
-        # 1. Condition Match & Quota Check
+        # 1. Condition Match
         for spec in self.specs:
             spec_conditions = set(spec.conditions)
             if task_conditions & spec_conditions or "default" in spec_conditions:
-                if self.rate_limiter.acquire(spec.alias, estimated_tokens):
-                    return spec.alias
-                print(f"[Router] Model '{spec.alias}' rate limited, trying next...")
-        # End-for
-
-        # 2. Fallback
-        for spec in self.specs:
-            if self.rate_limiter.acquire(spec.alias, estimated_tokens):
-                print(f"[Router] Fallback to '{spec.alias}' (ignoring conditions)")
                 return spec.alias
         # End-for
 
-        raise RuntimeError("All SubAgent models exhausted. No available quota.")
+        # 2. Fallback to first registered sub-agent model
+        fallback_alias = self.specs[0].alias
+        print(f"[Router] Fallback to '{fallback_alias}' (ignoring conditions)")
+        return fallback_alias
     # End-def
 
     ##
