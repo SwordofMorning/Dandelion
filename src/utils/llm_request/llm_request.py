@@ -89,7 +89,7 @@ class SafeLLMClient:
         if sdk in ["message", "messages", "anthropic"]:
             return AnthropicProvider(api_key, base_url, model_id,
                                      thinking=thinking, effort=effort, compat=compat)
-        elif sdk in ["chat completions", "chat completion", "chat_completions", "openai", "nvidia"]:
+        elif sdk in ["chat completions", "chat completion", "chat_completions", "openai"]:
             return OpenAIProvider(api_key, base_url, model_id,
                                   thinking=thinking, effort=effort, compat=compat)
         elif sdk in ["responses", "response"]:
