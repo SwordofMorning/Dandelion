@@ -209,6 +209,11 @@ class StateTool(BaseTool):
 
         try:
             state_file = self._get_state_file()  # ensures the blank file exists
+            # A manager may be attached without an active session directory
+            # (ensure_task_state_file() -> None). Report it as a tool error
+            # instead of crashing on None + '.tmp' inside _atomic_write_json().
+            if not state_file:
+                return False, "Error: 'update_state' found no active session directory to persist task state."
             self._atomic_write_json(state_file, state)
         except OSError as e:
             # Disk-level failures (state path corrupted into a directory, full

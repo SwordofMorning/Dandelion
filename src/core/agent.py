@@ -16,10 +16,8 @@
 
 import os
 import re
-import sys
 import json
 import time
-import datetime
 
 from src.utils import SafeLLMClient
 from src.utils import CLIPrinter
@@ -37,16 +35,12 @@ from src.tool import (
     SSHTool, TimeTool,
     ReadPdfTool, ReadImageTool
 )
-from src.tool.base_tool import BaseTool
 from src.tool.media import (
     attach_media_blocks, DEFAULT_MEDIA_LIMITS
 )
 from .compress import (
     ContextCompressor,
     extract_usage_tokens,
-    classify_compaction_summary,
-    resolve_compact_summary_max_tokens,
-    build_compaction_message,
 )
 
 # Create a module-level CLIPrinter instance for convenience
@@ -169,9 +163,6 @@ class MyAgent:
         # so the tail of system_prompt stays stable during tool loops (cache-friendly).
         self._memories_key = None
         self._memories_cache = ""
-        # Last built system prompt, reused by _soft_token_limit() so the token
-        # budget accounts for the real request overhead without rebuilding.
-        self._last_system_prompt = ""
 
         # ----- Context compressor & usage metrics -----
         self.compressor = ContextCompressor(self.client, self.session, self.config)
@@ -332,60 +323,6 @@ class MyAgent:
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in content
             )
         return True
-    # End-def
-
-    ##
-     # @brief True if an assistant message ends with a tool_use block (handles both
-     # dict blocks loaded from history.log and SDK objects in memory).
-     #
-     # @return True of False.
-     # @retval True is end with tool_use.
-     # @retval False is not end with tool_use.
-     #
-    @staticmethod
-    def _msg_ends_with_tool_use(msg):
-        if msg.get("role") != "assistant":
-            return False
-        content = msg.get("content", "")
-        if not isinstance(content, list) or not content:
-            return False
-        last = content[-1]
-        if isinstance(last, dict):
-            return last.get("type") == "tool_use"
-        return getattr(last, "type", None) == "tool_use"
-    # End-def
-
-    ##
-     # @brief Trim head so it never ends with an assistant tool_use message.
-     # The trimmed tool_use message stays in middle (summarized) together with its
-     # matching tool_result, so the summary insertion can never split a pair.
-     #
-     # @param history Full message history.
-     # @param head_size Desired head size before trimming.
-     #
-     # @return Trimmed head list (never ends with an assistant tool_use).
-     #
-    @staticmethod
-    def _trim_head_for_tool_use(history, head_size):
-        head = history[:head_size]
-        while head and MyAgent._msg_ends_with_tool_use(head[-1]):
-            head = head[:-1]
-        return head
-    # End-def
-
-    ##
-     # @brief Append-only archive filename: history length + timestamp,
-     # so a second compaction at the same history length never overwrites the first.
-     #
-     # @param archive_dir Session archives directory.
-     # @param history_len History length at compaction time.
-     #
-     # @return Absolute path like <archive_dir>/history_<len>_<timestamp>.json.
-     #
-    @staticmethod
-    def _archive_path(archive_dir, history_len):
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        return os.path.join(archive_dir, f"history_{history_len}_{ts}.json")
     # End-def
 
     ##
@@ -602,7 +539,6 @@ class MyAgent:
         # user message (see _inject_dynamic_context), so the system prompt
         # stays byte-identical for the whole session -> prefix cache hits.
         system_prompt = self.prompt_builder.build()
-        self._last_system_prompt = system_prompt
 
         # 1.1 Dynamic Context Injection
         # Only at a new user turn: the newest history message is a plain-text
@@ -840,11 +776,6 @@ class MyAgent:
         # the session tier (and possibly the whole history) changed.
         self._memories_key = None
         self._memories_cache = ""
-        # The cached system prompt was built from the PREVIOUS session's task
-        # state and memory index. Drop it so the next token-budget estimate
-        # (_soft_token_limit) rebuilds from the new session instead of
-        # reusing stale overhead from the old branch.
-        self._last_system_prompt = ""
         # NOTE: previously injected [Dandelion Context] blocks inside
         # history are intentionally NOT stripped here: keeping the messages
         # prefix byte-identical lets the server-side prefix cache survive a

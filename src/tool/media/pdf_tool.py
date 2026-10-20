@@ -15,8 +15,6 @@
  # decides whether the model retries or delegates.
  #
 
-import os
-
 from .media_base import MediaToolBase, PDF_MEDIA_TYPE, human_size
 from .media_estimate import estimate_pdf_cost, TOKENS_PER_PDF_PAGE
 
@@ -168,14 +166,3 @@ class ReadPdfTool(MediaToolBase):
         )
     # End-def
 # End-class
-
-##
- # @brief Module level shortcut used by the tool factory.
- #
- # @param kwargs Arguments forwarded to ReadPdfTool.
- #
- # @return ReadPdfTool instance.
- #
-def make_tool(**kwargs):
-    return ReadPdfTool(**kwargs)
-# End-def

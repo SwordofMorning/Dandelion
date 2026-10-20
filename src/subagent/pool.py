@@ -32,19 +32,17 @@ class SubAgentPool:
         self.config = config
         self.all_tools = all_tools
         self.max_depth = max_depth
-        self.completed_results = []
     # End-def
 
     ##
-     # @brief Create and run a SubAgent in one call, then record the result.
+     # @brief Create and run a SubAgent in one call.
      #
      # Flow: 
      # 1. assign a sa-<hex> id -> 
      # 2. resolve toolset (failure -> "failed" result) -> 
      # 3. construct SubAgent with routing context -> 
      # 4. SubAgent.run() (exception -> "failed" result collecting sub_results) -> 
-     # 5. append to completed_results -> 
-     # 6. return.
+     # 5. return.
      #
      # @note Called by SpawnSubagentTool (depth=0, no parent_tools) and
      # RestrictedSpawnTool (depth+1, parent_tools = parent's toolset),
@@ -82,7 +80,6 @@ class SubAgentPool:
                 depth_reached=depth,
                 error_message=err_msg
             )
-            self.completed_results.append(result)
             return result
         # End-except
 
@@ -128,28 +125,6 @@ class SubAgentPool:
             )
         # End-except
 
-        self.completed_results.append(result)
         return result
-    # End-def
-
-    ##
-     # @brief Render an execution summary of all completed SubAgents.
-     #
-     # @note No current caller (reserved for CLI / logging display).
-     #
-     # @return Multi-line summary string; "(No SubAgents executed)" when empty.
-     #
-    def get_summary(self) -> str:
-        if not self.completed_results:
-            return "(No SubAgents executed)"
-
-        lines = ["=== SubAgent Execution Summary ==="]
-        for r in self.completed_results:
-            status_mark = "+" if r.status == "success" else "!"
-            lines.append(
-                f"  [{status_mark}] {r.subagent_id}: {r.task_description[:60]}... "
-                f"({r.tool_calls_made} calls, depth={r.depth_reached})"
-            )
-        return "\n".join(lines)
     # End-def
 # End-class

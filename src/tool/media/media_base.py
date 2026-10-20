@@ -182,13 +182,6 @@ class MediaToolBase(BaseTool):
     # End-def
 
     ##
-     # @brief Media block kinds this tool produces.
-     #
-    def get_kind(self):
-        return self.kind
-    # End-def
-
-    ##
      # @brief Extensions this tool accepts (subclass responsibility).
      #
     def supported_extensions(self):
@@ -215,63 +208,6 @@ class MediaToolBase(BaseTool):
      #
     def size_limit_bytes(self):
         return int(self.media_limits.get("max_image_bytes", DEFAULT_MEDIA_LIMITS["max_image_bytes"]))
-    # End-def
-
-    ##
-     # @brief Enabled media extensions per model profile.
-     #
-     # @param profile Active model profile (dict) or None.
-     #
-     # @return list of enabled extensions, or None when unconfigured.
-     #
-    @staticmethod
-    def enabled_extensions(profile):
-        if not isinstance(profile, dict):
-            return None
-        # End-if
-        raw = profile.get("file")
-        if raw is None:
-            return None
-        # End-if
-        if not isinstance(raw, (list, tuple)):
-            return []
-        # End-if
-        return [str(item).strip().lower() for item in raw if str(item).strip()]
-    # End-def
-
-    ##
-     # @brief Extract per-model media limits from a model profile.
-     #
-     # @param profile Active model profile (dict) or None.
-     #
-     # @return dict merged over DEFAULT_MEDIA_LIMITS.
-     #
-    @staticmethod
-    def limits_from_profile(profile):
-        limits = dict(DEFAULT_MEDIA_LIMITS)
-        if not isinstance(profile, dict):
-            return limits
-        # End-if
-
-        for key in limits.keys():
-            if key not in profile:
-                continue
-            # End-if
-            value = profile.get(key)
-            try:
-                if key.startswith("max_") and key.endswith("_bytes"):
-                    limits[key] = parse_size_bytes(value, int(limits[key]))
-                elif key.startswith("max_"):
-                    limits[key] = max(int(value), 1)
-                else:
-                    limits[key] = float(value)
-                # End-if
-            except (TypeError, ValueError):
-                print(f"[-] Warning: invalid media limit '{key}'={value!r}; using default.")
-            # End-try
-        # End-for
-
-        return limits
     # End-def
 
     ##
@@ -519,41 +455,3 @@ class MediaToolBase(BaseTool):
         )
     # End-def
 # End-class
-
-##
- # @brief Parse a size value that may be an int or a string like "15MB".
- #
- # @param value Raw config value.
- # @param default Value used when parsing fails.
- #
- # @return int size in bytes.
- #
-def parse_size_bytes(value, default):
-    if isinstance(value, bool):
-        return default
-    # End-if
-    if isinstance(value, (int, float)):
-        return int(value)
-    # End-if
-    if not isinstance(value, str):
-        return default
-    # End-if
-
-    text = value.strip().lower()
-    units = (("gb", 1024 ** 3), ("mb", 1024 ** 2), ("kb", 1024), ("b", 1))
-    for suffix, scale in units:
-        if text.endswith(suffix):
-            try:
-                return int(float(text[: -len(suffix)].strip()) * scale)
-            except ValueError:
-                return default
-            # End-try
-        # End-if
-    # End-for
-
-    try:
-        return int(float(text))
-    except ValueError:
-        return default
-    # End-try
-# End-def

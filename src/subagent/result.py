@@ -6,8 +6,7 @@
  # Messages struct between Agents.
  #
 
-import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import List
 
 @dataclass
@@ -26,18 +25,6 @@ class SubAgentResult:
     sub_results: List['SubAgentResult'] = field(default_factory=list)
 
     # ----- @par 2. Type Convert -----
-
-    ##
-     # @brief Serialize this result into a JSON string.
-     #
-     # @note No current caller (reserved for debugging / persistence);
-     # the production path is to_context_string() via spawn_tool.
-     #
-     # @return JSON string with ensure_ascii=True.
-     #
-    def to_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=True, indent=2)
-    # End-def
 
     ##
      # @brief Render a compact multi-line text summary for the parent agent.
