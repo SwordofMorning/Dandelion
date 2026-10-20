@@ -54,7 +54,6 @@ COST_MARKER_TEMPLATE = "cost={cost} tokens"
 # Matches a whole media pointer, e.g. "[Multimodal asset: a.png (...)]".
 # Imported by src/core/agent.py so the accounting has a single definition.
 ASSET_POINTER_RE = r"\[Multimodal asset:[^\]]*\]"
-_ASSET_POINTER_RE = __import__("re").compile(ASSET_POINTER_RE)
 
 ##
  # ========================================
@@ -374,87 +373,6 @@ def is_media_block(block):
     # End-if
     source = block.get("source")
     return isinstance(source, dict) and source.get("type") == "base64"
-# End-def
-
-##
- # @brief Collect cost markers and hydrated media blocks of one payload.
- #
- # @param blocks Content payload: a block list, a single block, or a string.
- #
- # @return (marker_count, block_count)
- #
- # @note A payload may carry BOTH a pointer and the hydrated block for the same
- # media (the main agent dispatches them together), so the caller decides which
- # one to count; the marker is authoritative whenever it is present.
- #
-def _count_payload(blocks):
-    marker_count = 0
-    block_count = 0
-
-    def walk(value):
-        nonlocal marker_count, block_count
-
-        if isinstance(value, str):
-            marker_count += len(_ASSET_POINTER_RE.findall(value))
-            return
-        # End-if
-
-        if isinstance(value, dict):
-            if value.get("type") == "text":
-                walk(value.get("text", ""))
-                return
-            # End-if
-            if is_media_block(value):
-                block_count += 1
-                return
-            # End-if
-            if value.get("type") == "tool_result":
-                walk(value.get("content", ""))
-                return
-            # End-if
-            for key, item in value.items():
-                if key == "data" and isinstance(item, str):
-                    continue
-                # End-if
-                walk(item)
-            # End-for
-            return
-        # End-if
-
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                walk(item)
-            # End-for
-        # End-if
-    # End-def walk
-
-    walk(blocks)
-    return marker_count, block_count
-# End-def
-
-##
- # @brief Count media payloads referenced by a message list.
- #
- # @param messages Message list (main agent history or SubAgent messages).
- #
- # @return int count of media units.
- #
- # @note Both storage shapes are supported because the two loops persist
- # differently: the main agent keeps pointer text ("[Multimodal asset: ...]")
- # in history, while a SubAgent's private list embeds the hydrated block.
- # A payload carrying both forms (pointer + block for the same media) is counted
- # ONCE, using the marker as the authoritative source.
- #
-def count_media_in_messages(messages):
-    count = 0
-
-    for msg in messages or []:
-        content = msg.get("content", "") if isinstance(msg, dict) else msg
-        marker_count, block_count = _count_payload(content)
-        count += marker_count if marker_count else block_count
-    # End-for
-
-    return count
 # End-def
 
 ##

@@ -232,7 +232,6 @@ class SafeLLMClient:
      # @param toolset_name        Sub-agent toolset ("minimal"/"planning"/...).
      # @param depth               Sub-agent recursion depth (>=2 forces "complex").
      # @param stream              True -> safe_stream_request, False -> safe_request.
-     # @param estimated_tokens    Token estimate used by the rate limiter.
      #
      # @return (response, None) on success; (None, error_string) on failure.
      #
@@ -240,14 +239,14 @@ class SafeLLMClient:
      # @see SubAgent.run()
      #
     def route_request(self, payload, task_description="", toolset_name="minimal",
-                      depth=0, stream=True, estimated_tokens=2000):
+                      depth=0, stream=True):
         # 0. Fallback to main agent model if SUB_LIST is empty.
         if not self._policy or not self._policy.specs:
             return self.safe_stream_request(payload) if stream else self.safe_request(payload)
 
         # 1. Get specified subagent model via conditions.
         try:
-            alias = self._policy.select_model(task_description, toolset_name, depth, estimated_tokens)
+            alias = self._policy.select_model(task_description, toolset_name, depth)
         except RuntimeError as e:
             return None, str(e)
 

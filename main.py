@@ -7,7 +7,7 @@
 
 import sys
 
-from mk.lib.paths import base_dir, config_dir, config_path, log_dir
+from mk.lib.paths import base_dir, config_path, log_dir
 
 from src.utils import load_api_config
 from src.utils import SessionManager

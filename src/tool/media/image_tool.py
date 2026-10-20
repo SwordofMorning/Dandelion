@@ -12,9 +12,7 @@
  # with a pointer to read_file (text) instead.
  #
 
-import os
-
-from .media_base import MediaToolBase, IMAGE_MEDIA_TYPES, human_size
+from .media_base import MediaToolBase, IMAGE_MEDIA_TYPES
 from .media_estimate import estimate_image_cost, read_image_size
 
 ##
@@ -149,14 +147,3 @@ class ReadImageTool(MediaToolBase):
         return success, output
     # End-def
 # End-class
-
-##
- # @brief Module level shortcut used by the tool factory.
- #
- # @param kwargs Arguments forwarded to ReadImageTool.
- #
- # @return ReadImageTool instance.
- #
-def make_tool(**kwargs):
-    return ReadImageTool(**kwargs)
-# End-def

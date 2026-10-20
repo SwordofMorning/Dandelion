@@ -95,11 +95,10 @@ class RoutingPolicy:
      # @param task_description Subagent's task description, used to call infer_conditions.
      # @param toolset_name Subagent's toolset, used to call infer_conditions.
      # @param depth Subagent's "SubSub" depth, used to call infer_conditions.
-     # @param estimated_tokens Deprecated/unused token estimate.
      #
      # @return Selected model alias (str); None if no sub models defined.
      #
-    def select_model(self, task_description: str, toolset_name: str, depth: int, estimated_tokens: int = 2000) -> str:
+    def select_model(self, task_description: str, toolset_name: str, depth: int) -> str:
         if not self.specs:
             return None # No sub_list defined
 

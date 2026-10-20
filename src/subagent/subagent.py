@@ -46,9 +46,6 @@ class SubAgent(ISubAgent):
         self.sub_results = []
         self.routing_context = routing_context or {}
 
-        # Live view of the SubAgent's own message list, so available_token_budget()
-        # can estimate the remaining window without extra plumbing.
-        self._messages = []
         # Media payloads read by this SubAgent: hydrated as SIBLING parts of the
         # tool_result for every request of the loop, never nested inside it
         # (nested inline parts are dropped by the gateway).
@@ -193,9 +190,6 @@ class SubAgent(ISubAgent):
         print(f"    Task: {task_description[:80]}...")
 
         messages = [{"role": "user", "content": task_description}]
-        # Published for available_token_budget() (media tools read it before
-        # deciding whether a document/image fits in the SubAgent context).
-        self._messages = messages
 
         # Agent's loop.
         try:

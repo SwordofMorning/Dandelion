@@ -10,7 +10,6 @@
 import datetime
 import json
 import os
-import re
 
 DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 128000
 MIN_COMPACT_SUMMARY_CHARS = 40

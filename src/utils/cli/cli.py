@@ -17,7 +17,6 @@ import os
 import shlex
 import signal
 import subprocess
-import builtins
 
 from .interrupt import (
     request as request_stop,
