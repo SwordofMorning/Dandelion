@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 # @note Endpoint flavor vocabulary is owned by llm_provider/effort.py.
 from ..llm_provider.effort import FLAVOR_AUTO, VALID_FLAVORS
+from ..config.config import normalize_conditions
 
 ##
  # ========================================
@@ -153,7 +154,7 @@ class ModelRegistry:
                     base_url=m.get("base_url", ""),
                     api_key=m.get("api_key", ""),
                     max_tokens=m.get("max_token", 8192),
-                    conditions=m.get("conditions", []),
+                    conditions=normalize_conditions(m.get("conditions", []), alias),
                     thinking=thinking,
                     effort=effort,
                     compat=compat,

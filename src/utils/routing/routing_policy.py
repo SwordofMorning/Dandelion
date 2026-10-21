@@ -4,38 +4,60 @@
  # 
  # @brief Subagent spawn (call/generate) policy.
  #
+ # @note Four routing categories (breaking change, no legacy labels):
+ #   media   - images / PDF / charts / waveforms (multimodal models)
+ #   review  - code review / audit / verification (review-oriented models)
+ #   complex - design / refactor / debugging / planning (strong reasoning models)
+ #   simple  - routine work and the default (fast, cheap models)
+ #
+ # @note Selection: the inferred categories are tried in CATEGORY_PRIORITY
+ #   order; for each one the first SUB_LIST model declaring it wins. So a
+ #   "review" task is not captured by a "complex" model listed earlier.
+ #
+ # @note Categories are preferences, not capability checks: a model must still
+ #   be configured correctly for media (see the "media" block of MODEL_LIST).
+ #
+
+import re
+
+# Highest priority first. "simple" is the default and the last resort.
+CATEGORY_PRIORITY = ("media", "review", "complex", "simple")
 
 ##
  # @brief Subagent routing policy.
  #
 class RoutingPolicy:
+    # Matched against the task description only, on word boundaries, so
+    # "filesystem" does not count as "system" and "checkout" is not "check".
     CONDITION_KEYWORDS = {
-        "simple": [
-            "read", "list", "summary", "format", "convert",
-            "extract", "simple", "basic", "document", "documentation",
-            "write a", "create a", "hello world", "boilerplate", 
-            "skeleton", "print", "straightforward", "routine"
+        "media": [
+            "image", "images", "pdf", "picture", "photo", "diagram", "screenshot",
+            "visual", "media", "multimodal", "waveform", "chart", "figure",
+        ],
+        "review": [
+            "review", "audit", "inspect", "critique", "verify", "verification",
+            "check", "assess", "assessment", "evaluate", "evaluation",
+            "post-review", "cross-check", "diff check", "lint",
         ],
         "complex": [
-            "design", "architecture", "refactor", "implement",
-            "develop", "system", "framework", "integrate", "migrate",
-            "optimize", "rewrite", "complex", "advanced"
+            "design", "architecture", "refactor", "implement", "develop",
+            "system", "optimize", "rewrite", "complex", "advanced",
+            "reason", "analyze", "analyse", "prove", "math", "logic", "think",
+            "debug", "troubleshoot", "fix", "solve", "plan", "decompose",
         ],
-        "reasoning": [
-            "reason", "analyze", "prove", "derive", "math",
-            "logic", "think", "debug", "troubleshoot", "fix", 
-            "resolve", "plan", "decompose", "break down", "evaluate",
-            "investigate"
+        "simple": [
+            "simple", "basic", "format", "extract", "summary", "summarize",
+            "read", "list", "convert", "routine", "boilerplate", "skeleton", "print",
         ],
-        "tool_heavy": [
-            "batch", "iterate", "all files", "recursive",
-            "large scale", "grep", "search", "replace all", "find all",
-            "tool_heavy"
-        ],
-        "long_context": [
-            "entire codebase", "full context", "large file", "huge", 
-            "comprehensive", "read all", "scan project", "long_context"
-        ],
+    }
+
+    # A media file named in the task is a strong media signal on its own.
+    MEDIA_FILE_RE = re.compile(r"\.(png|jpe?g|webp|gif|bmp|pdf)\b", re.IGNORECASE)
+
+    # Toolsets that imply a category regardless of the wording.
+    TOOLSET_CATEGORIES = {
+        "planning": "complex",
+        "code_analysis": "complex",
     }
 
     ##
@@ -44,76 +66,95 @@ class RoutingPolicy:
     def __init__(self, registry):
         self.registry = registry
         self.specs = registry.get_all_subagent_specs()
+        self._patterns = {
+            cond: re.compile(
+                r"(?<![a-z0-9_])(?:" + "|".join(re.escape(k) for k in kws) + r")(?![a-z0-9_])"
+            )
+            for cond, kws in self.CONDITION_KEYWORDS.items()
+        }
     # End-def
 
     ##
-     # @brief Dynamic set conditions.
+     # @brief Infer routing categories for a task.
      #
      # @param task_description Subagent's task description.
-     # @param toolset_name Subagent's toolset.
-     # @param depth Subagent's "SubSub" depth.
+     # @param toolset_name Subagent's toolset (matched by explicit rules only).
+     # @param depth Subagent depth (root = 0, direct SubAgent = 1).
      #
-     # @return Routing conditions.
+     # @return Non-empty set drawn from CATEGORY_PRIORITY.
      #
     def infer_conditions(self, task_description: str, toolset_name: str, depth: int) -> set:
-        conditions = set()
-        text = (task_description + " " + toolset_name).lower()
+        text = (task_description or "").lower()
+        conditions = {cond for cond, pat in self._patterns.items() if pat.search(text)}
 
-        # 1. Extract From Prompt
-        for cond, keywords in self.CONDITION_KEYWORDS.items():
-            if any(kw.lower() in text for kw in keywords):
-                conditions.add(cond)
+        if self.MEDIA_FILE_RE.search(text):
+            conditions.add("media")
+        # End-if
 
-        # 2. Runtime
+        implied = self.TOOLSET_CATEGORIES.get(toolset_name)
+        if implied:
+            conditions.add(implied)
+        # End-if
+
+        # A delegation below a direct SubAgent is treated as hard work.
         if depth >= 2:
             conditions.add("complex")
+        # End-if
 
-        if toolset_name == "planning":
-            conditions.add("reasoning")
-            conditions.add("complex")
-        elif toolset_name == "full":
-            conditions.add("tool_heavy")
-            conditions.add("long_context")
-        elif toolset_name == "code_analysis":
-            conditions.add("tool_heavy")
-            conditions.add("reasoning")
-
-        # 3. Conflict Resolution
-        if "simple" in conditions and ("complex" in conditions or "reasoning" in conditions):
-            conditions.remove("simple")
-
-        # 4. Fallback to simple
+        if conditions & {"media", "review", "complex"}:
+            conditions.discard("simple")
+        # End-if
         if not conditions:
             conditions.add("simple")
-
+        # End-if
         return conditions
     # End-def
 
     ##
-     # @brief Choose Subagent (LLM Model) from condition
+     # @brief Primary category of a condition set (highest priority).
      #
-     # @param task_description Subagent's task description, used to call infer_conditions.
-     # @param toolset_name Subagent's toolset, used to call infer_conditions.
-     # @param depth Subagent's "SubSub" depth, used to call infer_conditions.
+    @staticmethod
+    def primary_category(conditions: set) -> str:
+        for cat in CATEGORY_PRIORITY:
+            if cat in conditions:
+                return cat
+            # End-if
+        # End-for
+        return "simple"
+    # End-def
+
+    ##
+     # @brief Choose a SubAgent model for a task.
+     #
+     # @param task_description Subagent's task description.
+     # @param toolset_name Subagent's toolset.
+     # @param depth Subagent depth.
      #
      # @return Selected model alias (str); None if no sub models defined.
      #
     def select_model(self, task_description: str, toolset_name: str, depth: int) -> str:
         if not self.specs:
-            return None # No sub_list defined
+            return None
+        # End-if
 
         task_conditions = self.infer_conditions(task_description, toolset_name, depth)
 
-        # 1. Condition Match
-        for spec in self.specs:
-            spec_conditions = set(spec.conditions)
-            if task_conditions & spec_conditions or "default" in spec_conditions:
-                return spec.alias
+        # 1. Inferred categories in priority order, then "simple" as a fallback tier.
+        ordered = [c for c in CATEGORY_PRIORITY if c in task_conditions]
+        if "simple" not in ordered:
+            ordered.append("simple")
+        # End-if
+        for cat in ordered:
+            for spec in self.specs:
+                if cat in spec.conditions:
+                    return spec.alias
+                # End-if
+            # End-for
         # End-for
 
-        # 2. Fallback to first registered sub-agent model
+        # 2. Nothing declares a matching category: first registered sub-agent model.
         fallback_alias = self.specs[0].alias
-        print(f"[Router] Fallback to '{fallback_alias}' (ignoring conditions)")
+        print(f"[Router] No model declares {sorted(task_conditions)}; falling back to '{fallback_alias}'")
         return fallback_alias
     # End-def
 
@@ -122,18 +163,13 @@ class RoutingPolicy:
      #
      # Returns every registered sub-agent alias except `exclude_alias`, in
      # SUB_LIST priority order. Used by route_request as the last-resort
-     # candidates when the selected model fails; rate-limit checks are done
-     # by the caller per candidate.
+     # candidates when the selected model fails.
      #
      # @param exclude_alias  The alias that failed and must be excluded.
      #
      # @return List of candidate aliases (possibly empty).
      #
     def get_fallback_chain(self, exclude_alias: str) -> list:
-        chain = []
-        for spec in self.specs:
-            if spec.alias != exclude_alias:
-                chain.append(spec.alias)
-        return chain
+        return [spec.alias for spec in self.specs if spec.alias != exclude_alias]
     # End-def
 # End-class

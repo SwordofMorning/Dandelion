@@ -12,7 +12,7 @@
  #     },
  #     "basic": {
  #         "name": "deepseek-v4-pro",
- #         "conditions": ["reasoning", "long_context", "complex"],
+ #         "conditions": ["complex", "review"],
  #         "max_token": 819200,
  #         "max_context_tokens": 819200
  #     },
@@ -43,6 +43,74 @@ import json
 # @note Endpoint flavor vocabulary is owned by llm_provider/effort.py so the
 # config layer, the model registry and the providers cannot drift apart.
 from ..llm_provider.effort import FLAVOR_AUTO, VALID_FLAVORS
+
+##
+ # ========================================
+ # @section 0. SubAgent settings ([Main] section)
+ # ========================================
+ #
+
+# Routing categories accepted in basic.conditions (breaking change: the former
+# reasoning / tool_heavy / long_context / default labels are rejected).
+VALID_CONDITIONS = ("media", "review", "complex", "simple")
+
+DEFAULT_SUB_DEPTH = 1
+DEFAULT_SUB_CONCURRENCY = 4
+
+##
+ # @brief Read a non-negative integer from the [Main] section.
+ #
+ # @param config ConfigParser instance.
+ # @param key Option name.
+ # @param default Value used when the option is missing or invalid.
+ #
+ # @return int >= 0.
+ #
+def _parse_non_negative_int(config, key, default):
+    raw = config.get("Main", key, fallback=str(default)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        print(f"[!] [Main] {key}={raw!r} is not an integer. Defaulting to {default}.")
+        return default
+    # End-try
+    if value < 0:
+        print(f"[!] [Main] {key}={value} is negative. Defaulting to {default}.")
+        return default
+    # End-if
+    return value
+# End-def
+
+##
+ # @brief Normalise basic.conditions to the four routing categories.
+ #
+ # @param raw Raw "conditions" value from model metadata.
+ # @param model_name Model alias, used by the warning message.
+ #
+ # @return De-duplicated list of lowercase categories (order preserved).
+ #
+def normalize_conditions(raw, model_name=""):
+    if not isinstance(raw, list):
+        if raw not in (None, []):
+            print(f"[!] Model '{model_name}': 'conditions' must be a list. Ignoring it.")
+        # End-if
+        return []
+    # End-if
+
+    out = []
+    for item in raw:
+        value = str(item).strip().lower() if isinstance(item, str) else ""
+        if value not in VALID_CONDITIONS:
+            print(f"[!] Model '{model_name}': unknown condition {item!r} ignored. "
+                  f"Expected one of {list(VALID_CONDITIONS)}.")
+            continue
+        # End-if
+        if value not in out:
+            out.append(value)
+        # End-if
+    # End-for
+    return out
+# End-def
 
 ##
  # ========================================
@@ -355,12 +423,7 @@ def _parse_model_entry(model_data: dict, section: str = ""):
         return None
     # End-if
 
-    raw_conditions = basic_node.get("conditions", [])
-    if isinstance(raw_conditions, list):
-        conditions = [str(c).strip() for c in raw_conditions if isinstance(c, str) and c.strip()]
-    else:
-        conditions = []
-    # End-if
+    conditions = normalize_conditions(basic_node.get("conditions", []), name)
 
     try:
         max_token = int(basic_node.get("max_token", 8192))
@@ -456,6 +519,10 @@ def load_api_config(file_path):
         sub_list = []
     # End-try
 
+    # SubAgent recursion depth and parallelism (see _parse_non_negative_int)
+    sub_depth = _parse_non_negative_int(config, "SUB_DEPTH", DEFAULT_SUB_DEPTH)
+    sub_concurrency = max(_parse_non_negative_int(config, "SUB_CONCURRENCY", DEFAULT_SUB_CONCURRENCY), 1)
+
     # Read Search API Key
     tavily_api_key = config.get("Main", "TAVILY_API_KEY", fallback="")
 
@@ -541,6 +608,10 @@ def load_api_config(file_path):
         # Context window / compaction threshold (per-model)
         "MAX_CONTEXT_TOKENS": active_profile["max_context_tokens"],
         "SUB_LIST": sub_list,
+        # Max SubAgent recursion depth: 0 disables SubAgents, 1 = direct children only
+        "SUB_DEPTH": sub_depth,
+        # Max SubAgents running at the same time inside one parallel segment (1 = serial)
+        "SUB_CONCURRENCY": sub_concurrency,
         "ALL_MODELS": all_models,
         # Search api key
         "TAVILY_API_KEY": tavily_api_key,

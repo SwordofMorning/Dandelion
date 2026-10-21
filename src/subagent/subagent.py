@@ -6,13 +6,32 @@
  # A SubAgent which could do some jobs, like a thread.
  # When call run(), a new LLM Context were created which also will be written into logs.
  #
+ # @note Depth model (1-based): root agent = 0, direct SubAgent = 1,
+ #       SubSubAgent = 2. max_depth comes from [Main] SUB_DEPTH. A SubAgent
+ #       only receives 'spawn_subagent' when depth < max_depth, and the pool
+ #       rejects any spawn beyond max_depth regardless of what the model asks.
+ #
+ # @note Concurrency: the ROOT agent may run several SubAgents in parallel
+ #       (src/subagent/dispatch.py). Inside a SubAgent, tool calls (including
+ #       nested spawns) stay serial, which bounds the number of threads and
+ #       avoids pool starvation between parents and children.
+ #
 
 import copy
+import os
 import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
+from .dispatch import dispatch_tool_calls, in_worker_thread
 from src.tool.media import (MediaToolBase, estimate_messages_tokens,
                             attach_media_blocks, DEFAULT_MEDIA_LIMITS)
+from src.utils.cli.interrupt import is_requested as stop_requested
+
+MAX_TURNS = 30
+
+# Tools whose successful calls produce files reported back as artifacts.
+WRITE_TOOLS = ("write_file", "edit_file", "write_excel")
+MARKDOWN_WRITE_ACTIONS = ("write", "append")
 
 ##
  # @brief Implement of Subagent.
@@ -23,20 +42,19 @@ class SubAgent(ISubAgent):
      #
      # @param safe_client llm_request client.
      # @param logger log management.
-     # @param tools toolset.
      # @param config environment config.
      # @param pool subagent pool, aka Orchestrator.
      # @param role_prompt subagent's system prompt, generated from parentAgent ('s plan tool).
      # @param tools subagent's toolset.
-     # @param depth subagent's self recursion depth.
-     # @param max_depth how depth allow subagent to recur.
+     # @param depth this SubAgent's depth (direct child of the root = 1).
+     # @param max_depth maximum depth allowed ([Main] SUB_DEPTH).
      # @param subagent_id ID, used to manage in pool.
      # @param routing_context used to dynamic choose LLM models.
      #
     def __init__(
         self, safe_client, logger, config,
         pool, role_prompt, tools,
-        depth=0, max_depth=3, subagent_id=None, routing_context=None
+        depth=1, max_depth=1, subagent_id=None, routing_context=None
     ):
         super().__init__(safe_client, logger, tools, config)
         self.pool = pool
@@ -44,6 +62,7 @@ class SubAgent(ISubAgent):
         self.max_depth = max_depth
         self.subagent_id = subagent_id or f"subagent-{id(self):x}"
         self.sub_results = []
+        self.artifacts = []
         self.routing_context = routing_context or {}
 
         # Media payloads read by this SubAgent: hydrated as SIBLING parts of the
@@ -54,10 +73,9 @@ class SubAgent(ISubAgent):
         # takes private copies so slot/budget checks measure its own request.
         self._rehost_media_tools()
 
-        self.system_prompt = self._build_system_prompt(role_prompt)
-        # NOTE: media slots are computed in available_media_slots() below.
-
-
+        # Delegation capability is decided here, once, and the schema is always
+        # rebuilt afterwards so tools and tool_schemas can never disagree.
+        self.tools.pop("spawn_subagent", None)
         if self.depth < self.max_depth:
             # Lazy import to prevent circular dependency
             from ..tool.agent.spawn_tool import RestrictedSpawnTool
@@ -67,8 +85,10 @@ class SubAgent(ISubAgent):
                 current_depth=self.depth,
                 max_depth=self.max_depth
             )
-            self._refresh_tool_schemas()
         # End-if
+        self._refresh_tool_schemas()
+
+        self.system_prompt = self._build_system_prompt(role_prompt)
     # End-def
     
     ##
@@ -118,25 +138,22 @@ class SubAgent(ISubAgent):
      # @param role_prompt subagent's system prompt, generated from parentAgent ('s plan tool).
      #
     def _build_system_prompt(self, role_prompt):
-        # Recursion depth.
-        if self.depth == 0:
-            depth_info = (
-                "You are a dedicated SubAgent. "
-                "Complete the sub-task using available tools. "
-                "You may delegate narrow sub-tasks to SubSubAgents using 'spawn_subagent'. "
-                "Always return a concise, well-structured summary of your findings."
-            )
-        elif self.depth < self.max_depth:
+        # Recursion depth: the wording follows the tool actually registered.
+        if "spawn_subagent" in self.tools:
             remaining = self.max_depth - self.depth
             depth_info = (
                 f"You are a SubAgent at depth {self.depth}/{self.max_depth}. "
-                f"You may delegate sub-tasks up to {remaining} more level(s). "
-                "Return a concise summary of your findings."
+                "Complete the sub-task using available tools. "
+                f"You may delegate narrow sub-tasks using 'spawn_subagent' "
+                f"({remaining} level(s) remaining). "
+                "Always return a concise, well-structured summary of your findings."
             )
         else:
             depth_info = (
-                f"You are at maximum recursion depth ({self.max_depth}). "
-                "You MUST complete the task yourself. Do not attempt to delegate."
+                f"You are a dedicated SubAgent (depth {self.depth}/{self.max_depth}). "
+                "You MUST complete the sub-task yourself using the available tools. "
+                "Delegation is not available: do NOT attempt to call 'spawn_subagent'. "
+                "Always return a concise, well-structured summary of your findings."
             )
         # End-if
 
@@ -147,6 +164,12 @@ class SubAgent(ISubAgent):
             "Always prioritize your original sub-task and constraints."
         )
 
+        # Shared workspace: other SubAgents may run at the same time.
+        workspace_rule = (
+            "Shared workspace: other SubAgents may be working in parallel. "
+            "Only modify the files your task assigns to you."
+        )
+
         # 7. Intermediate product path
         product_path = (
             "Intermediate product path:\n"
@@ -155,8 +178,7 @@ class SubAgent(ISubAgent):
             "Minimize the frequency of manual user approvals."
         )
 
-        # Role + Recursion depth + Security rules.
-        return f"{role_prompt}\n\n{depth_info}\n\n{security_rule}\n\n{product_path}"
+        return f"{role_prompt}\n\n{depth_info}\n\n{security_rule}\n\n{workspace_rule}\n\n{product_path}"
     # End-def
     
     ##
@@ -174,6 +196,79 @@ class SubAgent(ISubAgent):
     # End-def
 
     ##
+     # @brief Record the file of a successful write call as an artifact.
+     #
+     # @note The path is resolved exactly like the tool resolved it: write_file,
+     #       edit_file and write_excel join relative paths with their
+     #       workspace_dir, markdown_editor resolves from the process CWD. It is
+     #       shown relative to the workspace when inside it.
+     #
+    def _record_artifact(self, block, success):
+        if not success:
+            return
+        # End-if
+        args = block.input if isinstance(block.input, dict) else {}
+        if block.name in WRITE_TOOLS:
+            path = args.get("file_path")
+        elif block.name == "markdown_editor" and args.get("action") in MARKDOWN_WRITE_ACTIONS:
+            path = args.get("file_path")
+        else:
+            return
+        # End-if
+        if not path:
+            return
+        # End-if
+
+        workspace = getattr(self.tools.get(block.name), "workspace_dir", None)
+        path = str(path)
+        if workspace and block.name in WRITE_TOOLS and not os.path.isabs(path):
+            path = os.path.join(workspace, path)
+        # End-if
+        resolved = os.path.realpath(path)
+        shown = resolved
+        if workspace:
+            root = os.path.realpath(workspace)
+            try:
+                if os.path.commonpath([root, resolved]) == root:
+                    shown = os.path.relpath(resolved, root)
+                # End-if
+            except ValueError:
+                pass
+            # End-try
+        # End-if
+        if shown not in self.artifacts:
+            self.artifacts.append(shown)
+        # End-if
+    # End-def
+
+    ##
+     # @brief Deepest level reached by this SubAgent and its descendants.
+     #
+    def _depth_reached(self):
+        return max([self.depth] + [r.depth_reached for r in self.sub_results])
+    # End-def
+
+    ##
+     # @brief Build the result struct (single exit point for run()).
+     #
+    def _result(self, task_description, status, summary, start_time,
+                tool_calls_made, model_alias="", error_message=""):
+        return SubAgentResult(
+            subagent_id=self.subagent_id,
+            task_description=task_description,
+            status=status,
+            summary=summary,
+            artifacts=list(self.artifacts),
+            tool_calls_made=tool_calls_made,
+            depth_reached=self._depth_reached(),
+            duration_seconds=round(time.time() - start_time, 3),
+            model_alias=model_alias,
+            error_message=error_message,
+            sub_results=list(self.sub_results),
+        )
+    # End-def
+
+    ##
      # @brief SubAgent's loop.
      #
      # @param task_description SubAgent's task prompt.
@@ -184,16 +279,28 @@ class SubAgent(ISubAgent):
     def run(self, task_description) -> SubAgentResult:
         start_time = time.time()
         tool_calls_made = 0
-        max_depth_reached = self.depth
+        model_alias = ""
+        finished = False
+        # Parallel siblings stream silently; their tokens would interleave.
+        echo = not in_worker_thread()
 
-        print(f"\n[*] [SubAgent:{self.subagent_id}] Spawned (depth={self.depth})")
-        print(f"    Task: {task_description[:80]}...")
+        print(f"\n[*] [SubAgent:{self.subagent_id}] Spawned (depth={self.depth}/{self.max_depth})"
+              f" Task: {task_description[:80]}...")
 
         messages = [{"role": "user", "content": task_description}]
 
         # Agent's loop.
         try:
-            for turn in range(30):
+            for turn in range(MAX_TURNS):
+                # A Ctrl+C asks the whole turn to stop: finish at a clean boundary.
+                if stop_requested():
+                    print(f"[!] [SubAgent:{self.subagent_id}] Stop requested; ending early.")
+                    return self._result(task_description, "cancelled",
+                                        self._extract_final_summary(messages), start_time,
+                                        tool_calls_made, model_alias,
+                                        "Stopped by user interrupt.")
+                # End-if
+
                 # ----- @par 1. Payload and Logging -----
 
                 payload = {
@@ -210,89 +317,69 @@ class SubAgent(ISubAgent):
 
                 # ----- @par 2. LLM Request -----
 
-                # Use dynamic route_request based on routing_context
+                route_info = {}
                 resp, err = self.client.route_request(
                     payload=payload,
                     task_description=self.routing_context.get("task_description", task_description),
                     toolset_name=self.routing_context.get("toolset_name", "minimal"),
                     depth=self.routing_context.get("depth", self.depth),
-                    stream=True
+                    stream=True,
+                    echo=echo,
+                    route_info=route_info,
                 )
+                model_alias = route_info.get("alias", model_alias)
 
                 if err:
-                    if self.sub_results:
-                        max_depth_reached = max([self.depth] + [r.depth_reached for r in self.sub_results])
-                    return SubAgentResult(
-                        subagent_id=self.subagent_id,
-                        task_description=task_description,
-                        status="failed",
-                        summary="",
-                        tool_calls_made=tool_calls_made,
-                        depth_reached=max_depth_reached,
-                        error_message=f"{err!s}",
-                        sub_results=self.sub_results
-                    )
+                    return self._result(task_description, "failed", "", start_time,
+                                        tool_calls_made, model_alias, f"{err!s}")
                 # End-if
 
                 self.logger.log_api_call(
                     f"SUBAGENT:{self.subagent_id} POST-CALL (Turn {turn+1}, depth={self.depth})",
-                    resp if resp else {"error": err}
+                    resp
                 )
 
                 messages.append({"role": "assistant", "content": resp.content})
 
                 # Break out, finish subagent loop due to no tool_use.
                 if resp.stop_reason != "tool_use":
+                    finished = True
                     break
+                # End-if
 
-                # ----- @par 3. Tool iterator -----
+                # ----- @par 3. Tool calls (serial inside a SubAgent) -----
 
                 results = []
-                for block in resp.content:
-                    if block.type == "tool_use":
-                        tool_calls_made += 1
-                        handler = self.tools.get(block.name)
-                # Error Handle 1 : Tools Internal Error
-                        if handler:
-                            try:
-                                success, output = handler.execute(**block.input)
-                                if block.name == "spawn_subagent" and success:
-                                    max_depth_reached = max(max_depth_reached, self.depth + 1)
-                            except Exception as e:
-                                success = False
-                                output = f"Tool execution crashed internally: {e!s}"
-                        else:
-                            success, output = False, f"Unknown tool: {block.name}"
-                        # End-if
+                for block, success, output in dispatch_tool_calls(self.tools, resp.content, max_workers=1):
+                    tool_calls_made += 1
+                    self._record_artifact(block, success)
+                    print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
 
-                        print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
-
-                        # Media result: the payload is kept aside and hydrated as
-                        # a sibling part of this user message on every request of
-                        # the loop; the private list stores TEXT ONLY (same
-                        # placement rule as the main agent).
-                        if isinstance(output, dict) and output.get("kind") in ("image", "document"):
-                            media_block = output.get("block")
-                            if media_block:
-                                self._pending_media_blocks.append(media_block)
-                            # End-if
-                            results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": [
-                                    {"type": "text", "text": output.get("summary", "")},
-                                    {"type": "text", "text": output.get("pointer", "")},
-                                ],
-                            })
-                        else:
-                            results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": output
-                            })
+                    # Media result: the payload is kept aside and hydrated as
+                    # a sibling part of this user message on every request of
+                    # the loop; the private list stores TEXT ONLY (same
+                    # placement rule as the main agent).
+                    if isinstance(output, dict) and output.get("kind") in ("image", "document"):
+                        media_block = output.get("block")
+                        if media_block:
+                            self._pending_media_blocks.append(media_block)
                         # End-if
+                        results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": [
+                                {"type": "text", "text": output.get("summary", "")},
+                                {"type": "text", "text": output.get("pointer", "")},
+                            ],
+                        })
+                    else:
+                        results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": output if isinstance(output, (str, list)) else str(output)
+                        })
                     # End-if
-                # End-for Tool iterator.
+                # End-for
 
                 # Error Handle 2 : Block Empty User Message
                 if results:
@@ -308,43 +395,32 @@ class SubAgent(ISubAgent):
         except Exception as e:
             err_msg = f"Crash during internal loop: {e!s}"
             print(f"[-] [SubAgent:{self.subagent_id}] {err_msg}")
-            if self.sub_results:
-                max_depth_reached = max([self.depth] + [r.depth_reached for r in self.sub_results])
-            return SubAgentResult(
-                subagent_id=self.subagent_id,
-                task_description=task_description,
-                status="failed",
-                summary="Execution crashed before completion.",
-                tool_calls_made=tool_calls_made,
-                depth_reached=max_depth_reached,
-                error_message=err_msg,
-                sub_results=self.sub_results
-            )
+            return self._result(task_description, "failed",
+                                "Execution crashed before completion.", start_time,
+                                tool_calls_made, model_alias, err_msg)
         # End-except
 
         # ----- @par 4. Construct Return Struct -----
 
         final_text = self._extract_final_summary(messages)
-        elapsed = time.time() - start_time
+        if finished and final_text:
+            status = "success"
+            error = ""
+        elif finished:
+            status = "partial"
+            error = "SubAgent finished without a final summary."
+        else:
+            status = "partial"
+            error = f"SubAgent hit the {MAX_TURNS}-turn limit before finishing."
+        # End-if
 
-        # Calculation of the true maximum depth of sub-agents
-        if self.sub_results:
-            max_depth_reached = max([max_depth_reached] + [r.depth_reached for r in self.sub_results])
-
-        print(f"[*] [SubAgent:{self.subagent_id}] Completed in {elapsed:.1f}s "
-              f"({tool_calls_made} tool calls, depth={max_depth_reached}, "
+        print(f"[*] [SubAgent:{self.subagent_id}] {status} in {time.time() - start_time:.1f}s "
+              f"({tool_calls_made} tool calls, depth={self._depth_reached()}, "
               f"~{int(estimate_messages_tokens(messages))} tokens)")
 
-        return SubAgentResult(
-            subagent_id=self.subagent_id,
-            task_description=task_description,
-            status="success" if final_text else "partial_success",
-            summary=final_text or "SubAgent completed without generating a summary.",
-            tool_calls_made=tool_calls_made,
-            depth_reached=max_depth_reached,
-            tokens_used=0,
-            sub_results=self.sub_results
-        )
+        return self._result(task_description, status,
+                            final_text or "SubAgent completed without generating a summary.",
+                            start_time, tool_calls_made, model_alias, error)
     # End-def run.
         
     ##

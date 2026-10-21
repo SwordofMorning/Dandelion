@@ -40,7 +40,7 @@ class LLMProvider(ABC):
      # @brief Streaming request.
      #
     @abstractmethod
-    def safe_stream_request(self, payload):
+    def safe_stream_request(self, payload, logger=None, log_tag="", echo=True):
         pass
     # End-def
 

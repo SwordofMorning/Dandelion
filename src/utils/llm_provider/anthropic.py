@@ -384,10 +384,12 @@ class AnthropicProvider(LLMProvider):
      # @param payload data send to LLM.
      # @param logger logger object, save log to file.
      # @param log_tag log tag saved in file.
+     # @param echo Print the stream to the terminal (False for parallel SubAgents,
+     #        whose token streams would otherwise interleave).
      #
      # @return LLM's response and error.
      #
-    def safe_stream_request(self, payload, logger=None, log_tag=""):
+    def safe_stream_request(self, payload, logger=None, log_tag="", echo=True):
         # 1. Patch payload: set model id and inject thinking.
         payload["model"] = self.model_id
         self._inject_thinking(payload)
@@ -398,9 +400,14 @@ class AnthropicProvider(LLMProvider):
 
         # 3. Request.
         try:
-            print("\n[Agent] ", end="", flush=True)
+            if echo:
+                print("\n[Agent] ", end="", flush=True)
+            # End-if
             with self.client.messages.stream(**self._sdk_kwargs(payload, "stream")) as stream:
                 for event in stream:
+                    if not echo:
+                        continue
+                    # End-if
                     # Print streaming string for user check in terminal.
                     if event.type == "content_block_delta":
                         if event.delta.type == "text_delta":
@@ -412,13 +419,17 @@ class AnthropicProvider(LLMProvider):
                         # End-if text_delta
                     # End-if content_block_delta
                 # End-for streaming
-            print()
+            if echo:
+                print()
+            # End-if
 
             # Get final (full) message and return.
             final_message = stream.get_final_message()
             return final_message, None
         except Exception as e:
-            print()
+            if echo:
+                print()
+            # End-if
             self._report_request_error(e)
             return None, str(e)
         # End-try
