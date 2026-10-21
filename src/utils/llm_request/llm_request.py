@@ -181,9 +181,9 @@ class SafeLLMClient:
      # @return (response_object, None) on success.
      # @return (None, error_string) on failure.
      #
-    def safe_stream_request(self, payload, log_tag="PRE LLM CALL - MAIN"):
+    def safe_stream_request(self, payload, log_tag="PRE LLM CALL - MAIN", echo=True):
         payload = self._with_normalized_messages(payload)
-        return self.provider.safe_stream_request(payload, logger=self.logger, log_tag=log_tag)
+        return self.provider.safe_stream_request(payload, logger=self.logger, log_tag=log_tag, echo=echo)
     # End-def
 
     ##
@@ -232,6 +232,8 @@ class SafeLLMClient:
      # @param toolset_name        Sub-agent toolset ("minimal"/"planning"/...).
      # @param depth               Sub-agent recursion depth (>=2 forces "complex").
      # @param stream              True -> safe_stream_request, False -> safe_request.
+     # @param echo                Print the stream (False for parallel SubAgents).
+     # @param route_info          Optional dict; receives "alias" of the model that answered.
      #
      # @return (response, None) on success; (None, error_string) on failure.
      #
@@ -239,10 +241,10 @@ class SafeLLMClient:
      # @see SubAgent.run()
      #
     def route_request(self, payload, task_description="", toolset_name="minimal",
-                      depth=0, stream=True):
+                      depth=0, stream=True, echo=True, route_info=None):
         # 0. Fallback to main agent model if SUB_LIST is empty.
         if not self._policy or not self._policy.specs:
-            return self.safe_stream_request(payload) if stream else self.safe_request(payload)
+            return self.safe_stream_request(payload, echo=echo) if stream else self.safe_request(payload)
 
         # 1. Get specified subagent model via conditions.
         try:
@@ -269,9 +271,11 @@ class SafeLLMClient:
             req_payload["model"] = spec.model_id
 
             log_tag = f"SUBAGENT ROUTE -> '{current_alias}' (attempt {attempt+1})"
-            resp, err = provider.safe_stream_request(req_payload, logger=self.logger, log_tag=log_tag) if stream else provider.safe_request(req_payload, logger=self.logger, log_tag=log_tag)
+            resp, err = provider.safe_stream_request(req_payload, logger=self.logger, log_tag=log_tag, echo=echo) if stream else provider.safe_request(req_payload, logger=self.logger, log_tag=log_tag)
 
             if err is None:
+                if route_info is not None:
+                    route_info["alias"] = current_alias
                 return resp, None
 
             print(f"[Router] Model '{current_alias}' attempt {attempt+1} failed: {err}")
@@ -289,10 +293,12 @@ class SafeLLMClient:
                     fb_payload["model"] = fb_spec.model_id
 
                     fb_tag = f"SUBAGENT FALLBACK -> '{fallback_alias}'"
-                    resp, err = fb_provider.safe_stream_request(fb_payload, logger=self.logger, log_tag=fb_tag) if stream else fb_provider.safe_request(fb_payload, logger=self.logger, log_tag=fb_tag)
+                    resp, err = fb_provider.safe_stream_request(fb_payload, logger=self.logger, log_tag=fb_tag, echo=echo) if stream else fb_provider.safe_request(fb_payload, logger=self.logger, log_tag=fb_tag)
 
                     # Request Success, return.
                     if err is None:
+                        if route_info is not None:
+                            route_info["alias"] = fallback_alias
                         return resp, None
 
                     print(f"[Router] Fallback '{fallback_alias}' also failed: {err}")

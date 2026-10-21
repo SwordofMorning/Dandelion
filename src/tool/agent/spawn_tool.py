@@ -4,19 +4,23 @@
  # 
  # @brief fork() a new subagent like threads.
  #
- # @note Spawn call chain:
- #   Root agent (src/core/agent.py)
- #     -> SpawnSubagentTool(pool)               # depth=0, no parent
- #       -> pool.create_and_run(role_prompt, toolset_name, task_description, depth=0)
+ # @note Spawn call chain (1-based depth, max_depth = [Main] SUB_DEPTH):
+ #   Root agent (src/core/agent.py, registered only when SUB_DEPTH > 0)
+ #     -> SpawnSubagentTool(pool)               # creates depth=1, no parent
+ #       -> pool.create_and_run(role_prompt, toolset_name, task_description, depth=1)
+ #         -> depth gate: 1 <= depth <= max_depth, else a "failed" result
  #         -> resolve_toolset(toolset_name, all_tools, parent_tools=None)
  #         -> SubAgent.run(task_description)    # subagent tool loop
  #           -> depth < max_depth: inject RestrictedSpawnTool
  #              (src/subagent/subagent.py)      # recursive delegation
  #             -> RestrictedSpawnTool.execute()
  #               -> pool.create_and_run(..., depth+1, parent_tools=parent toolset)
- #                 -> SubSubAgent ...          # recursion capped by max_depth
  #               -> parent.sub_results.append(result)
  #           -> SubAgentResult.to_context_string()  # tool result back to LLM
+ #
+ # @note Several spawn_subagent calls in ONE root response run in parallel
+ #       (src/subagent/dispatch.py). The returned success flag is False when
+ #       the child failed; the text always carries the full result.
  #
 
 from ..base_tool import BaseTool
@@ -49,7 +53,9 @@ class SpawnSubagentTool(BaseTool):
         return (
             "Spawn a dedicated SubAgent to handle a specific sub-task. "
             "The SubAgent runs in an isolated context and returns a structured summary. "
-            "Use this for complex, self-contained sub-tasks to keep the main context clean."
+            "Use this for complex, self-contained sub-tasks to keep the main context clean. "
+            "Several calls in the same response run in parallel; give parallel SubAgents "
+            "independent tasks that do not modify the same files."
         )
     # End-def
 
@@ -108,10 +114,10 @@ class SpawnSubagentTool(BaseTool):
             role_prompt=role_prompt,
             toolset_name=toolset,
             task_description=task_desc,
-            depth=0
+            depth=1
         )
         
-        return True, result.to_context_string()
+        return result.status != "failed", result.to_context_string()
     # End-def
 
 ##
@@ -119,7 +125,7 @@ class SpawnSubagentTool(BaseTool):
  #
  # @note Two spawn classes exist by design:
  # - SpawnSubagentTool: installed in the ROOT agent (src/core/agent.py),
- #   spawns depth-0 subagents without parent restrictions.
+ #   spawns depth-1 subagents without parent restrictions.
  # - RestrictedSpawnTool: installed in SUBAGENTS only when
  #   depth < max_depth (src/subagent/subagent.py), so recursive delegation
  #   is depth-limited and parent-aware.
@@ -235,4 +241,4 @@ class RestrictedSpawnTool(BaseTool):
         if hasattr(self.parent, "sub_results"):
             self.parent.sub_results.append(result)
             
-        return True, result.to_context_string()
+        return result.status != "failed", result.to_context_string()

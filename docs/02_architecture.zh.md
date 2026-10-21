@@ -405,10 +405,11 @@ soft_limit = MAX_CONTEXT_TOKENS - MAX_TOKENS - 固定开销(sysprompt + tool sch
 `i_subagent` 旨在为特化 subagent 保留相同的调用接口，例如，我们期望通过特化的 subagent 来撰写相应的报告文档。在 `subagent.py` 内部，同样与 Main Agent 一样有 sysprompt、agent-loop 等机制，但是省去了复杂的上下文、记忆管理：
 
 1. 每一个 subagent 都在 `run()` 中完成它的全部工作（上限 30 轮工具迭代），然后将结果封装为 `SubAgentResult`返回；
-2. subagent 也能派生出"subsubagent"，但是有其最大递归深度的限制：只有 `depth < max_depth` 时才会注入受限的 `RestrictedSpawnTool`，达到最大深度后系统提示词明确要求"必须自己完成，不得再委派"；
+2. 深度采用 1-based 语义：Main Agent 为 0，直接子代理为 1，subsubagent 为 2；上限由 `api.cfg` 的 `[Main] SUB_DEPTH` 配置（默认 1，0 表示禁用子代理）。只有 `depth < max_depth` 时才会注入受限的 `RestrictedSpawnTool`，提示词措辞与实际注册的工具一致；`SubAgentPool.create_and_run()` 对超出 `1..SUB_DEPTH` 的派生一律返回失败结果，作为不可绕过的最后防线；
 3. 每个 subagent 有一个专属的 ID（`sa-<hex>`），以便于 pool 进行管理、为 parent 界定返回值与日志记录；
-4. 子代理的系统提示词由三部分拼接：父代理 `plan_tool` 生成的 `role_prompt` + 深度信息（depth 0 / 中间层 / 最大深度三种措辞）+ 安全规则（Trust Boundary 提示注入防御）；
-5. LLM 请求走 `route_request()`，即按任务复杂度自动选择模型，而不是复用 Main Agent 的模型。
+4. 子代理的系统提示词由 `role_prompt` + 深度信息（可委派 / 不可委派两种措辞）+ 安全规则 + 共享工作区提示拼接；
+5. LLM 请求走 `route_request()`，按 `media`/`review`/`complex`/`simple` 四类路由（优先级 media > review > complex > simple，同类按 `SUB_LIST` 顺序），而不是复用 Main Agent 的模型；
+6. 并发：Main Agent 同一轮响应中连续的多个 `spawn_subagent` 由 `src/subagent/dispatch.py` 并行执行（上限 `[Main] SUB_CONCURRENCY`，默认 4），其他工具作为屏障按原顺序串行执行，每个 tool_use 恰好得到一个结果。子代理内部的工具调用（含嵌套派生）保持串行。并行子代理共享工作区，不提供文件级隔离，需由 Main Agent 为其分配不同文件；Ctrl+C 时子代理在下一轮边界停止，`step()` 等待所有子代理结束后才返回。
 
 `pool.py` 创建了一个 agent 池（`SubAgentPool`，`MyAgent` 持有的单例）来管理 subagents。工具集注册表 `registry.py` 预定义了五类（`minimal`/`filesystem`/`code_analysis`/`data_processing`/`full`），LLM 通过名称引用。通常来说，subagent 的调用方式为：
 

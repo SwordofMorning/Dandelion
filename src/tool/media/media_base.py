@@ -17,6 +17,7 @@
  #
 
 import os
+import threading
 import base64
 import hashlib
 
@@ -92,11 +93,19 @@ def store_asset(session_dir, source_path, ext):
         target = os.path.join(target_dir, f"{digest}{ext}")
 
         if not os.path.exists(target):
-            tmp = target + ".tmp"
-            with open(tmp, "wb") as f:
-                f.write(payload)
-            # End-with
-            os.replace(tmp, target)
+            # Unique temp name: two parallel readers of the same file must not
+            # share one temp path (the second replace would find it gone).
+            tmp = f"{target}.{os.getpid()}.{threading.get_ident()}.tmp"
+            try:
+                with open(tmp, "wb") as f:
+                    f.write(payload)
+                # End-with
+                os.replace(tmp, target)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                # End-if
+            # End-try
         # End-if
 
         return os.path.abspath(target)

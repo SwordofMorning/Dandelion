@@ -10,6 +10,7 @@ import os
 import json
 import datetime
 import shutil
+import threading
 
 ##
  # ========================================
@@ -73,6 +74,8 @@ class SessionManager:
      # @param log_dir path to save session file (dir), default to `.log/` subfolder.
      #
     def __init__(self, log_dir=".log"):
+        # Parallel SubAgents append to api.log from worker threads.
+        self._log_lock = threading.Lock()
         self.log_dir = log_dir
         self.current_session_id = None
         self.current_session_dir = None
@@ -546,8 +549,10 @@ class SessionManager:
 
         json_str = json.dumps(payload, ensure_ascii=False, indent=2, default=self._default_serializer)
 
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"{header}\n{json_str}\n\n")
+        # One record per lock hold; serialization happens before, outside the lock.
+        with self._log_lock:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"{header}\n{json_str}\n\n")
     # End-def
 
     ##

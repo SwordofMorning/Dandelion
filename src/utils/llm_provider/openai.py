@@ -215,7 +215,7 @@ class OpenAIProvider(LLMProvider):
         except Exception as e:
             return None, str(e)
 
-    def safe_stream_request(self, payload, logger=None, log_tag=""):
+    def safe_stream_request(self, payload, logger=None, log_tag="", echo=True):
         tools = self._convert_tools(payload.get("tools"))
         messages = self._convert_messages(payload.get("messages", []), payload.get("system", ""))
 
@@ -234,7 +234,8 @@ class OpenAIProvider(LLMProvider):
         self._log_if_needed(logger, log_tag, req_kwargs)
 
         try:
-            print("\n[Agent] ", end="", flush=True)
+            if echo:
+                print("\n[Agent] ", end="", flush=True)
             response_stream = self.client.chat.completions.create(**req_kwargs)
 
             full_text = ""
@@ -245,7 +246,8 @@ class OpenAIProvider(LLMProvider):
                     delta = chunk.choices[0].delta
 
                     if getattr(delta, "content", None):
-                        print(delta.content, end="", flush=True)
+                        if echo:
+                            print(delta.content, end="", flush=True)
                         full_text += delta.content
 
                     if getattr(delta, "tool_calls", None):
@@ -259,13 +261,16 @@ class OpenAIProvider(LLMProvider):
                                 }
                             if tc.function.arguments:
                                 # Print tool arguments in dark gray to show streaming progress
-                                print(f"\033[90m{tc.function.arguments}\033[0m", end="", flush=True)
+                                if echo:
+                                    print(f"\033[90m{tc.function.arguments}\033[0m", end="", flush=True)
                                 tool_calls_dict[idx]["arguments"] += tc.function.arguments
 
-            print()
+            if echo:
+                print()
             return self._build_unified_response(full_text, tool_calls_dict), None
         except Exception as e:
-            print()
+            if echo:
+                print()
             return None, str(e)
 
     def extract_text(self, content):

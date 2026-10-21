@@ -10,8 +10,12 @@
  #   The CLI consumes the flag at its turn checkpoints, then either rolls the
  #   turn back or refuses the stop (see InteractiveCLI._try_stop).
  #
- # @note Single-process and main-thread only: tools and subagents run
- #       synchronously in the main thread, so no lock is required.
+ # @note Single-process. Parallel SubAgents (src/subagent/dispatch.py) READ the
+ #       flag from worker threads at their turn boundaries; writes come from
+ #       the SIGINT handler or a tool. A plain bool in a dict is safe for this
+ #       one-writer/many-readers use under the GIL, so no lock is required.
+ #       The root step() only returns after every worker stopped, so the CLI
+ #       never rolls back while a SubAgent is still running.
  #
 
 # Module state. A dict is used so the fields stay mutable without module-level

@@ -3,10 +3,13 @@
 ; ============================================================
 [Main]
 ; Specify the actual model_id to be used by the main agent
-MAIN_AGENT=gemini-3.8-flash
+MAIN_AGENT=opus
 SUB_LIST=[
-    "gemini-3.8-flash"
+    "opus",
+    "gemini"
     ]
+SUB_DEPTH=1
+SUB_CONCURRENCY=4
 ; Search Tool
 TAVILY_API_KEY=tvly-
 
@@ -20,20 +23,73 @@ TAVILY_API_KEY=tvly-
 ;   URL to LLM provider.
 ; ============================================================
 
-[DeepSeek]
+[Sub2API_Antigravity]
 SDK_TYPE="Message"
-BASE_URL=https://api.deepseek.com/anthropic
+BASE_URL=
 API_KEY=sk-
 MODEL_LIST = [
     {
         "provider": {
-            "model_id": "deepseek-v4-flash",
-            "compat": "deepseek"
+            "model_id": "gemini-3.8-flash-tiered",
+            "compat": "gemini"
         },
         "basic": {
-            "name": "deepseek-v4",
-            "conditions": ["tool_heavy", "long_context", "simple"],
-            "max_token": 160000,
+            "name": "gemini",
+            "conditions": ["media", "simple"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "high"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    },
+    {
+        "provider": {
+            "model_id": "claude-opus-5-5-high",
+            "compat": "anthropic"
+        },
+        "basic": {
+            "name": "opus",
+            "conditions": ["complex", "review"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "max"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    }
+    ]
+
+[Sub2API_OpenAI]
+SDK_TYPE="Message"
+BASE_URL=
+API_KEY=sk-
+MODEL_LIST = [
+    {
+        "provider": {
+            "model_id": "gpt-6.1-sol",
+            "compat": "openai"
+        },
+        "basic": {
+            "name": "gpt",
+            "conditions": ["complex", "review"],
+            "max_token": 128000,
             "max_context_tokens": 819200
         },
         "reasoning": {
@@ -50,28 +106,28 @@ MODEL_LIST = [
     }
     ]
 
-[Sub2API_Antigravity]
+[DeepSeek]
 SDK_TYPE="Message"
 BASE_URL=
 API_KEY=sk-
 MODEL_LIST = [
     {
         "provider": {
-            "model_id": "gemini-3.8-flash-tiered",
-            "compat": "gemini"
+            "model_id": "deepseek-v4-flash",
+            "compat": "deepseek"
         },
         "basic": {
-            "name": "gemini-3.8-flash",
-            "conditions": ["reasoning", "tool_heavy", "long_context", "simple"],
-            "max_token": 128000,
+            "name": "deepseek-v4",
+            "conditions": ["media", "simple"],
+            "max_token": 160000,
             "max_context_tokens": 819200
         },
         "reasoning": {
             "thinking": "enabled",
-            "effort": "high"
+            "effort": "max"
         },
         "media": {
-            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "file": [".png", ".jpg", ".jpeg", ".webp"],
             "max_image_bytes": "15MB",
             "max_pdf_bytes": "15MB",
             "max_pdf_pages": 100,

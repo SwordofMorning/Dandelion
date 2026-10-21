@@ -7,6 +7,11 @@
  #
 
 import os
+import threading
+
+# Only one approval prompt may own the terminal at a time: parallel SubAgents
+# would otherwise read each other's answers from stdin.
+_APPROVAL_LOCK = threading.Lock()
 
 ##
  # @brief Virtual Base Tool Class.
@@ -74,6 +79,14 @@ class BaseTool:
             return True
         # End-if
 
+        with _APPROVAL_LOCK:
+            return self._ask_approval(abs_target, abs_workspace, action_desc)
+    # End-def check_workspace_permission
+
+    ##
+     # @brief Interactive y/N/C prompt (caller holds _APPROVAL_LOCK).
+     #
+    def _ask_approval(self, abs_target, abs_workspace, action_desc):
         # Trigger Security Prompt (Outside Workspace).
         print(f"\n\033[33m[!] SECURITY ALERT: Tool '{self.get_name()}' is attempting to escape workspace.\033[0m")
         print(f"    Action   : {action_desc}")
@@ -102,7 +115,7 @@ class BaseTool:
             else:
                 print("    Please enter y, n or c.")
         # End-while
-    # End-def check_workspace_permission
+    # End-def
 
     ##
      # @brief Resolve symlinks and test workspace containment (no prompt).

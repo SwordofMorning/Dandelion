@@ -25,6 +25,7 @@ from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
 from src.subagent import SubAgentPool
+from src.subagent.dispatch import dispatch_tool_calls
 
 from src.tool import (
     BashTool, LoadSkillTool, MarkdownTool,
@@ -266,13 +267,15 @@ class MyAgent:
             logger=self.session,
             config=self.config,
             all_tools=all_tools,
-            max_depth=int(self.config.get("MAX_SUBAGENT_DEPTH", 3))
+            max_depth=int(self.config.get("SUB_DEPTH", 1))
         )
 
         # Decompose one descriptions to multi (or one) tasks.
         plan_tool = PlanTool(self.client, self.config)
-        # Spawn a new subagent.
-        spawn_subagent = SpawnSubagentTool(self.pool)
+        # Spawn a new subagent (only when SubAgents are enabled: SUB_DEPTH > 0).
+        spawn_subagent = SpawnSubagentTool(self.pool) if self.pool.max_depth > 0 else None
+        # Max SubAgents running at once for parallel spawn calls in one response.
+        self.sub_concurrency = max(int(self.config.get("SUB_CONCURRENCY", 4)), 1)
 
         # ----- @par 3. Register Tools  -----
 
@@ -280,13 +283,16 @@ class MyAgent:
         tool_list = [
             bash, skill_loader, md_editor,
             grep_tool, write_tool, read_tool, list_tool,
-            edit_tool, plan_tool, spawn_subagent, web_search_tool,
+            edit_tool, plan_tool, web_search_tool,
             read_excel_tool, write_excel_tool,
             state_tool, memory_tool,
             ssh_tool, time_tool
         ]
         # Media tools join the main-agent toolset only when registered above.
         tool_list.extend(media_tools)
+        if spawn_subagent is not None:
+            tool_list.append(spawn_subagent)
+        # End-if
 
         for t in tool_list:
             self.tools[t.get_name()] = t
@@ -667,24 +673,21 @@ class MyAgent:
         # Handle Tools
         results = []
 
-        # Tools Iterator.
-        for block in resp.content:
-            if block.type != "tool_use":
-                continue
-
-            cli.print(f"\nTool requested: {block.name}", level="info")
-            handler = self.tools.get(block.name)
-
-            if handler:
-                success, output = handler.execute(**block.input)
-                # A successful memory write changes what _get_memories() would
-                # load for the next tool-loop iteration; drop the cache so the
-                # system prompt tail reflects the newly persisted memory.
-                # Failed executions keep the previous cache untouched.
-                if success and handler.get_name() == "remember":
-                    self._invalidate_memories_cache()
-            else:
-                success, output = False, f"Unknown tool: {block.name}"
+        # Tools Iterator: ordered dispatch. Consecutive spawn_subagent calls run
+        # in parallel (bounded by SUB_CONCURRENCY); every other tool is a
+        # barrier executed alone and in order. Each tool_use gets one outcome.
+        outcomes = dispatch_tool_calls(
+            self.tools, resp.content, max_workers=self.sub_concurrency,
+            on_start=lambda b: cli.print(f"\nTool requested: {b.name}", level="info"),
+        )
+        for block, success, output in outcomes:
+            # A successful memory write changes what _get_memories() would
+            # load for the next tool-loop iteration; drop the cache so the
+            # system prompt tail reflects the newly persisted memory.
+            # Failed executions keep the previous cache untouched.
+            if success and block.name == "remember":
+                self._invalidate_memories_cache()
+            # End-if
 
             # ----- Media result dispatch -----
             # A media tool returns a structured dict: the base64 block stays OUT

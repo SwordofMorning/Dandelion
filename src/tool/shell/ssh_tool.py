@@ -19,6 +19,7 @@
 
 import os
 import shlex
+import threading
 import time
 
 import paramiko
@@ -368,6 +369,8 @@ class SSHTool(BaseTool):
         self.devices_path = devices_path
         # alias -> paramiko.SSHClient (lazy connect, reused across calls).
         self._clients = {}
+        # Parallel SubAgents share this tool: guard the check-then-connect.
+        self._clients_lock = threading.Lock()
         self._known_hosts_path = None
     # End-def
 
@@ -469,6 +472,15 @@ class SSHTool(BaseTool):
      # (AutoAddPolicy + known_hosts persistence; mismatch raises -> caller error).
      #
     def _get_client(self, cfg):
+        with self._clients_lock:
+            return self._get_client_locked(cfg)
+        # End-with
+    # End-def
+
+    ##
+     # @brief _get_client() body; caller holds _clients_lock.
+     #
+    def _get_client_locked(self, cfg):
         alias = cfg["alias"]
         client = self._clients.get(alias)
         if client is not None:

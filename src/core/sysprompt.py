@@ -77,26 +77,35 @@ class PromptBuilder:
         sections.append("You are Dandelion, a professional coding and management agent running locally.")
         sections.append(f"Environment Info:\n{self.terminal_hint}")
 
-        # 2. SubAgent, if enable SUB_LIST, must palnt first
+        # 2. SubAgent orchestration: only when SubAgents can actually be spawned
+        # (SUB_LIST configured and SUB_DEPTH > 0, matching the tool registration).
         sub_list = self.config.get("SUB_LIST", [])
-        if sub_list:
+        sub_depth = int(self.config.get("SUB_DEPTH", 1))
+        if sub_list and sub_depth > 0:
+            nesting = (
+                "SubAgents cannot delegate further (SUB_DEPTH=1).\n" if sub_depth == 1 else
+                f"SubAgents may delegate down to depth {sub_depth} (SUB_DEPTH={sub_depth}).\n"
+            )
             sections.append(
                 "## SubAgent Orchestration (MANDATORY FOR COMPLEX TASKS)\n"
                 "You have access to a SubAgent cluster system for handling complex, multi-step tasks.\n"
                 "### When to Use SubAgents:\n"
                 "- Tasks that involve 3+ independent sub-problems\n"
-                "- Tasks that require different expertise\n"
+                "- Tasks that require different expertise (media reading, code review, complex design)\n"
                 "### How to Use SubAgents:\n"
                 "1. You MUST call 'plan_tool' first to break the complex task into a TaskPlan.\n"
                 "2. For each SubTask, call 'spawn_subagent' with task_description, toolset, and role_prompt.\n"
-                "3. Wait for each SubAgentResult before proceeding to dependent subtasks.\n"
-                "4. Synthesize the final answer from all SubAgentResults.\n"
+                "3. Independent SubTasks: call 'spawn_subagent' several times in ONE response; they run in parallel. "
+                "Parallel SubAgents share the workspace, so give each one different files to modify.\n"
+                "4. Dependent SubTasks: spawn them in a later response, after the results they need.\n"
+                "5. Synthesize the final answer from all SubAgentResults.\n"
+                + nesting +
                 "### Available Toolsets:\n"
                 "- 'minimal': read_file, write_file, list_directory, get_time\n"
-                "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file\n"
+                "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_pdf, read_image\n"
                 "- 'code_analysis': read_file, grep_search, list_directory, bash, ssh\n"
                 "- 'data_processing': read_excel, write_excel, write_file, markdown_editor\n"
-                "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel, get_time"
+                "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel, get_time, read_pdf, read_image"
             )
         # End-if
         
