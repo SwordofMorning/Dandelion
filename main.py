@@ -38,6 +38,23 @@ USAGE = """Usage: dandelion [--version | --self-test | --help]
 """
 
 ##
+ # @brief Dotted stdlib modules imported by the bypassed (copied, not compiled)
+ #   packages. In the artifact these may live in a stdlib package that Nuitka
+ #   compiled only partially, so each one is imported by --self-test.
+ #
+ # Kept in sync with the installed dependencies by test/test_build_contract.py
+ # (tkinter.* is intentionally excluded: optional tqdm GUI, never used).
+ #
+SELF_TEST_STDLIB_SUBMODULES = (
+    "asyncio.base_events", "asyncio.coroutines", "collections.abc",
+    "concurrent.futures", "email.errors", "email.message", "email.parser",
+    "email.utils", "encodings.aliases", "encodings.idna", "http.client",
+    "http.cookiejar", "http.cookies", "importlib.metadata",
+    "importlib.resources", "urllib.parse", "urllib.request",
+    "xml.dom.minidom", "xml.etree.ElementTree",
+)
+
+##
  # @brief Version string without the leading "v".
  #
 def _version():
@@ -65,6 +82,26 @@ def _self_test_checks():
         hashlib.sha256(zlib.compress(b"dandelion")).hexdigest()
         ctypes.sizeof(ctypes.c_void_p)
         return "sqlite3 %s, ctypes, zlib, hashlib" % sqlite3.sqlite_version
+    # End-def
+
+    def stdlib_submodules():
+        import importlib
+        missing = []
+        for name in SELF_TEST_STDLIB_SUBMODULES:
+            try:
+                importlib.import_module(name)
+            except ImportError as e:
+                missing.append("%s (%s)" % (name, e))
+            # End-try
+        # End-for
+        if missing:
+            raise ImportError("missing stdlib submodules: " + "; ".join(missing))
+        # End-if
+        import xml.etree.ElementTree as ET
+        if ET.fromstring("<a><b>1</b></a>").find("b").text != "1":
+            raise RuntimeError("xml.etree.ElementTree parse mismatch")
+        # End-if
+        return "%d submodules, ElementTree parse" % len(SELF_TEST_STDLIB_SUBMODULES)
     # End-def
 
     def tls():
@@ -153,6 +190,7 @@ def _self_test_checks():
 
     return [
         ("stdlib-native", stdlib_native),
+        ("stdlib-submodules", stdlib_submodules),
         ("tls-certifi", tls),
         ("yaml-prompt_toolkit", config_libs),
         ("http-stack", http_stack),

@@ -457,6 +457,156 @@ class SmokeScriptContract(unittest.TestCase):
 # End-class
 
 
+class StdlibFallbackContract(unittest.TestCase):
+    ##
+     # @brief Reproduce the CI failure: a partially "compiled" stdlib package
+     #   (here: fakestd with only fakestd.dom) shadows the complete fallback copy.
+     #
+    SCRIPT = r'''
+import sys
+sys.path.insert(0, sys.argv[1])          # "compiled" partial package dir
+sys.path.insert(0, sys.argv[3])          # repo root (mk.lib.paths)
+from mk.lib import paths
+if sys.argv[4] == "install":
+    assert paths.install_stdlib_fallback(sys.argv[2], names={"fakestd"})
+    assert paths.install_stdlib_fallback(sys.argv[2], names={"fakestd"})  # idempotent
+    assert sum(isinstance(f, paths.StdlibFallbackFinder) for f in sys.meta_path) == 1
+import fakestd.dom
+try:
+    import fakestd.etree.Tree as T
+except ModuleNotFoundError as e:
+    print("MISSING", e)
+    sys.exit(3)
+assert T.VALUE == 42
+assert fakestd.__file__.startswith(sys.argv[1]), fakestd.__file__     # compiled pkg still wins
+assert fakestd.dom.__file__.startswith(sys.argv[1]), fakestd.dom.__file__
+assert T.__file__.startswith(sys.argv[2]), T.__file__                 # submodule from fallback
+print("OK", T.__file__)
+'''
+
+    def run_case(self, mode):
+        with scratch() as tmp:
+            compiled = Path(tmp) / "compiled"
+            fallback = Path(tmp) / "_stdlib_fallback"
+            (compiled / "fakestd" / "dom").mkdir(parents=True)
+            (compiled / "fakestd" / "__init__.py").write_text("")
+            (compiled / "fakestd" / "dom" / "__init__.py").write_text("")
+            (fallback / "fakestd" / "etree").mkdir(parents=True)
+            (fallback / "fakestd" / "__init__.py").write_text("")
+            (fallback / "fakestd" / "etree" / "__init__.py").write_text("")
+            (fallback / "fakestd" / "etree" / "Tree.py").write_text("VALUE = 42\n")
+            return subprocess.run([sys.executable, "-B", "-c", self.SCRIPT, str(compiled), str(fallback),
+                                   str(ROOT), mode], capture_output=True, text=True, timeout=60)
+        # End-with
+    # End-def
+
+    def test_partial_package_shadows_fallback_without_finder(self):
+        r = self.run_case("plain")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("No module named 'fakestd.etree'", r.stdout)
+    # End-def
+
+    def test_finder_resolves_submodule_from_fallback(self):
+        r = self.run_case("install")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("OK", r.stdout)
+    # End-def
+
+    def test_finder_ignores_non_stdlib_and_top_level(self):
+        from mk.lib import paths
+        finder = paths.StdlibFallbackFinder(str(ROOT), names={"xml"})
+        self.assertIsNone(finder.find_spec("xml"))
+        self.assertIsNone(finder.find_spec("openpyxl.reader"))
+        self.assertIsNone(finder.find_spec("xml.nonexistent_pkg.sub"))
+    # End-def
+
+    ##
+     # @brief Drift guard: every dotted stdlib import of the bypassed packages
+     #   must be exercised by `--self-test` (main.SELF_TEST_STDLIB_SUBMODULES).
+     #
+    def test_self_test_covers_bypassed_stdlib_submodules(self):
+        import ast
+        import importlib.metadata as md
+        import main
+        cfg = configparser.ConfigParser()
+        cfg.read(ROOT / "mk" / "config" / "build.config")
+        roots = [p.strip() for p in cfg.get("nuitka", "copy_packages").split(",") if p.strip()]
+        imp_to_dists = {}
+        for imp, dists in md.packages_distributions().items():
+            for d in dists:
+                imp_to_dists.setdefault(imp, []).append(d.lower().replace("_", "-"))
+            # End-for
+        # End-for
+        queue = [d for r in roots for d in imp_to_dists.get(r, [r.replace("_", "-")])]
+        seen = set()
+        while queue:
+            dist = queue.pop(0)
+            if dist in seen:
+                continue
+            # End-if
+            seen.add(dist)
+            try:
+                reqs = md.requires(dist) or []
+            except md.PackageNotFoundError:
+                reqs = []
+            # End-try
+            for req in reqs:
+                if ";" in req and "extra" in req.split(";", 1)[1]:
+                    continue
+                # End-if
+                queue.append(re.split(r"[<>=!\[; ~]", req)[0].lower().replace("_", "-"))
+            # End-for
+        # End-for
+        stdlib = set(sys.stdlib_module_names)
+        needed = set()
+        for imp in sorted({i for i, ds in imp_to_dists.items() for d in ds if d in seen}):
+            spec = importlib.util.find_spec(imp)
+            if spec is None:
+                continue
+            # End-if
+            locations = list(spec.submodule_search_locations or [])
+            files = [os.path.join(dp, f) for loc in locations for dp, _dn, fs in os.walk(loc)
+                     for f in fs if f.endswith(".py")] or ([spec.origin] if spec.origin else [])
+            for path in files:
+                try:
+                    with open(path, encoding="utf-8", errors="ignore") as fh:
+                        tree = ast.parse(fh.read())
+                    # End-with
+                except (SyntaxError, ValueError, OSError):
+                    continue
+                # End-try
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        names = [a.name for a in node.names]
+                    elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                        names = [node.module]
+                    else:
+                        continue
+                    # End-if
+                    needed.update(n for n in names if "." in n and n.split(".")[0] in stdlib)
+                # End-for
+            # End-for
+        # End-for
+        def importable(name):
+            # Drops names that only exist on newer Pythons (pathlib.types,
+            # concurrent.interpreters); find_spec raises when the parent is
+            # a plain module there.
+            try:
+                return importlib.util.find_spec(name) is not None
+            except (ImportError, ValueError):
+                return False
+            # End-try
+        # End-def
+
+        excluded = {"os.path"}                                   # os is always compiled in full
+        needed = {n for n in needed if n not in excluded and not n.startswith("tkinter")}
+        missing = sorted({n for n in needed if importable(n)} - set(main.SELF_TEST_STDLIB_SUBMODULES))
+        self.assertEqual(missing, [], "add these to main.SELF_TEST_STDLIB_SUBMODULES")
+        self.assertIn("xml.etree.ElementTree", main.SELF_TEST_STDLIB_SUBMODULES)
+    # End-def
+# End-class
+
+
 class ConfigContract(unittest.TestCase):
     def test_pandas_removed_from_declarations(self):
         deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
