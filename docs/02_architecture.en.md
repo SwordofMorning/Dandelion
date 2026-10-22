@@ -91,10 +91,10 @@ Basic configurations are defined in `mk/config/build.config`, among which the fo
 
 ```sh
 # Nuitka config: Do not compile these heavy SDKs and libraries to C.
-nofollow_imports = pydantic,anthropic,openai,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
+nofollow_imports = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
 
 # Custom config: Manually copy these packages to the dist folder (bypassing Nuitka).
-copy_packages = pydantic,anthropic,openai,pandas,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
+copy_packages = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
 
 # Custom config: Force compile standard libraries required by the bypassed packages.
 include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3
@@ -163,16 +163,21 @@ Because we manually excluded certain libraries in the previous section to save c
 5. Generate Wrapper Scripts: To run the program at the `build/Dandelion` level without cd'ing into `bin`, wrapper scripts `dandelion.cmd` and `dandelion.sh` are placed outside to execute the actual binary inside `bin`.
     > On Linux, `exec` wrapper scripts are used instead of symlinks to prevent crashes caused by inconsistent dual-path resolution (between `$ORIGIN` and Nuitka module dirs). Additionally, if `patchelf` is present, it forces `--force-rpath --set-rpath $ORIGIN` on the binary to guarantee `libpython` inside `bin/` is searched before `LD_LIBRARY_PATH`, preventing external `libpython` hijacking.
 6. Cleanup: Writes `version.txt` and recursively cleans up `__pycache__` in the artifacts.
+7. Strip (Linux only, `[strip]` in `build.config`, override with `DANDELION_STRIP=0/1`): ELF executables / shared objects in `bin/` that still carry `.symtab`/`.debug*` are stripped with `strip --strip-unneeded` inside the target container. Each object is stripped on a temporary copy and only replaces the original if its dynamic section (NEEDED/SONAME/RPATH/RUNPATH) is unchanged; failures keep the original. Originals go to `build/unstripped/`, every object is listed in `build/strip-ledger.tsv`. The `$ORIGIN` RPATH fix of step 5 runs after strip.
+8. Manifest and audit: `bin/MANIFEST.txt` lists every file of the final tree (path, bytes, sha256, mode, owner package). The build fails if any package from `[audit] forbidden_packages` (currently `pandas,numpy`) appears in the tree or in the Nuitka report (`build/nuitka-report.xml`). `python mk/make.py audit` re-runs this step on an existing build.
 
 ### 2.4 CI Build and Release
 
-`.github/workflows/release.yml` implements "version calculation + matrix build + artifact upload":
+`.github/workflows/release.yml` implements "version calculation + contract tests + matrix build + archive smoke test + verified release":
 
 1. `meta` job calculates the version: uses `git describe --tags --match "v*"` on push tags; otherwise generates `v0.0.0-dev-<yyMMdd>-<short-sha>`. Unofficial releases (workflow within CI) append a `-ci` suffix. The version is injected into `mk/make.py` via `DANDELION_VERSION`.
-2. `build` job matrix:
+2. `test` job: offline contract tests in a clean venv without pandas/numpy (`test/test_excel_contract.py` golden fixtures, `test/test_build_contract.py` archive/manifest/workflow contract, `main.py --version/--self-test`).
+3. `build` job matrix (11 targets):
     - Windows x86_64: GitHub host runner (Nuitka + MSVC + clcache).
-    - Linux x86_64 and arm64: 5 Ubuntu targets each (18.04/20.04/22.04/24.04/26.04), all utilizing container builds via `docker-build.sh`.
-3. Caching Strategy: `venv` and Nuitka caches are isolated by `os_name-arch-distro`.
+    - Linux x86_64 and arm64: 5 Ubuntu targets each (18.04/20.04/22.04/24.04/26.04), all utilizing container builds via `docker-build.sh` (with `ccache`, `CCACHE_DIR=.nuitka-cache/ccache`).
+    - Each job packs ONE archive with `.github/scripts/package.py` (`dandelion-<target_id>-<version>.tar.gz|zip` + `.sha256`) and smoke-tests exactly that archive: Linux in a clean `ubuntu:<distro>` container as a non-root user with `--network none` (`.github/scripts/smoke-test.sh`), Windows in a fresh directory with a reduced `PATH`. Checks: modes, `ldd`, `--version` equals the tag, `--self-test`, legacy startup.
+4. `release` job (tags only) needs `meta`, `test` and all 11 build legs; it downloads the archives, verifies exactly 11 archives with matching digests and layout (`package.py verify-set`), writes `SHA256SUMS` and attaches the files unchanged (no re-zip).
+5. Caching Strategy: `venv` uses an exact key (rebuilt when `pyproject.toml` changes); the Nuitka cache key is `build-cache-v6-<target_id>-<image digest>-<inputs hash>-<run_id>-<run_attempt>` with prefix restore, isolated per target.
 
 ## 3. `src` Overview
 

@@ -1,0 +1,1353 @@
+{
+ "cases": {
+  "read_all_none_headers": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 2 cols\n\n|   Unnamed: 0 |   Unnamed: 1 |\n|--------------|--------------|\n|            1 |            2 |"
+  },
+  "read_basic": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n| name   |   count |\n|--------|---------|\n| apple  |       1 |\n| pear   |       2 |"
+  },
+  "read_boolean_mixed": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 1 cols\n\n|   value |\n|---------|\n|       1 |\n|       2 |\n|       0 |"
+  },
+  "read_booleans": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n|   flag |\n|--------|\n|      1 |\n|      0 |"
+  },
+  "read_booleans_missing": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 2 cols\n\n|   flag |   row |\n|--------|-------|\n|      1 |     1 |\n|        |     2 |\n|      0 |     3 |"
+  },
+  "read_booleans_numbers": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n| flag   |   number |\n|--------|----------|\n| True   |        1 |\n| False  |        2 |"
+  },
+  "read_dates": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n| day                        |\n|----------------------------|\n| 2024-02-03T00:00:00.000000 |\n| 2024-02-04T00:00:00.000000 |"
+  },
+  "read_datetime_header": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 2 cols\n\n| 2024-02-03 00:00:00   |   value |\n|-----------------------|---------|\n| date header           |       1 |"
+  },
+  "read_datetime_missing": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n| when                |   row |\n|---------------------|-------|\n| 2024-02-03 00:00:00 |     1 |\n| NaT                 |     2 |"
+  },
+  "read_datetime_mixed": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n| when                |\n|---------------------|\n| 2024-02-03 00:00:00 |\n| plain               |"
+  },
+  "read_datetimes": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n| when                       |\n|----------------------------|\n| 2024-02-03T04:05:06.123000 |\n| 2024-02-04T12:30:00.000000 |"
+  },
+  "read_duplicate_collisions": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 5 cols\n\n|   a |   a.3 |   a.1 |   a.4 |   a.2 |\n|-----|-------|-------|-------|-------|\n|   1 |     2 |     3 |     4 |     5 |"
+  },
+  "read_duplicate_headers": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 3 cols\n\n|   a |   a.1 |   a.2 |\n|-----|-------|-------|\n|   1 |     2 |     3 |"
+  },
+  "read_empty": {
+   "success": true,
+   "text": "(Empty table: no data rows found)"
+  },
+  "read_error_cells": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 3 cols\n\n| error   |   number | label   |\n|---------|----------|---------|\n|         |        1 | first   |\n|         |        2 | second  |"
+  },
+  "read_fake_xls": {
+   "success": false,
+   "text": "Error reading Excel: File is not a zip file"
+  },
+  "read_float_missing": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 2 cols\n\n|   number | label   |\n|----------|---------|\n|      1   | a       |\n|          | b       |\n|      2.5 | c       |"
+  },
+  "read_floats": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 4 rows x 1 cols\n\n|       number |\n|--------------|\n|  1.5         |\n| -2.25        |\n|  2           |\n|  0.000123457 |"
+  },
+  "read_header_negative": {
+   "success": false,
+   "text": "Error reading Excel: Passing negative integer to header is invalid. For no header, use header=None instead"
+  },
+  "read_header_none": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 2 cols\n\n|-------|-------|\n| name  | count |\n| apple | 1     |\n| pear  | 2     |"
+  },
+  "read_header_only": {
+   "success": true,
+   "text": "(Empty table: no data rows found)"
+  },
+  "read_header_out_of_range": {
+   "success": false,
+   "text": "Error reading Excel: Passed header=[50], len of 1, but only 3 lines in file (sheet: 0)"
+  },
+  "read_header_two": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n|   a |   b |\n|-----|-----|\n|   1 |   2 |\n|   3 |   4 |"
+  },
+  "read_header_type_error": {
+   "success": false,
+   "text": "Error reading Excel: header must be integer or list of integers"
+  },
+  "read_integers": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 4 rows x 1 cols\n\n|         number |\n|----------------|\n|              1 |\n|              2 |\n|             -3 |\n| 12345678901234 |"
+  },
+  "read_integral_floats": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n|   number |\n|----------|\n|        2 |\n|       -3 |"
+  },
+  "read_leading_empty": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n| Unnamed: 0   | Unnamed: 1   |\n|--------------|--------------|\n| a            | b            |\n| 1            | 2            |"
+  },
+  "read_max_middle_empty": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 1 cols\n\n|   a |\n|-----|\n|   1 |"
+  },
+  "read_max_negative": {
+   "success": false,
+   "text": "Error reading Excel: 'nrows' must be an integer >=0"
+  },
+  "read_max_none": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n| name   |   count |\n|--------|---------|\n| apple  |       1 |\n| pear   |       2 |"
+  },
+  "read_max_two": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n|   a |\n|-----|\n|   1 |\n|   2 |"
+  },
+  "read_max_type_error": {
+   "success": false,
+   "text": "Error reading Excel: 'nrows' must be an integer >=0"
+  },
+  "read_max_zero": {
+   "success": true,
+   "text": "(Empty table: no data rows found)"
+  },
+  "read_middle_empty": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 2 cols\n\n|   a |   b |\n|-----|-----|\n|   1 |   2 |\n|     |     |\n|   3 |   4 |"
+  },
+  "read_missing_file": {
+   "success": false,
+   "text": "Error: File not found: <TMP>/missing.xlsx"
+  },
+  "read_missing_path": {
+   "success": false,
+   "text": "Error: No file_path provided."
+  },
+  "read_mixed_column": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 4 rows x 1 cols\n\n| mixed   |\n|---------|\n| word    |\n| 1       |\n| 1.5     |\n| False   |"
+  },
+  "read_multiline_pipe": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 2 cols\n\n| text          |   value |\n|---------------|---------|\n| first         |       1 |\n| second | part |         |"
+  },
+  "read_na_data": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 19 rows x 2 cols\n\n| value   |   row |\n|---------|-------|\n|         |     1 |\n|         |     2 |\n|         |     3 |\n|         |     4 |\n|         |     5 |\n|         |     6 |\n|         |     7 |\n|         |     8 |\n|         |     9 |\n|         |    10 |\n|         |    11 |\n|         |    12 |\n|         |    13 |\n|         |    14 |\n|         |    15 |\n|         |    16 |\n|         |    17 |\n|         |    18 |\n|         |    19 |"
+  },
+  "read_na_headers": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 19 cols\n\n|   NA |   N/A |   NULL |   nan |   None |   nan |   n/a |   null |   -nan |   <NA> |   Unnamed: 10 |   #NA |   #N/A N/A |   -1.#IND |   -1.#QNAN |   1.#IND |   1.#QNAN |   NaN |   -NaN |\n|------|-------|--------|-------|--------|-------|-------|--------|--------|--------|---------------|-------|------------|-----------|------------|----------|-----------|-------|--------|\n|    0 |     1 |      2 |     3 |      4 |     5 |     6 |      7 |      8 |      9 |            10 |    11 |         12 |        13 |         14 |       15 |        16 |    17 |     18 |"
+  },
+  "read_na_whitespace": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 5 rows x 1 cols\n\n| value   |\n|---------|\n| NA      |\n| NAN     |\n| none    |\n|         |\n| ok      |"
+  },
+  "read_none_headers": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 3 cols\n\n|   Unnamed: 0 |   b |   Unnamed: 2 |\n|--------------|-----|--------------|\n|            1 |   2 |            3 |"
+  },
+  "read_numeric_columns": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n|         int |   float |\n|-------------|---------|\n| 1           |    2.5  |\n| 1.23457e+13 |   -1.25 |"
+  },
+  "read_numeric_headers": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 4 cols\n\n| 1   | 2.5   | 2   | True.1   |\n|-----|-------|-----|----------|\n| a   | b     | c   | d        |"
+  },
+  "read_numeric_missing": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 2 cols\n\n|   number | label   |\n|----------|---------|\n|        1 | a       |\n|          | b       |\n|        3 | c       |"
+  },
+  "read_numeric_missing_only": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 2 cols\n\n|   a |   b |\n|-----|-----|\n|   1 |   2 |\n|     |   4 |\n|   3 |   5 |"
+  },
+  "read_numeric_strings": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 3 cols\n\n|   zeros |   exponent | boolean   |\n|---------|------------|-----------|\n|       1 |     100000 | True      |\n|       2 |     200000 | False     |"
+  },
+  "read_numeric_strings_mixed": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 4 rows x 1 cols\n\n| value   |\n|---------|\n| 001     |\n| text    |\n| 1e5     |\n| TRUE    |"
+  },
+  "read_sheet_index": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 2 cols\n\n| second   |   value |\n|----------|---------|\n| selected |      20 |"
+  },
+  "read_sheet_missing": {
+   "success": false,
+   "text": "Error reading Excel: Worksheet named 'Missing' not found"
+  },
+  "read_sheet_name": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 2 cols\n\n| second   |   value |\n|----------|---------|\n| selected |      20 |"
+  },
+  "read_sheet_negative_index": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 2 cols\n\n| second   |   value |\n|----------|---------|\n| selected |      20 |"
+  },
+  "read_sheet_none": {
+   "raises": "AttributeError: 'dict' object has no attribute 'empty'"
+  },
+  "read_sheet_out_of_range": {
+   "success": false,
+   "text": "Error reading Excel: Worksheet index 5 is invalid, 1 worksheets found"
+  },
+  "read_sparse": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 3 cols\n\n|   a |   b | c   |\n|-----|-----|-----|\n|   1 |     | x   |\n|     |   2 |     |\n|   3 |     | z   |"
+  },
+  "read_string_float": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n|   value |\n|---------|\n|     1.5 |\n|     2   |"
+  },
+  "read_string_infinity": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n|   value |\n|---------|\n|     inf |\n|    -inf |"
+  },
+  "read_string_numbers_na": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 3 rows x 2 cols\n\n|   value |   row |\n|---------|-------|\n|       1 |     1 |\n|         |     2 |\n|       2 |     3 |"
+  },
+  "read_string_zeros": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n|   value |\n|---------|\n|       1 |\n|       2 |"
+  },
+  "read_text_file": {
+   "success": false,
+   "text": "Error reading Excel: File is not a zip file"
+  },
+  "read_times": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 1 cols\n\n| time            |\n|-----------------|\n| 04:05:06        |\n| 12:30:01.123000 |"
+  },
+  "read_trailing_empty": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n| name   |   count |\n|--------|---------|\n| apple  |       1 |\n| pear   |       2 |"
+  },
+  "read_unicode": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 2 rows x 2 cols\n\n| \u540d\u524d   | value   |\n|--------|---------|\n| \u4f60\u597d   | \u6771\u4eac    |\n| \ud55c\uae00   | \u6d4b\u8bd5    |"
+  },
+  "read_unnamed_collision": {
+   "success": true,
+   "text": "[Excel Table Extract]\nFile: input.xlsx\nShape: 1 rows x 4 cols\n\n|   Unnamed: 0.1 |   Unnamed: 0 |   a |   a.1 |\n|----------------|--------------|-----|-------|\n|              1 |            2 |   3 |     4 |"
+  },
+  "write_alignment": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "a"
+        ],
+        [
+         "str",
+         "b"
+        ],
+        [
+         "str",
+         "c"
+        ]
+       ],
+       [
+        [
+         "str",
+         "x"
+        ],
+        [
+         "str",
+         "y"
+        ],
+        [
+         "str",
+         "z"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_alignment_only": {
+   "success": false,
+   "text": "Error: No valid data parsed from markdown table."
+  },
+  "write_all_short_rows": {
+   "success": false,
+   "text": "Error writing Excel: 3 columns passed, passed data had 1 columns"
+  },
+  "write_basic": {
+   "success": true,
+   "text": "Successfully wrote 2 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "name"
+        ],
+        [
+         "str",
+         "count"
+        ]
+       ],
+       [
+        [
+         "str",
+         "apple"
+        ],
+        [
+         "str",
+         "1"
+        ]
+       ],
+       [
+        [
+         "str",
+         "pear"
+        ],
+        [
+         "str",
+         "2"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_custom_sheet": {
+   "success": true,
+   "text": "Successfully wrote 2 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Report"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Report",
+      "values": [
+       [
+        [
+         "str",
+         "name"
+        ],
+        [
+         "str",
+         "count"
+        ]
+       ],
+       [
+        [
+         "str",
+         "apple"
+        ],
+        [
+         "str",
+         "1"
+        ]
+       ],
+       [
+        [
+         "str",
+         "pear"
+        ],
+        [
+         "str",
+         "2"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_duplicate_headers": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "a"
+        ],
+        [
+         "str",
+         "a"
+        ]
+       ],
+       [
+        [
+         "str",
+         "1"
+        ],
+        [
+         "str",
+         "2"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_empty": {
+   "success": false,
+   "text": "Error: file_path and markdown_table are required."
+  },
+  "write_empty_header": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "NoneType",
+         null
+        ],
+        [
+         "str",
+         "b"
+        ]
+       ],
+       [
+        [
+         "str",
+         "x"
+        ],
+        [
+         "str",
+         "y"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_formula_error_strings": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "formula"
+        ],
+        [
+         "str",
+         "error"
+        ]
+       ],
+       [
+        [
+         "str",
+         "=1+1"
+        ],
+        [
+         "str",
+         "#N/A"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_header_only": {
+   "success": false,
+   "text": "Error: No valid data parsed from markdown table."
+  },
+  "write_invalid_sheet": {
+   "success": false,
+   "text": "Error writing Excel: Invalid character / found in sheet title"
+  },
+  "write_long_rows": {
+   "success": false,
+   "text": "Error writing Excel: 2 columns passed, passed data had 3 columns"
+  },
+  "write_missing_path": {
+   "success": false,
+   "text": "Error: file_path and markdown_table are required."
+  },
+  "write_nested": {
+   "success": true,
+   "text": "Successfully wrote 2 rows to '<TMP>/nested/more/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "name"
+        ],
+        [
+         "str",
+         "count"
+        ]
+       ],
+       [
+        [
+         "str",
+         "apple"
+        ],
+        [
+         "str",
+         "1"
+        ]
+       ],
+       [
+        [
+         "str",
+         "pear"
+        ],
+        [
+         "str",
+         "2"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_one_sided_pipes": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "NoneType",
+         null
+        ],
+        [
+         "str",
+         "a"
+        ],
+        [
+         "str",
+         "b"
+        ]
+       ],
+       [
+        [
+         "NoneType",
+         null
+        ],
+        [
+         "str",
+         "x"
+        ],
+        [
+         "str",
+         "y"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_overwrite": {
+   "success": true,
+   "text": "Successfully wrote 2 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "name"
+        ],
+        [
+         "str",
+         "count"
+        ]
+       ],
+       [
+        [
+         "str",
+         "apple"
+        ],
+        [
+         "str",
+         "1"
+        ]
+       ],
+       [
+        [
+         "str",
+         "pear"
+        ],
+        [
+         "str",
+         "2"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_short_rows": {
+   "success": true,
+   "text": "Successfully wrote 2 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "a"
+        ],
+        [
+         "str",
+         "b"
+        ],
+        [
+         "str",
+         "c"
+        ]
+       ],
+       [
+        [
+         "str",
+         "1"
+        ],
+        [
+         "str",
+         "2"
+        ],
+        [
+         "str",
+         "3"
+        ]
+       ],
+       [
+        [
+         "str",
+         "short"
+        ],
+        [
+         "NoneType",
+         null
+        ],
+        [
+         "NoneType",
+         null
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_string_values": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "zero"
+        ],
+        [
+         "str",
+         "big"
+        ],
+        [
+         "str",
+         "bool"
+        ],
+        [
+         "str",
+         "float"
+        ],
+        [
+         "str",
+         "empty"
+        ]
+       ],
+       [
+        [
+         "str",
+         "001"
+        ],
+        [
+         "str",
+         "12345678901234567890"
+        ],
+        [
+         "str",
+         "TRUE"
+        ],
+        [
+         "str",
+         "1.5"
+        ],
+        [
+         "NoneType",
+         null
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_unicode": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "\u540d\u524d"
+        ],
+        [
+         "str",
+         "value"
+        ]
+       ],
+       [
+        [
+         "str",
+         "\u4f60\u597d"
+        ],
+        [
+         "str",
+         "\u6771\u4eac"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_whitespace": {
+   "success": true,
+   "text": "Successfully wrote 2 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "a"
+        ],
+        [
+         "str",
+         "b"
+        ]
+       ],
+       [
+        [
+         "str",
+         "hello"
+        ],
+        [
+         "str",
+         "world"
+        ]
+       ],
+       [
+        [
+         "str",
+         "001"
+        ],
+        [
+         "NoneType",
+         null
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_whitespace_only": {
+   "success": false,
+   "text": "Error: No valid data parsed from markdown table."
+  },
+  "write_without_pipes": {
+   "success": true,
+   "text": "Successfully wrote 2 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "a"
+        ],
+        [
+         "str",
+         "b"
+        ]
+       ],
+       [
+        [
+         "str",
+         "---"
+        ],
+        [
+         "str",
+         "---"
+        ]
+       ],
+       [
+        [
+         "str",
+         "x"
+        ],
+        [
+         "str",
+         "y"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "write_without_pipes_no_rule": {
+   "success": true,
+   "text": "Successfully wrote 1 rows to '<TMP>/output.xlsx'.",
+   "workbook": {
+    "sheet_names": [
+     "Sheet1"
+    ],
+    "sheets": [
+     {
+      "header_style": [
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       },
+       {
+        "bold": false,
+        "borders": {
+         "bottom": null,
+         "left": null,
+         "right": null,
+         "top": null
+        },
+        "horizontal": null
+       }
+      ],
+      "name": "Sheet1",
+      "values": [
+       [
+        [
+         "str",
+         "a"
+        ],
+        [
+         "str",
+         "b"
+        ]
+       ],
+       [
+        [
+         "str",
+         "x"
+        ],
+        [
+         "str",
+         "y"
+        ]
+       ]
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "provenance": {
+  "generation_date": "2026-10-22T01:01:25.802345+00:00",
+  "legacy_commit": "1ce7ac29bef2db46551098e629db50926ae5e96f",
+  "legacy_source_sha256": "5ddbf8963b01908f5b4ea929b7e3b3291adb9794689717c528bd918ef01609a2",
+  "numpy": "2.4.6",
+  "openpyxl": "3.1.5",
+  "pandas": "3.0.5",
+  "python": "3.11.15",
+  "tabulate": "0.10.0"
+ }
+}
