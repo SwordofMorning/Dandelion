@@ -168,16 +168,15 @@ windows_jobs = 2
 
 ### 2.4 CI 构建发布
 
-`.github/workflows/release.yml` 实现"版本计算 + 契约测试 + 矩阵构建 + 归档冒烟 + 校验发布"：
+`.github/workflows/release.yml` 实现"版本计算 + 矩阵构建 + 归档冒烟 + 校验发布"：
 
 1. `meta` job 计算版本：push tag 时用 `git describe --tags --match "v*"`；否则生成 `v0.0.0-dev-<yyMMdd>-<short-sha>`；非正式发布（CI中的workflow）追加 `-ci` 后缀。版本通过 `DANDELION_VERSION` 注入 `mk/make.py`。
-2. `test` job：在不含 pandas/numpy 的干净 venv 中运行离线契约测试（`test/test_excel_contract.py` 黄金样本、`test/test_build_contract.py` 归档/Manifest/工作流契约、`main.py --version/--self-test`）。
-3. `build` job 矩阵（11 个目标）：
+2. `build` job 矩阵（11 个目标）：
     - Windows x86_64：GitHub host runner（Nuitka + MSVC + clcache）；
     - Linux x86_64 与 arm64：各 5 个 Ubuntu 目标（18.04/20.04/22.04/24.04/26.04），全部走 `docker-build.sh` 容器构建（启用 `ccache`，`CCACHE_DIR=.nuitka-cache/ccache`）；
-    - 每个 job 用 `.github/scripts/package.py` 生成唯一归档（`dandelion-<target_id>-<version>.tar.gz|zip` + `.sha256`），并对该归档本身做冒烟：Linux 在干净的 `ubuntu:<distro>` 容器内以非 root 用户、`--network none` 运行（`.github/scripts/smoke-test.sh`），Windows 在全新目录、精简 `PATH` 下运行。检查项：权限、`ldd`、`--version` 与 tag 一致、`--self-test`、原有启动流程。
-4. `release` job（仅 tag）依赖 `meta`、`test` 与全部 11 个构建；下载归档后校验恰好 11 个、摘要与布局一致（`package.py verify-set`），生成 `SHA256SUMS`，原样附加（不重新打包）。
-5. 缓存策略：venv 使用精确键（`pyproject.toml` 变化即重建）；Nuitka 缓存键为 `build-cache-v6-<target_id>-<镜像摘要>-<输入哈希>-<run_id>-<run_attempt>`，按前缀恢复，各目标完全隔离。
+    - 每个 job 用 `.github/scripts/package.py` 生成唯一归档（`dandelion-<target_id>-<version>.tar.gz|zip`），并对该归档本身做冒烟：Linux 在干净的 `ubuntu:<distro>` 容器内以非 root 用户、`--network none` 运行（`.github/scripts/smoke-test.sh`），Windows 在全新目录、精简 `PATH` 下运行。检查项：权限、`ldd`、`--version` 与 tag 一致、`--self-test`、原有启动流程。
+3. `release` job（仅 tag）依赖 `meta` 与全部 11 个构建；下载归档后校验恰好 11 个、布局一致（`package.py verify-set`），原样附加（不重新打包）。
+4. 缓存策略：venv 使用精确键（`pyproject.toml` 变化即重建）；Nuitka 缓存键为 `build-cache-v6-<target_id>-<镜像摘要>-<输入哈希>-<run_id>-<run_attempt>`，按前缀恢复，各目标完全隔离。
 
 ## 三、src 概览
 

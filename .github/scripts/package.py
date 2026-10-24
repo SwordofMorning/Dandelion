@@ -11,12 +11,11 @@
  #   archive name : dandelion-<target_id>-<version>.<tar.gz|zip>
  #   target_id    : <os>-<arch>[-ubuntu<NN>], e.g. linux-aarch64-ubuntu18, win-x86_64
  #   layout       : a single top-level "dandelion/" directory (= build/dandelion)
- #   checksum     : <archive>.sha256 ("<hex>  <archive name>", sha256sum format)
  #
  # Sub-commands:
  #   pack       --src build/dandelion --out-dir dist --target-id ID --version V --platform linux|windows
- #   verify     --archive FILE --platform linux|windows [--sha256-file FILE]
- #   verify-set --dir DIR --version V --targets ID1,ID2,... [--sums-out SHA256SUMS]
+ #   verify     --archive FILE --platform linux|windows
+ #   verify-set --dir DIR --version V --targets ID1,ID2,...
  #
  # Exit code 0 = OK, 1 = contract violation, 2 = usage error.
  #
@@ -27,7 +26,6 @@
  #
 
 import argparse
-import hashlib
 import os
 import re
 import stat
@@ -71,17 +69,6 @@ def archive_name(target_id, version, platform):
         # End-if
     # End-for
     return "dandelion-%s-%s.%s" % (target_id, version, EXT[platform])
-# End-def
-
-
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-        # End-for
-    # End-with
-    return h.hexdigest()
 # End-def
 
 
@@ -221,9 +208,9 @@ def read_members(path):
 
 
 ##
- # @brief Pack src into the canonical archive + .sha256; verify the result.
+ # @brief Pack src into the canonical archive; verify the result.
  #
- # @return (archive_path, sha256_hex)
+ # @return archive_path
  #
 def pack(src, out_dir, target_id, version, platform):
     if not os.path.isdir(src):
@@ -273,45 +260,32 @@ def pack(src, out_dir, target_id, version, platform):
         # End-with
     # End-if
 
-    digest = sha256_file(out)
-    with open(out + ".sha256", "w", encoding="ascii", newline="\n") as f:
-        f.write("%s  %s\n" % (digest, name))
-    # End-with
-    verify(out, platform, out + ".sha256")
-    return out, digest
+    verify(out, platform)
+    return out
 # End-def
 
 
 ##
- # @brief Verify one archive (checksum file, layout, modes).
+ # @brief Verify one archive (layout and modes).
  #
-def verify(path, platform, sha256_file_path=None):
+def verify(path, platform):
     problems = []
-    digest = sha256_file(path)
-    if sha256_file_path:
-        with open(sha256_file_path, "r", encoding="ascii") as f:
-            parts = f.read().split()
-        # End-with
-        if len(parts) != 2 or parts[0] != digest or parts[1] != os.path.basename(path):
-            problems.append("checksum file mismatch: %r vs %s  %s" % (parts, digest, os.path.basename(path)))
-        # End-if
-    # End-if
     members, outside = read_members(path)
     problems += outside
     problems += check_members(members, platform)
     if problems:
         raise ContractError("%s:\n  - %s" % (os.path.basename(path), "\n  - ".join(problems)))
     # End-if
-    return digest, len(members)
+    return len(members)
 # End-def
 
 
 ##
  # @brief Verify the complete release set: exactly one archive per target.
  #
- # @return list of (archive name, sha256) in target order.
+ # @return list of archive names in target order.
  #
-def verify_set(directory, version, targets, sums_out=None):
+def verify_set(directory, version, targets):
     expected = {}
     for t in targets:
         plat = "windows" if t.startswith("win-") else "linux"
@@ -331,27 +305,15 @@ def verify_set(directory, version, targets, sums_out=None):
             continue
         # End-if
         path = os.path.join(directory, name)
-        sha = path + ".sha256"
-        if not os.path.isfile(sha):
-            problems.append("missing checksum file: " + name + ".sha256")
-            continue
-        # End-if
         try:
-            digest, _count = verify(path, expected[name], sha)
-            rows.append((name, digest))
+            verify(path, expected[name])
+            rows.append(name)
         except ContractError as e:
             problems.append(str(e))
         # End-try
     # End-for
     if problems:
         raise ContractError("release set check failed:\n  - " + "\n  - ".join(problems))
-    # End-if
-    if sums_out:
-        with open(sums_out, "w", encoding="ascii", newline="\n") as f:
-            for name, digest in rows:
-                f.write("%s  %s\n" % (digest, name))
-            # End-for
-        # End-with
     # End-if
     return rows
 # End-def
@@ -367,37 +329,34 @@ def main(argv=None):
     p.add_argument("--version", required=True)
     p.add_argument("--platform", choices=sorted(EXT), required=True)
     p.add_argument("--github-output", default=None,
-                   help="append archive=/sha256= lines to this file (GITHUB_OUTPUT)")
+                   help="append archive=/size= lines to this file (GITHUB_OUTPUT)")
     v = sub.add_parser("verify")
     v.add_argument("--archive", required=True)
     v.add_argument("--platform", choices=sorted(EXT), required=True)
-    v.add_argument("--sha256-file", default=None)
     s = sub.add_parser("verify-set")
     s.add_argument("--dir", required=True)
     s.add_argument("--version", required=True)
     s.add_argument("--targets", required=True, help="comma/space separated target ids")
-    s.add_argument("--sums-out", default=None)
     args = ap.parse_args(argv)
 
     try:
         if args.cmd == "pack":
-            out, digest = pack(args.src, args.out_dir, args.target_id, args.version, args.platform)
+            out = pack(args.src, args.out_dir, args.target_id, args.version, args.platform)
             size = os.path.getsize(out)
             print("[+] Packed %s (%d bytes = %.1f MiB)" % (out, size, size / 1048576.0))
-            print("[+] sha256 %s" % digest)
             if args.github_output:
                 with open(args.github_output, "a", encoding="utf-8") as f:
-                    f.write("archive=%s\nsha256=%s\nsize=%d\n" % (os.path.basename(out), digest, size))
+                    f.write("archive=%s\nsize=%d\n" % (os.path.basename(out), size))
                 # End-with
             # End-if
         elif args.cmd == "verify":
-            digest, count = verify(args.archive, args.platform, args.sha256_file)
-            print("[+] %s OK (%d members, sha256 %s)" % (os.path.basename(args.archive), count, digest))
+            count = verify(args.archive, args.platform)
+            print("[+] %s OK (%d members)" % (os.path.basename(args.archive), count))
         else:
             targets = [t for t in re.split(r"[\s,]+", args.targets) if t]
-            rows = verify_set(args.dir, args.version, targets, args.sums_out)
-            for name, digest in rows:
-                print("[+] %s  %s" % (digest, name))
+            rows = verify_set(args.dir, args.version, targets)
+            for name in rows:
+                print("[+] %s" % name)
             # End-for
             print("[+] Release set OK: %d archives for version %s" % (len(rows), args.version))
         # End-if

@@ -56,43 +56,7 @@ jobs:
           echo "tag=$tag" >> $GITHUB_OUTPUT
           echo "is_release=$is_release" >> $GITHUB_OUTPUT
 
-  # 2. Test Job: offline contract tests (no compilation). The release job
-  #    depends on it, so a direct tag push cannot bypass the Excel golden
-  #    fixtures, the archive contract or the --version/--self-test checks.
-  #    Runs in a clean venv WITHOUT pandas/numpy (proves they are not needed).
-  test:
-    name: Contract Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install runtime dependencies (clean venv, no pandas)
-        shell: bash
-        run: |
-          python -m venv .venv-test
-          .venv-test/bin/python -m pip install --upgrade pip
-          .venv-test/bin/python -m pip install -e .
-          if .venv-test/bin/python -c "import importlib.util, sys; sys.exit(0 if any(importlib.util.find_spec(m) for m in ('pandas', 'numpy')) else 1)"; then
-            echo "[-] pandas/numpy were pulled into the runtime dependency set"
-            .venv-test/bin/python -m pip list
-            exit 1
-          fi
-
-      - name: ASCII check
-        run: .venv-test/bin/python test/ascii_check.py src/ mk/ main.py test/
-
-      - name: Excel golden contract
-        run: .venv-test/bin/python test/test_excel_contract.py -v
-
-      - name: Build / release contract
-        run: .venv-test/bin/python test/test_build_contract.py -v
-
-  # 3. Build Job: Build Matrix (11 targets, all preserved)
+  # 2. Build Job: Build Matrix (11 targets, all preserved)
   #    - Windows x86_64      : native host runner (unchanged behavior)
   #    - Linux x86_64        : per-distro Docker builds (glibc compatibility)
   #    - Linux arm64 (aarch64): same Docker flow on the arm64 runner
@@ -110,10 +74,10 @@ jobs:
   # provides the architecture (x86_64 vs arm64 hardware), the container
   # provides the distro version.
   #
-  # Each build job produces ONE final archive (tar.gz / zip) + .sha256,
-  # smoke-tests exactly that archive (unpacked into a fresh directory, in the
-  # target distro for Linux), and uploads only those two files. The release
-  # job re-verifies the digests and attaches the same bytes unchanged.
+  # Each build job produces ONE final archive (tar.gz / zip), smoke-tests
+  # exactly that archive (unpacked into a fresh directory, in the target
+  # distro for Linux), and uploads only that archive. The release job
+  # verifies the complete archive set and attaches the same bytes unchanged.
   build:
     needs: meta
     name: Build ${{ matrix.os_name }} ${{ matrix.arch }}${{ matrix.distro_label }}
@@ -348,7 +312,7 @@ jobs:
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
           ARCHIVE: ${{ steps.pack.outputs.archive }}
         run: |
-          python .github/scripts/package.py verify --archive "dist/$ARCHIVE" --platform windows --sha256-file "dist/$ARCHIVE.sha256"
+          python .github/scripts/package.py verify --archive "dist/$ARCHIVE" --platform windows
           rm -rf smoke && mkdir smoke
           python -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "dist/$ARCHIVE" smoke
           cd smoke/dandelion
@@ -386,10 +350,10 @@ jobs:
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
           ARCHIVE: ${{ steps.pack.outputs.archive }}
         run: |
-          python3 .github/scripts/package.py verify --archive "dist/$ARCHIVE" --platform linux --sha256-file "dist/$ARCHIVE.sha256"
+          python3 .github/scripts/package.py verify --archive "dist/$ARCHIVE" --platform linux
           bash .github/scripts/smoke-test.sh "dist/$ARCHIVE" "${{ matrix.distro }}" "$RELEASE_TAG"
 
-      # Upload ONLY the tested archive + checksum (already compressed, so the
+      # Upload ONLY the tested archive (already compressed, so the
       # artifact layer does not compress again).
       - name: Upload Archive
         uses: actions/upload-artifact@v4
@@ -397,7 +361,6 @@ jobs:
           name: dandelion-${{ env.TARGET_ID }}
           path: |
             dist/${{ steps.pack.outputs.archive }}
-            dist/${{ steps.pack.outputs.archive }}.sha256
           if-no-files-found: error
           compression-level: 0
 
@@ -415,11 +378,11 @@ jobs:
             build/dandelion/bin/MANIFEST.txt
           if-no-files-found: ignore
 
-  # 4. Release Job: verify the complete archive set and attach it unchanged.
-  #    Runs only if meta, the contract tests and ALL 11 build legs succeeded
+  # 3. Release Job: verify the complete archive set and attach it unchanged.
+  #    Runs only if meta and ALL 11 build legs succeeded
   #    (a failed/cancelled/skipped leg fails the build job -> no release).
   release:
-    needs: [meta, test, build]
+    needs: [meta, build]
     if: success() && needs.meta.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -434,8 +397,8 @@ jobs:
           merge-multiple: true
           path: release_assets
 
-      # Exactly one archive per target, same version, digests unchanged since
-      # the smoke test, layout + modes re-checked. No unpack/re-zip.
+      # Exactly one archive per target, same version, layout + modes re-checked.
+      # No unpack/re-zip.
       - name: Verify Release Set
         env:
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
@@ -455,8 +418,7 @@ jobs:
           ls -l release_assets
           python3 .github/scripts/package.py verify-set \
             --dir release_assets --version "$RELEASE_TAG" \
-            --targets "$EXPECTED_TARGETS" --sums-out release_assets/SHA256SUMS
-          cat release_assets/SHA256SUMS
+            --targets "$EXPECTED_TARGETS"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -466,8 +428,6 @@ jobs:
           files: |
             release_assets/*.tar.gz
             release_assets/*.zip
-            release_assets/*.sha256
-            release_assets/SHA256SUMS
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

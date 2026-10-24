@@ -100,10 +100,9 @@ deepseek-v4-flash:(staged_msg)> exit
 
 同时，由于长度等原因，可能需要点击`Show all xx assets`才能显示完成的构建产物，这里请注意点击。
 
-产物命名为`dandelion-<os>-<arch>[-ubuntu<NN>]-<version>`：Linux为`.tar.gz`（保留`dandelion.sh`与`bin/dandelion`的可执行权限），Windows为`.zip`。每个归档都附带同名`.sha256`，另有汇总的`SHA256SUMS`：
+产物命名为`dandelion-<os>-<arch>[-ubuntu<NN>]-<version>`：Linux为`.tar.gz`（保留`dandelion.sh`与`bin/dandelion`的可执行权限），Windows为`.zip`：
 
 ```sh
-sha256sum -c dandelion-linux-x86_64-ubuntu22-<version>.tar.gz.sha256
 tar -xzf dandelion-linux-x86_64-ubuntu22-<version>.tar.gz
 cd dandelion
 ./dandelion.sh --version     # 打印版本号

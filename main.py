@@ -42,7 +42,6 @@ USAGE = """Usage: dandelion [--version | --self-test | --help]
  #   packages. In the artifact these may live in a stdlib package that Nuitka
  #   compiled only partially, so each one is imported by --self-test.
  #
- # Kept in sync with the installed dependencies by test/test_build_contract.py
  # (tkinter.* is intentionally excluded: optional tqdm GUI, never used).
  #
 SELF_TEST_STDLIB_SUBMODULES = (

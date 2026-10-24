@@ -168,16 +168,15 @@ Because we manually excluded certain libraries in the previous section to save c
 
 ### 2.4 CI Build and Release
 
-`.github/workflows/release.yml` implements "version calculation + contract tests + matrix build + archive smoke test + verified release":
+`.github/workflows/release.yml` implements "version calculation + matrix build + archive smoke test + verified release":
 
 1. `meta` job calculates the version: uses `git describe --tags --match "v*"` on push tags; otherwise generates `v0.0.0-dev-<yyMMdd>-<short-sha>`. Unofficial releases (workflow within CI) append a `-ci` suffix. The version is injected into `mk/make.py` via `DANDELION_VERSION`.
-2. `test` job: offline contract tests in a clean venv without pandas/numpy (`test/test_excel_contract.py` golden fixtures, `test/test_build_contract.py` archive/manifest/workflow contract, `main.py --version/--self-test`).
-3. `build` job matrix (11 targets):
+2. `build` job matrix (11 targets):
     - Windows x86_64: GitHub host runner (Nuitka + MSVC + clcache).
     - Linux x86_64 and arm64: 5 Ubuntu targets each (18.04/20.04/22.04/24.04/26.04), all utilizing container builds via `docker-build.sh` (with `ccache`, `CCACHE_DIR=.nuitka-cache/ccache`).
-    - Each job packs ONE archive with `.github/scripts/package.py` (`dandelion-<target_id>-<version>.tar.gz|zip` + `.sha256`) and smoke-tests exactly that archive: Linux in a clean `ubuntu:<distro>` container as a non-root user with `--network none` (`.github/scripts/smoke-test.sh`), Windows in a fresh directory with a reduced `PATH`. Checks: modes, `ldd`, `--version` equals the tag, `--self-test`, legacy startup.
-4. `release` job (tags only) needs `meta`, `test` and all 11 build legs; it downloads the archives, verifies exactly 11 archives with matching digests and layout (`package.py verify-set`), writes `SHA256SUMS` and attaches the files unchanged (no re-zip).
-5. Caching Strategy: `venv` uses an exact key (rebuilt when `pyproject.toml` changes); the Nuitka cache key is `build-cache-v6-<target_id>-<image digest>-<inputs hash>-<run_id>-<run_attempt>` with prefix restore, isolated per target.
+    - Each job packs ONE archive with `.github/scripts/package.py` (`dandelion-<target_id>-<version>.tar.gz|zip`) and smoke-tests exactly that archive: Linux in a clean `ubuntu:<distro>` container as a non-root user with `--network none` (`.github/scripts/smoke-test.sh`), Windows in a fresh directory with a reduced `PATH`. Checks: modes, `ldd`, `--version` equals the tag, `--self-test`, legacy startup.
+3. `release` job (tags only) needs `meta` and all 11 build legs; it downloads the archives, verifies exactly 11 archives with matching layout (`package.py verify-set`), and attaches the files unchanged (no re-zip).
+4. Caching Strategy: `venv` uses an exact key (rebuilt when `pyproject.toml` changes); the Nuitka cache key is `build-cache-v6-<target_id>-<image digest>-<inputs hash>-<run_id>-<run_attempt>` with prefix restore, isolated per target.
 
 ## 3. `src` Overview
 
