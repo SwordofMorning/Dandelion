@@ -100,15 +100,6 @@ deepseek-v4-flash:(staged_msg)> exit
 
 同时，由于长度等原因，可能需要点击`Show all xx assets`才能显示完成的构建产物，这里请注意点击。
 
-产物命名为`dandelion-<os>-<arch>[-ubuntu<NN>]-<version>`：Linux为`.tar.gz`（保留`dandelion.sh`与`bin/dandelion`的可执行权限），Windows为`.zip`：
-
-```sh
-tar -xzf dandelion-linux-x86_64-ubuntu22-<version>.tar.gz
-cd dandelion
-./dandelion.sh --version     # 打印版本号
-./dandelion.sh --self-test   # 离线自检（依赖、TLS、加密、Excel），不需要配置与网络
-```
-
 ### 3.2 使用
 
 这里的使用方式和前述的源码类似，在进入到`Dandelion`文件夹后，通过：

@@ -10,11 +10,6 @@
  #   python mk/make.py all        : build standalone executable into build/
  #   python mk/make.py version    : print project name and version
  #   python mk/make.py sign       : sign Windows executable (placeholder)
- #   python mk/make.py audit      : re-run manifest + forbidden-package audit
- #
- # @env DANDELION_VERSION  CI version override (tag, leading "v" stripped)
- # @env DANDELION_TARGET   CI distro label (e.g. "18.04")
- # @env DANDELION_STRIP    "0"/"1" overrides [strip] enabled (Linux only)
  #
 
 import configparser
@@ -38,12 +33,6 @@ MK_DIR = os.path.dirname(os.path.abspath(__file__))
  #
 ROOT_DIR = os.path.dirname(MK_DIR)
 
-# `python mk/make.py` puts mk/ (not the repo root) on sys.path; make the
-# build-time helper package `mk.postbuild` importable either way.
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
-# End-if
-
 ##
  # @brief Usage help text.
  #
@@ -55,7 +44,6 @@ Targets:
   clean    : remove runtime caches and build artifacts
   version  : print project name and version
   sign     : sign Windows executable (placeholder, P3)
-  audit    : regenerate bin/MANIFEST.txt and run the forbidden-package audit
   help     : show this help
 """
 
@@ -241,11 +229,6 @@ def _run_nuitka(cfg, name, version):
         # End-if
     # End-if
 
-    # ----- @par Compilation report (consumed by the package audit) -----
-    if cfg.getboolean("nuitka", "report", fallback=True):
-        cmd.append("--report=" + os.path.join(output_dir, "nuitka-report.xml"))
-    # End-if
-
     # ----- @par Extra user args -----
     cmd += extra_args
 
@@ -254,14 +237,11 @@ def _run_nuitka(cfg, name, version):
 
     env = os.environ.copy()
     env["NUITKA_CACHE_DIR"] = cache_dir
-    # Keep the C object cache inside the (GHA-cached) cache_dir as well, unless
-    # the caller (e.g. docker-build.sh) already pinned an explicit location.
     env.setdefault("NUITKA_CACHE_DIR_CCACHE", os.path.join(cache_dir, "ccache"))
     env.setdefault("CCACHE_DIR", env["NUITKA_CACHE_DIR_CCACHE"])
 
     print("[*] Executing: " + " ".join(cmd))
     print("[*] Nuitka Cache Dir: " + cache_dir)
-    print("[*] ccache dir: " + env["CCACHE_DIR"] + " (binary: " + str(shutil.which("ccache")) + ")")
     result = subprocess.run(cmd, cwd=ROOT_DIR, env=env)
     if result.returncode != 0:
         print("[-] Build failed with exit code " + str(result.returncode))
@@ -517,6 +497,41 @@ def _copy_stdlib_fallback(bin_dir):
 # End-def
 
 ##
+ # @brief Strip unneeded symbols from ELF binaries and shared objects (Linux).
+ #
+ # @param bin_dir Destination directory (bin/).
+ #
+def _strip_binaries(bin_dir):
+    strip_bin = shutil.which("strip")
+    if not strip_bin:
+        return
+    # End-if
+    stripped = 0
+    for dirpath, _dirnames, filenames in os.walk(bin_dir):
+        for fn in filenames:
+            path = os.path.join(dirpath, fn)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            # End-if
+            try:
+                with open(path, "rb") as f:
+                    magic = f.read(4)
+                # End-with
+            except OSError:
+                continue
+            # End-try
+            if magic == b"\x7fELF":
+                res = subprocess.run([strip_bin, "--strip-unneeded", path], capture_output=True)
+                if res.returncode == 0:
+                    stripped += 1
+                # End-if
+            # End-if
+        # End-for
+    # End-for
+    print("  [+] Stripped " + str(stripped) + " ELF binaries/shared objects.")
+# End-def
+
+##
  # @brief Post-process Nuitka output into build/<name>/ layout.
  #
  # @param cfg     Build config (ConfigParser).
@@ -627,6 +642,29 @@ def _postprocess(cfg, name, version):
         # End-with
         os.chmod(entry_sh, 0o755)
         print("  [+] Created: " + entry_sh)
+
+        # Strip debug symbols from ELF binaries and shared objects before RPATH fix.
+        _strip_binaries(bin_dir)
+
+        # Force DT_RPATH (instead of DT_RUNPATH) so the bundled libs in bin/
+        # (libpython etc.) are searched BEFORE LD_LIBRARY_PATH. Without this,
+        # a foreign libpython from the environment can be loaded and crash
+        # the binary (SystemError in codeobject).
+        patchelf = shutil.which("patchelf")
+        if patchelf:
+            exe_path = os.path.join(bin_dir, name)
+            result = subprocess.run(
+                [patchelf, "--force-rpath", "--set-rpath", "$ORIGIN", exe_path],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                print("  [+] RPATH forced on " + exe_path + ": $ORIGIN (before LD_LIBRARY_PATH)")
+            else:
+                print("  [-] Warning: patchelf failed: " + result.stderr.strip())
+            # End-if
+        else:
+            print("  [-] Warning: patchelf not found; binary may be affected by LD_LIBRARY_PATH")
+        # End-if
     # End-if
 
     # Write version file.
@@ -647,135 +685,10 @@ def _postprocess(cfg, name, version):
         # End-if
     # End-for
 
-    # ----- @par 5. Linux: strip ELF objects (after ALL copies, before RPATH) -----
-    if sys.platform.startswith("linux"):
-        _strip_elf(cfg, output_dir, bin_dir)
-        _force_rpath(bin_dir, name)
-    # End-if
-
-    # ----- @par 6. Manifest + forbidden-package audit (last step) -----
-    _manifest_and_audit(cfg, output_dir, target_dir, version)
-
     exe_name = name + ".exe" if sys.platform == "win32" else name
     print("[+] Build success: " + os.path.join(bin_dir, exe_name))
     print("[+] Version file: " + os.path.join(target_dir, "version.txt"))
     print("[+] Nuitka intermediate kept at: " + os.path.join(output_dir, entry_base + ".build"))
-# End-def
-
-##
- # @brief Force DT_RPATH=$ORIGIN on the main executable (Linux).
- #
- # DT_RPATH (instead of DT_RUNPATH) makes the bundled libs in bin/ (libpython
- # etc.) be searched BEFORE LD_LIBRARY_PATH. Without this, a foreign libpython
- # from the environment can be loaded and crash the binary (SystemError in
- # codeobject). Runs after strip so strip can never touch the patched header.
- #
- # @param bin_dir Artifact bin/ directory.
- # @param name    Executable name.
- #
-def _force_rpath(bin_dir, name):
-    patchelf = shutil.which("patchelf")
-    if not patchelf:
-        print("  [-] Warning: patchelf not found; binary may be affected by LD_LIBRARY_PATH")
-        return
-    # End-if
-    exe_path = os.path.join(bin_dir, name)
-    result = subprocess.run(
-        [patchelf, "--force-rpath", "--set-rpath", "$ORIGIN", exe_path],
-        capture_output=True, text=True
-    )
-    if result.returncode == 0:
-        print("  [+] RPATH forced on " + exe_path + ": $ORIGIN (before LD_LIBRARY_PATH)")
-    else:
-        print("  [-] Warning: patchelf failed: " + result.stderr.strip())
-    # End-if
-# End-def
-
-##
- # @brief Whether ELF stripping is enabled ([strip] enabled, DANDELION_STRIP).
- #
-def _strip_enabled(cfg):
-    override = os.environ.get("DANDELION_STRIP", "").strip().lower()
-    if override in ("0", "false", "no", "off"):
-        return False
-    # End-if
-    if override in ("1", "true", "yes", "on"):
-        return True
-    # End-if
-    return cfg.getboolean("strip", "enabled", fallback=False)
-# End-def
-
-##
- # @brief Strip ELF objects in bin/ with a ledger (see mk/postbuild.py).
- #
- # Originals go to <output_dir>/unstripped/, the ledger to
- # <output_dir>/strip-ledger.tsv; both stay OUTSIDE the shipped tree.
- #
-def _strip_elf(cfg, output_dir, bin_dir):
-    from mk import postbuild
-
-    if not _strip_enabled(cfg):
-        print("[*] ELF strip disabled ([strip] enabled=false or DANDELION_STRIP=0)")
-        return
-    # End-if
-    on_error = cfg.get("strip", "on_error", fallback="keep").strip().lower()
-    backup_dir = os.path.join(output_dir, "unstripped")
-    ledger = os.path.join(output_dir, "strip-ledger.tsv")
-    if os.path.isdir(backup_dir):
-        shutil.rmtree(backup_dir)
-    # End-if
-    print("[*] Stripping ELF objects in " + bin_dir + " (on_error=" + on_error + ")")
-    try:
-        summary = postbuild.strip_tree(bin_dir, backup_dir, ledger, on_error=on_error)
-    except RuntimeError as e:
-        print("[-] ELF strip failed: " + str(e))
-        sys.exit(1)
-    # End-try
-    saved = summary["bytes_before"] - summary["bytes_after"]
-    print("  [+] strip tool: " + summary["tool"])
-    print("  [+] ELF objects: %d, stripped: %d, skipped: %d, failed(kept original): %d"
-          % (summary["elf"], summary["stripped"], summary["skipped"], summary["failed"]))
-    print("  [+] ELF bytes: %d -> %d (saved %d = %.1f MiB)"
-          % (summary["bytes_before"], summary["bytes_after"], saved, saved / 1048576.0))
-    for rel in summary["failures"]:
-        print("  [!] strip FAILED-KEPT: " + rel)
-    # End-for
-    print("  [+] Ledger: " + ledger)
-# End-def
-
-##
- # @brief Write bin/MANIFEST.txt and fail on forbidden packages.
- #
-def _manifest_and_audit(cfg, output_dir, target_dir, version):
-    from mk import postbuild
-
-    bin_dir = os.path.join(target_dir, "bin")
-    report = os.path.join(output_dir, "nuitka-report.xml")
-    header = [
-        "Dandelion artifact manifest (generated by mk/make.py, after strip/RPATH, before archiving)",
-        "version: " + version,
-        "target: " + (os.environ.get("DANDELION_TARGET", "").strip() or "-"),
-        "platform: %s %s" % (platform.system(), platform.machine()),
-        "python: " + platform.python_version(),
-    ]
-    manifest, digest, count = postbuild.write_manifest(target_dir, header=header)
-    print("[+] Manifest: %s (%d entries, sha256 %s)" % (manifest, count, digest))
-    print("[*] Largest owners (bytes):")
-    for owner, size in postbuild.owner_sizes(manifest)[:12]:
-        print("    %10.1f KiB  %s" % (size / 1024.0, owner))
-    # End-for
-
-    forbidden = [p for p in cfg.get("audit", "forbidden_packages", fallback="").split(",") if p.strip()]
-    findings = postbuild.audit_forbidden(bin_dir, forbidden, report if os.path.isfile(report) else None)
-    if findings:
-        print("[-] Forbidden packages found in the artifact (" + ", ".join(forbidden) + "):")
-        for item in findings:
-            print("    - " + item)
-        # End-for
-        sys.exit(1)
-    # End-if
-    src = "tree + nuitka report" if os.path.isfile(report) else "tree only (no nuitka report)"
-    print("[+] Audit OK: none of [" + ", ".join(forbidden) + "] present (" + src + ")")
 # End-def
 
 ##
@@ -865,22 +778,6 @@ def target_sign():
 # End-def
 
 ##
- # @brief Target: regenerate bin/MANIFEST.txt and run the package audit on an
- #   existing build tree (no compilation).
- #
-def target_audit():
-    name, version = _project_meta()
-    cfg = _load_config()
-    output_dir = os.path.join(ROOT_DIR, cfg.get("build", "output_dir", fallback="build"))
-    target_dir = os.path.join(output_dir, name)
-    if not os.path.isdir(os.path.join(target_dir, "bin")):
-        print("[-] No build tree at " + target_dir + "; run 'python mk/make.py all' first.")
-        sys.exit(1)
-    # End-if
-    _manifest_and_audit(cfg, output_dir, target_dir, version)
-# End-def
-
-##
  # @brief Target: print usage help.
  #
 def target_help():
@@ -898,7 +795,6 @@ def main():
         "clean": target_clean,
         "version": target_version,
         "sign": target_sign,
-        "audit": target_audit,
         "help": target_help,
         "-h": target_help,
         "--help": target_help,
