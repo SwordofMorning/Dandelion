@@ -13,6 +13,7 @@
 - CLI式交互，无GUI；
 - Tools均在`src/tool`下实现，可跟随主程序一并构建；
 - 完善的日志、会话管理。
+- 复用同步 Core 的 Dandelion Remote：摘要同步、后台任务、Telegram 与持久化提醒，详见[Remote 使用说明](docs/03_remote.zh.md)。
 
 ## 二、使用源码
 
@@ -117,6 +118,7 @@ deepseek-v4-flash:(staged_msg)> exit
 
 1. 下载并运行：TODO
 2. [项目架构][02_arch.zh.path]
+3. [Dandelion Remote：同步与服务器部署](docs/03_remote.zh.md)
 
 [releases-url]: https://github.com/SwordofMorning/Dandelion/releases
 [02_arch.zh.path]: docs/02_architecture.zh.md

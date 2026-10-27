@@ -112,6 +112,7 @@ class InteractiveCLI:
             'load': PathCompleter(expanduser=True),
             'status': None,
             'commit': None,
+            'sync': {'--retry': None, '--export': PathCompleter(expanduser=True)},
             'clear': None,
             'help': None,
             'quit': None,
@@ -139,6 +140,9 @@ class InteractiveCLI:
             "   status                : View current session and staged buffer.\n"
             "   commit                : Send the staged buffer to LLM.\n"
             "   clear                 : Clear the staged buffer.\n"
+            "   sync [summary]        : Queue a work summary and upload to DR.\n"
+            "   sync --retry          : Retry pending records without creating one.\n"
+            "   sync --export <path>  : Queue a summary and export pending JSONL.\n"
             "   help / quit / exit    : System commands.\n"
             f"{self.cli.C_CYAN}===================================================={self.cli.C_RESET}\n"
         )
@@ -391,6 +395,50 @@ class InteractiveCLI:
             self.cli.error(f"Error loading file: {e}")
     # End-def
 
+    def _sync_outbox(self):
+        from src.core.sync import SyncOutbox
+        return SyncOutbox(self.session.log_dir, self.agent.workspace_dir)
+
+    def _retry_sync(self, startup=False):
+        # Without configured sync, ordinary CLI startup never makes a request.
+        if startup and not (os.environ.get("DANDELION_DR_URL") or os.environ.get("DR_URL")):
+            return
+        result = self._sync_outbox().flush()
+        if startup and not result["sent"] and not result["pending"]:
+            return
+        self.cli.info(f"Sync: {result['sent']} sent, {result['pending']} pending.")
+        if result["error"]:
+            self.cli.warning(result["error"])
+
+    def _cmd_sync(self, args):
+        if args and args[0] == "--retry":
+            if len(args) != 1:
+                self.cli.error("Usage: sync --retry")
+                return
+            self._retry_sync()
+            return
+        export_path = None
+        if args and args[0] == "--export":
+            if len(args) != 2:
+                self.cli.error("Usage: sync --export <path>")
+                return
+            export_path = args[1]
+            args = []
+        elif args and args[0].startswith("--"):
+            self.cli.error("Usage: sync [summary] | sync --retry | sync --export <path>")
+            return
+        outbox = self._sync_outbox()
+        record = outbox.enqueue(self.session, summary=" ".join(args) if args else None)
+        if record:
+            self.cli.info(f"Activity record: {record['event_id']}")
+        else:
+            self.cli.info("No completed replies or task state to summarize.")
+        if export_path:
+            count = outbox.export(export_path)
+            self.cli.success(f"Exported {count} pending record(s) to {export_path}.")
+            return
+        self._retry_sync()
+
     ##
      # @brief `clear` command handle.
      # Clear the staged buffer (memory + persisted staged.md).
@@ -614,28 +662,8 @@ class InteractiveCLI:
      # @retval (False, err) an API error occurred (all bounded retries exhausted).
      #
     def _run_agent_loop(self):
-        while True:
-            # Checkpoint C1a: a stop requested between iterations stops the loop
-            # before another LLM call is sent.
-            if self._try_stop():
-                return False, None
-            # End-if
-
-            cont, err = self.agent.step()
-
-            # Checkpoint C1b: a stop requested while the step was running (or by
-            # a tool through the [C] approval choice) stops the loop here.
-            if self._try_stop():
-                return False, None
-            # End-if
-
-            if err is not None:
-                return False, err
-            # End-if
-            if not cont:
-                return True, None
-            # End-if
-        # End-while
+        from src.core.runner import run_agent_loop
+        return run_agent_loop(self.agent, should_stop=self._try_stop)
     # End-def
 
     ##
@@ -856,6 +884,10 @@ class InteractiveCLI:
 
         # Print help
         self._print_help()
+        try:
+            self._retry_sync(startup=True)
+        except OSError:
+            self.cli.warning("Could not read the sync outbox; local records are preserved.")
 
         # Track consecutive errors to prevent infinite loop of death
         consecutive_errors = 0
@@ -964,6 +996,8 @@ class InteractiveCLI:
                     self._cmd_load(args)
                 elif command == 'status':
                     self._cmd_status()
+                elif command == 'sync':
+                    self._cmd_sync(args)
                 elif command == 'commit':
                     # The turn only starts once the user confirms the send, so
                     # _cmd_commit flips _turn_active itself. Whatever exit path

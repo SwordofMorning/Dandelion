@@ -13,6 +13,7 @@
  #
 
 import os
+from src.runtime import Runtime
 
 ##
  # @brief Skill Interface.
@@ -23,8 +24,9 @@ class SkillManager:
      #
      # @param skill_dir Path to load skill.
      #
-    def __init__(self, skill_dir):
+    def __init__(self, skill_dir, runtime=None):
         self.skill_dir = skill_dir
+        self.runtime = runtime if runtime is not None else Runtime()
         self.registry = {}
         
         if not os.path.exists(self.skill_dir):
@@ -73,7 +75,7 @@ class SkillManager:
                 with open(fpath, "r", encoding="utf-8") as f:
                     raw = f.read()
             except Exception as e:
-                print(f"[-] Failed to read skill file {fname}: {e}")
+                self.runtime.emit(f"[-] Failed to read skill file {fname}: {e}")
                 continue
 
             meta, body = self._parse_frontmatter(raw)

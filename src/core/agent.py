@@ -20,22 +20,13 @@ import json
 import time
 
 from src.utils import SafeLLMClient
-from src.utils import CLIPrinter
+from src.runtime import Runtime
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
-from src.subagent import SubAgentPool
+from src.core.tools import build_tools
 from src.subagent.dispatch import dispatch_tool_calls
 
-from src.tool import (
-    BashTool, LoadSkillTool, MarkdownTool,
-    GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
-    EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
-    ReadExcelTool, WriteExcelTool,
-    StateTool, MemoryTool,
-    SSHTool, TimeTool,
-    ReadPdfTool, ReadImageTool
-)
 from src.tool.media import (
     attach_media_blocks, DEFAULT_MEDIA_LIMITS
 )
@@ -43,9 +34,6 @@ from .compress import (
     ContextCompressor,
     extract_usage_tokens,
 )
-
-# Create a module-level CLIPrinter instance for convenience
-cli = CLIPrinter()
 
 # Dynamic Context injection markers: the [Dandelion Context] block is
 # appended to the newest plain-text user message (fresh region) instead of the
@@ -110,13 +98,18 @@ class MyAgent:
      # @param session_manager SessionManager object.
      # @param workspace_dir current pwd, used to avoid agent(llm) escape.
      #
-    def __init__(self, config, session_manager, workspace_dir):
+    def __init__(self, config, session_manager, workspace_dir, runtime=None,
+                 tool_factory=None, delegation_prompt=None):
         # ----- @par 1. Init members -----
 
         # Alignment members.
         self.config = config
         self.session = session_manager
         self.workspace_dir = workspace_dir
+        self.runtime = runtime or Runtime()
+        self.tool_factory = tool_factory or build_tools
+        self.pool = None
+        self.sub_concurrency = max(int(config.get("SUB_CONCURRENCY", 4)), 1)
         # Clear error counts.
         self.error_count = 0
         # Inject thinking level.
@@ -142,7 +135,8 @@ class MyAgent:
             thinking=self.thinking,
             effort=self.effort,
             compat=self.compat,
-            logger=self.session
+            logger=self.session,
+            runtime=self.runtime
         )
 
         # In passing session_manager as logger to maintain compatibility with legacy code.
@@ -152,13 +146,16 @@ class MyAgent:
             memory_dir=os.path.join(self.workspace_dir, "llm", "memory"),
             session_manager=self.session,
             safe_client=self.client,
-            logger=self.session
+            logger=self.session,
+            runtime=self.runtime
         )
         self.skill = SkillManager(
-            skill_dir=os.path.join(self.workspace_dir, "llm", "skill")
+            skill_dir=os.path.join(self.workspace_dir, "llm", "skill"),
+            runtime=self.runtime,
         )
         self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config, self.workspace_dir,
-                                            session_manager=self.session)
+                                            session_manager=self.session,
+                                            delegation_prompt=delegation_prompt)
 
         # Memories cache: refresh only when the last plain-text user message changes,
         # so the tail of system_prompt stays stable during tool loops (cache-friendly).
@@ -166,7 +163,7 @@ class MyAgent:
         self._memories_cache = ""
 
         # ----- Context compressor & usage metrics -----
-        self.compressor = ContextCompressor(self.client, self.session, self.config)
+        self.compressor = ContextCompressor(self.client, self.session, self.config, runtime=self.runtime)
         self._if_compress = self.compressor.condition
         self.last_usage = {"total": 0, "input": 0, "output": 0, "cached": 0}
 
@@ -185,125 +182,18 @@ class MyAgent:
      # @brief Init tools for Main Agent and Subagents (pool).
      #
     def _init_tools(self):
-        # ----- @par 1. Create Tools Object -----
-
-        self.tools = {}
-        # Pass BASE_DIR to all file-system related tools
-        # Bash maintains its own command checking
-        bash = BashTool(workspace_dir=self.workspace_dir)
-        skill_loader = LoadSkillTool(self.skill)
-        # Editor
-        md_editor = MarkdownTool(workspace_dir=self.workspace_dir)
-        read_excel_tool = ReadExcelTool(workspace_dir=self.workspace_dir)
-        write_excel_tool = WriteExcelTool(workspace_dir=self.workspace_dir)
-        # FS
-        grep_tool = GrepSearchTool(workspace_dir=self.workspace_dir)
-        write_tool = WriteFileTool(workspace_dir=self.workspace_dir)
-        read_tool = ReadFileTool(workspace_dir=self.workspace_dir)
-        list_tool = ListDirectoryTool(workspace_dir=self.workspace_dir)
-        edit_tool = EditFileTool(workspace_dir=self.workspace_dir)
-        # Others
-        web_search_tool = WebSearchTool(workspace_dir=self.workspace_dir, config=self.config)
-        time_tool = TimeTool(workspace_dir=self.workspace_dir, config=self.config)
-        # Remote
-        ssh_tool = SSHTool(workspace_dir=self.workspace_dir)
-        # Memory
-        state_tool = StateTool(workspace_dir=self.workspace_dir, session_manager=self.session)
-        memory_tool = MemoryTool(self.memory)
-
-        # Create full tools mapping for Orchestrator
-        all_tools = {
-            bash.get_name(): bash,
-            skill_loader.get_name(): skill_loader,
-            md_editor.get_name(): md_editor,
-            grep_tool.get_name(): grep_tool,
-            write_tool.get_name(): write_tool,
-            read_tool.get_name(): read_tool,
-            list_tool.get_name(): list_tool,
-            edit_tool.get_name(): edit_tool,
-            web_search_tool.get_name(): web_search_tool,
-            time_tool.get_name(): time_tool,
-            read_excel_tool.get_name(): read_excel_tool,
-            write_excel_tool.get_name(): write_excel_tool,
-            ssh_tool.get_name(): ssh_tool
-        }
-
-        # ----- @par 1-b. Multimodal (media) Tools -----
-
-        # Registered ONLY when the active model declares media support through
-        # its "file" whitelist. A text-only model never sees the media tools.
-        media_exts = self.config.get("MEDIA_EXTS", []) or []
-        media_limits = self.config.get("MEDIA_LIMITS", {}) or {}
-        media_tools = []
-
-        if ".pdf" in media_exts:
-            read_pdf_tool = ReadPdfTool(
-                workspace_dir=self.workspace_dir,
-                host=self,
-                session_dir_fn=lambda: self.session.current_session_dir,
-                media_limits=media_limits,
-                file_exts=media_exts,
-            )
-            media_tools.append(read_pdf_tool)
-            all_tools[read_pdf_tool.get_name()] = read_pdf_tool
-        # End-if
-
-        if any(ext != ".pdf" for ext in media_exts):
-            read_image_tool = ReadImageTool(
-                workspace_dir=self.workspace_dir,
-                host=self,
-                session_dir_fn=lambda: self.session.current_session_dir,
-                media_limits=media_limits,
-                file_exts=media_exts,
-            )
-            media_tools.append(read_image_tool)
-            all_tools[read_image_tool.get_name()] = read_image_tool
-        # End-if
-
-        # ----- @par 2. Subagent Pool and Tools -----
-
-        self.pool = SubAgentPool(
-            safe_client=self.client,
-            logger=self.session,
-            config=self.config,
-            all_tools=all_tools,
-            max_depth=int(self.config.get("SUB_DEPTH", 1))
-        )
-
-        # Decompose one descriptions to multi (or one) tasks.
-        plan_tool = PlanTool(self.client, self.config)
-        # Spawn a new subagent (only when SubAgents are enabled: SUB_DEPTH > 0).
-        spawn_subagent = SpawnSubagentTool(self.pool) if self.pool.max_depth > 0 else None
-        # Max SubAgents running at once for parallel spawn calls in one response.
-        self.sub_concurrency = max(int(self.config.get("SUB_CONCURRENCY", 4)), 1)
-
-        # ----- @par 3. Register Tools  -----
-
-        # Added all tools to the registration list
-        tool_list = [
-            bash, skill_loader, md_editor,
-            grep_tool, write_tool, read_tool, list_tool,
-            edit_tool, plan_tool, web_search_tool,
-            read_excel_tool, write_excel_tool,
-            state_tool, memory_tool,
-            ssh_tool, time_tool
-        ]
-        # Media tools join the main-agent toolset only when registered above.
-        tool_list.extend(media_tools)
-        if spawn_subagent is not None:
-            tool_list.append(spawn_subagent)
-        # End-if
-
-        for t in tool_list:
-            self.tools[t.get_name()] = t
-
+        self.tools = self.tool_factory(self)
+        for tool in self.tools.values():
+            tool.runtime = self.runtime
         self.tool_schemas = [
             {
-                "name": t.get_name(),
-                "description": t.get_description(),
-                "input_schema": t.get_schema()
-            } for t in self.tools.values()
+                "name": tool.get_name(),
+                "description": tool.get_description(),
+                "input_schema": tool.get_schema(),
+            }
+            for tool in self.tools.values()
         ]
+        self.prompt_builder.tool_names = frozenset(self.tools)
     # End-def
 
     ##
@@ -443,7 +333,7 @@ class MyAgent:
                 # End-if
             except Exception as e:
                 # Log failure details instead of silently dropping the section.
-                print(f"[-] Warning: Failed to load task state from {state_file}: {e}")
+                self.runtime.emit(f"[-] Warning: Failed to load task state from {state_file}: {e}")
             # End-try
         # End-if
 
@@ -526,15 +416,13 @@ class MyAgent:
     ##
      # @brief Display token usage metrics in muted gray (Ubuntu / VSCode SSH style).
      #
-    @staticmethod
-    def _print_token_usage(usage_info):
+    def _print_token_usage(self, usage_info):
         if not usage_info:
             return
         # End-if
-        cli.print(
-            f"{cli.C_GRAY}    Token: {usage_info['total']} | Input: {usage_info['input']} | "
-            f"Output: {usage_info['output']} | Cached: {usage_info['cached']}{cli.C_RESET}",
-            level="debug"
+        self.runtime.emit(
+            f"    Token: {usage_info['total']} | Input: {usage_info['input']} | "
+            f"Output: {usage_info['output']} | Cached: {usage_info['cached']}"
         )
     # End-def
 
@@ -583,7 +471,8 @@ class MyAgent:
             attempt += 1
             resp, err = self.client.safe_stream_request(
                 payload,
-                log_tag=f"PRE LLM CALL - MAIN (attempt {attempt}/{max_attempts})"
+                log_tag=f"PRE LLM CALL - MAIN (attempt {attempt}/{max_attempts})",
+                echo=self.runtime.echo,
             )
 
             # POST-call logging (per attempt: failed attempts record the error).
@@ -600,8 +489,8 @@ class MyAgent:
             # Check if this error is due to context window overflow
             if self.compressor.is_overflow_error(err) and compactions_done < max_compactions:
                 compactions_done += 1
-                print(f"\n[!] Context overflow detected: {err}")
-                print(f"[*] Triggering reactive context compaction ({compactions_done}/{max_compactions})...")
+                self.runtime.emit(f"\n[!] Context overflow detected: {err}")
+                self.runtime.emit(f"[*] Triggering reactive context compaction ({compactions_done}/{max_compactions})...")
                 new_hist, stats = self.compressor.compress(self.history)
                 if stats.get("status") == "archive_failed":
                     self._pending_media_blocks = []
@@ -619,23 +508,23 @@ class MyAgent:
                         req_messages = attach_media_blocks(req_messages, self._pending_media_blocks)
                     # End-if
                     payload["messages"] = req_messages
-                    print(f"[*] Retrying request with compacted context...")
+                    self.runtime.emit(f"[*] Retrying request with compacted context...")
                     continue
                 else:
-                    print("[-] Context cannot be compacted further.")
+                    self.runtime.emit("[-] Context cannot be compacted further.")
                 # End-if
             # End-if
 
             if attempt < max_attempts:
                 wait = _LLM_RETRY_BACKOFF[attempt - 1]
-                print(f"[-] API Error: {err} (attempt {attempt}/{max_attempts})")
-                print(f"[-] Retrying in {wait}s ...")
+                self.runtime.emit(f"[-] API Error: {err} (attempt {attempt}/{max_attempts})")
+                self.runtime.emit(f"[-] Retrying in {wait}s ...")
                 time.sleep(wait)
             # End-if
         # End-while
 
         if err is not None:
-            print(f"[-] API Error: {err}")
+            self.runtime.emit(f"[-] API Error: {err}")
             self._pending_media_blocks = []
             return False, err
         # End-if
@@ -649,7 +538,7 @@ class MyAgent:
         total_tokens = self.last_usage.get("total", 0)
         if self._if_compress(err=None, total_tokens=total_tokens):
             reason = f"Tokens ({total_tokens}) exceeded max_context_tokens ({self.compressor.max_context_tokens})"
-            print(f"\n[!] Context threshold reached: {reason}")
+            self.runtime.emit(f"\n[!] Context threshold reached: {reason}")
             new_hist, stats = self.compressor.compress(self.history)
             if stats.get("status") == "archive_failed":
                 return False, f"Compaction archive failed: {stats.get('error')}"
@@ -678,7 +567,7 @@ class MyAgent:
         # barrier executed alone and in order. Each tool_use gets one outcome.
         outcomes = dispatch_tool_calls(
             self.tools, resp.content, max_workers=self.sub_concurrency,
-            on_start=lambda b: cli.print(f"\nTool requested: {b.name}", level="info"),
+            on_start=lambda b: self.runtime.emit(f"\nTool requested: {b.name}"),
         )
         for block, success, output in outcomes:
             # A successful memory write changes what _get_memories() would
@@ -714,14 +603,13 @@ class MyAgent:
                         {"type": "text", "text": output.get("pointer", "")},
                     ],
                 })
-                cli.print(f"    Media attached: {output.get('kind')} "
-                          f"(~{media_cost} tokens, history keeps the pointer only)",
-                          level="info")
+                self.runtime.emit(f"    Media attached: {output.get('kind')} "
+                                  f"(~{media_cost} tokens, history keeps the pointer only)")
                 continue
             # End-if
 
             output_str = str(output)
-            cli.print(f"{cli.C_GRAY}    Result length: {len(output_str)} chars{cli.C_RESET}", level="debug")
+            self.runtime.emit(f"    Result length: {len(output_str)} chars")
             
             # --- Large Output Offload ---
             # Prevents context explosion and delays the need for compression.

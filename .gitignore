@@ -8,6 +8,7 @@ env/
 
 # Logs and Caches
 .log/
+.remote/
 __pycache__/
 *.pyc
 *.pyo

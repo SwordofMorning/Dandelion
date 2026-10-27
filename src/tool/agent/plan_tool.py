@@ -137,7 +137,7 @@ class PlanTool(BaseTool):
             "system": PLAN_SYSTEM_PROMPT
         }
         
-        print("\n[+] [PlanTool] Generating TaskPlan...")
+        self._emit("\n[+] [PlanTool] Generating TaskPlan...")
 
         resp, err = self.safe_client.route_request(
             payload=payload,

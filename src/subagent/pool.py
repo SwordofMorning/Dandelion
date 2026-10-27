@@ -12,6 +12,7 @@
 
 import time
 import uuid
+from src.runtime import Runtime
 from .subagent import SubAgent
 from .result import SubAgentResult
 from .registry import resolve_toolset
@@ -29,11 +30,12 @@ class SubAgentPool:
      # @param all_tools all tools, used to resolve toolset to subagents.
      # @param max_depth max SubAgent depth ([Main] SUB_DEPTH; 0 disables).
      #
-    def __init__(self, safe_client, logger, config, all_tools, max_depth=1):
+    def __init__(self, safe_client, logger, config, all_tools, max_depth=1, runtime=None):
         self.safe_client = safe_client
         self.logger = logger
         self.config = config
         self.all_tools = all_tools
+        self.runtime = runtime if runtime is not None else Runtime()
         try:
             self.max_depth = max(int(max_depth), 0)
         except (TypeError, ValueError):
@@ -127,6 +129,7 @@ class SubAgentPool:
                 depth=depth,
                 max_depth=self.max_depth,
                 subagent_id=subagent_id,
+                runtime=self.runtime,
                 routing_context={
                     "task_description": task_description,
                     "toolset_name": toolset_name,

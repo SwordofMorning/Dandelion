@@ -5,32 +5,34 @@
  # @brief Provides utilities for the Dandelion agent.
  #
 
-# CLI utilities
-from .cli import CLIPrinter, InteractiveCLI, cli_printer
+from importlib import import_module
 
-# Config utilities
-from .config import load_api_config
+# Importing core helpers must not initialize the terminal frontend.
+_EXPORTS = {
+    "CLIPrinter": (".cli", "CLIPrinter"),
+    "InteractiveCLI": (".cli", "InteractiveCLI"),
+    "cli_printer": (".cli", "cli_printer"),
+    "load_api_config": (".config", "load_api_config"),
+    "LLMProvider": (".llm_provider", "LLMProvider"),
+    "AnthropicProvider": (".llm_provider", "AnthropicProvider"),
+    "OpenAIProvider": (".llm_provider", "OpenAIProvider"),
+    "create_provider": (".llm_provider", "create_provider"),
+    "AgentLogger": (".logging", "AgentLogger"),
+    "SessionManager": (".logging", "SessionManager"),
+    "ModelRegistry": (".routing", "ModelRegistry"),
+    "RegistryModelSpec": (".routing", "RegistryModelSpec"),
+    "RoutingPolicy": (".routing", "RoutingPolicy"),
+    "SafeLLMClient": (".llm_request", "SafeLLMClient"),
+}
 
-# LLM Provider utilities
-from .llm_provider import (
-    LLMProvider,
-    AnthropicProvider,
-    OpenAIProvider,
-    create_provider,
-)
 
-# Logging utilities
-from .logging import AgentLogger, SessionManager
-
-# Routing utilities
-from .routing import (
-    ModelRegistry,
-    RegistryModelSpec,
-    RoutingPolicy,
-)
-
-# Safe LLM Client
-from .llm_request import SafeLLMClient
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module, attribute = _EXPORTS[name]
+    value = getattr(import_module(module, __name__), attribute)
+    globals()[name] = value
+    return value
 
 __all__ = [
     # CLI

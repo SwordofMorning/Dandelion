@@ -22,6 +22,7 @@
  #
 
 import threading
+from src.runtime import Runtime
 from ..llm_provider import AnthropicProvider, OpenAIProvider
 from ..llm_provider.effort import FLAVOR_AUTO
 
@@ -53,13 +54,14 @@ class SafeLLMClient:
                  all_models=None, sub_list=None,
                  thinking="disabled", effort="medium",
                  compat=FLAVOR_AUTO,
-                 logger=None):
+                 logger=None, runtime=None):
         self.model_id = model_id
         self.sdk_type = str(sdk_type).strip()
         self.thinking = thinking
         self.effort = effort
         self.compat = compat
         self.logger = logger
+        self.runtime = runtime if runtime is not None else Runtime(echo=True)
 
         # Setup Default Provider for Main Agent
         self.provider = self._create_provider(
@@ -181,8 +183,9 @@ class SafeLLMClient:
      # @return (response_object, None) on success.
      # @return (None, error_string) on failure.
      #
-    def safe_stream_request(self, payload, log_tag="PRE LLM CALL - MAIN", echo=True):
+    def safe_stream_request(self, payload, log_tag="PRE LLM CALL - MAIN", echo=None):
         payload = self._with_normalized_messages(payload)
+        echo = self.runtime.echo if echo is None else echo
         return self.provider.safe_stream_request(payload, logger=self.logger, log_tag=log_tag, echo=echo)
     # End-def
 
@@ -241,7 +244,8 @@ class SafeLLMClient:
      # @see SubAgent.run()
      #
     def route_request(self, payload, task_description="", toolset_name="minimal",
-                      depth=0, stream=True, echo=True, route_info=None):
+                      depth=0, stream=True, echo=None, route_info=None):
+        echo = self.runtime.echo if echo is None else echo
         # 0. Fallback to main agent model if SUB_LIST is empty.
         if not self._policy or not self._policy.specs:
             return self.safe_stream_request(payload, echo=echo) if stream else self.safe_request(payload)
@@ -256,7 +260,7 @@ class SafeLLMClient:
         spec = self._registry.get_spec(alias)
         inferred = self._policy.infer_conditions(task_description, toolset_name, depth)
 
-        print(f"\n[Router] Task -> '{alias}' | Conditions: {sorted(list(inferred))}"
+        self.runtime.emit(f"\n[Router] Task -> '{alias}' | Conditions: {sorted(list(inferred))}"
               f" | thinking={spec.thinking} effort={spec.effort}")
 
         max_retries = 2
@@ -278,14 +282,14 @@ class SafeLLMClient:
                     route_info["alias"] = current_alias
                 return resp, None
 
-            print(f"[Router] Model '{current_alias}' attempt {attempt+1} failed: {err}")
+            self.runtime.emit(f"[Router] Model '{current_alias}' attempt {attempt+1} failed: {err}")
 
             # 4. All retries failed, walk the fallback chain.
             if attempt == max_retries:
                 # Iterate all models; candidates come from `get_fallback_chain`.
                 for fallback_alias in self._policy.get_fallback_chain(current_alias):
                     # Try to copy payload and request.
-                    print(f"[Router] Falling back to '{fallback_alias}'...")
+                    self.runtime.emit(f"[Router] Falling back to '{fallback_alias}'...")
                     fb_provider = self._get_cached_provider(fallback_alias)
                     fb_spec = self._registry.get_spec(fallback_alias)
 
@@ -301,7 +305,7 @@ class SafeLLMClient:
                             route_info["alias"] = fallback_alias
                         return resp, None
 
-                    print(f"[Router] Fallback '{fallback_alias}' also failed: {err}")
+                    self.runtime.emit(f"[Router] Fallback '{fallback_alias}' also failed: {err}")
                 # End-for
 
                 # All fallback fail, throw error.

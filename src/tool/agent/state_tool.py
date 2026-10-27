@@ -111,12 +111,12 @@ class StateTool(BaseTool):
                 if isinstance(loaded, dict):
                     state = loaded
                 else:
-                    print(f"[-] Warning: task state at {state_file} is not a JSON "
+                    self._emit(f"[-] Warning: task state at {state_file} is not a JSON "
                           "object; falling back to a fresh default state.")
             except Exception as e:
                 # A corrupt state file must not break the tool, but the loss is
                 # loud: the next successful update overwrites the corrupt file.
-                print(f"[-] Warning: failed to parse task state at {state_file}: {e}")
+                self._emit(f"[-] Warning: failed to parse task state at {state_file}: {e}")
         return state
 
     ##

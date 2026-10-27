@@ -26,6 +26,13 @@ class BaseTool:
         self.workspace_dir = workspace_dir if workspace_dir else os.getcwd()
     # End-def
 
+    def _emit(self, text):
+        runtime = getattr(self, "runtime", None)
+        if runtime is not None:
+            runtime.emit(text)
+        else:
+            print(text)
+
     ##
      # @brief Return tool's name.
      #
@@ -78,6 +85,10 @@ class BaseTool:
         if is_inside:
             return True
         # End-if
+
+        runtime = getattr(self, "runtime", None)
+        if runtime is not None:
+            return bool(runtime.approve(action_desc, abs_target, abs_workspace))
 
         with _APPROVAL_LOCK:
             return self._ask_approval(abs_target, abs_workspace, action_desc)

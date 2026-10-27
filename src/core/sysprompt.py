@@ -38,13 +38,16 @@ class PromptBuilder:
      # @param workspace_dir Workspace root (path confinement).
      # @param session_manager SessionManager (session-scoped task state), optional.
      #
-    def __init__(self, memory_manager, skill_manager, config, workspace_dir=".", session_manager=None):
+    def __init__(self, memory_manager, skill_manager, config, workspace_dir=".",
+                 session_manager=None, delegation_prompt=None, tool_names=None):
         # Members Init.
         self.memory = memory_manager
         self.skill = skill_manager
         self.config = config
         self.workspace_dir = workspace_dir
         self.session_manager = session_manager
+        self.delegation_prompt = delegation_prompt
+        self.tool_names = frozenset(tool_names) if tool_names is not None else None
 
         # OS
         self.os_name = platform.system()
@@ -77,11 +80,15 @@ class PromptBuilder:
         sections.append("You are Dandelion, a professional coding and management agent running locally.")
         sections.append(f"Environment Info:\n{self.terminal_hint}")
 
-        # 2. SubAgent orchestration: only when SubAgents can actually be spawned
-        # (SUB_LIST configured and SUB_DEPTH > 0, matching the tool registration).
+        # 2. Delegation instructions belong to the caller's actual toolset.
+        # An explicit empty string disables delegation instructions entirely.
         sub_list = self.config.get("SUB_LIST", [])
         sub_depth = int(self.config.get("SUB_DEPTH", 1))
-        if sub_list and sub_depth > 0:
+        if self.delegation_prompt is not None:
+            if self.delegation_prompt:
+                sections.append(self.delegation_prompt)
+        elif (sub_list and sub_depth > 0
+              and self._has_tool("plan_tool") and self._has_tool("spawn_subagent")):
             nesting = (
                 "SubAgents cannot delegate further (SUB_DEPTH=1).\n" if sub_depth == 1 else
                 f"SubAgents may delegate down to depth {sub_depth} (SUB_DEPTH={sub_depth}).\n"
@@ -110,11 +117,12 @@ class PromptBuilder:
         # End-if
         
         # 3. Skills Catalog (Layer 1)
-        catalog = self.skill.get_catalog()
-        sections.append(
-            f"Available Skills:\n{catalog}\n"
-            "Use the 'load_skill' tool to fetch the full content of a skill when you need specific formats or rules."
-        )
+        if self._has_tool("load_skill"):
+            catalog = self.skill.get_catalog()
+            sections.append(
+                f"Available Skills:\n{catalog}\n"
+                "Use the 'load_skill' tool to fetch the full content of a skill when you need specific formats or rules."
+            )
         
         # 4. Security Rules
         sections.append(
@@ -189,6 +197,10 @@ class PromptBuilder:
 
         return "\n\n".join(sections)
     # End-def build
+
+    def _has_tool(self, name):
+        # None preserves the standalone builder's historical behavior.
+        return self.tool_names is None or name in self.tool_names
 
     ##
      # @brief Render the Task State block text (Attention Anchor).

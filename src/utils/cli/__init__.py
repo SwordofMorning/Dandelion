@@ -7,7 +7,6 @@
  #
 
 from .printer import CLIPrinter
-from .cli import InteractiveCLI
 
 __all__ = [
     "CLIPrinter",
@@ -20,3 +19,11 @@ __all__ = [
 #       shadow the cli.py submodule, making `import src.utils.cli.cli as x`
 #       (and `import src.utils.cli.<submodule> as x`) fail.
 cli_printer = CLIPrinter()
+
+
+def __getattr__(name):
+    if name == "InteractiveCLI":
+        from .cli import InteractiveCLI
+        globals()[name] = InteractiveCLI
+        return InteractiveCLI
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

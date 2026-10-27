@@ -10,6 +10,7 @@
 import datetime
 import json
 import os
+from src.runtime import Runtime
 
 DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 128000
 MIN_COMPACT_SUMMARY_CHARS = 40
@@ -87,21 +88,22 @@ def classify_compaction_summary(text, stop_reason, err):
  #
  # @return Clamped int output limit.
  #
-def resolve_compact_summary_max_tokens(raw, profile_max_tokens=None):
+def resolve_compact_summary_max_tokens(raw, profile_max_tokens=None, runtime=None):
+    emit = (runtime if runtime is not None else Runtime()).emit
     if raw is None:
         value = DEFAULT_COMPACT_SUMMARY_MAX_TOKENS
     else:
         try:
             value = int(raw)
         except (TypeError, ValueError):
-            print(f"[-] Warning: invalid COMPACT_SUMMARY_MAX_TOKENS={raw!r}; "
+            emit(f"[-] Warning: invalid COMPACT_SUMMARY_MAX_TOKENS={raw!r}; "
                   f"using {DEFAULT_COMPACT_SUMMARY_MAX_TOKENS}.")
             value = DEFAULT_COMPACT_SUMMARY_MAX_TOKENS
         # End-try
     # End-if
 
     if value < MIN_COMPACT_SUMMARY_MAX_TOKENS:
-        print(f"[-] Warning: COMPACT_SUMMARY_MAX_TOKENS={value} is below "
+        emit(f"[-] Warning: COMPACT_SUMMARY_MAX_TOKENS={value} is below "
               f"{MIN_COMPACT_SUMMARY_MAX_TOKENS}; clamping.")
         value = MIN_COMPACT_SUMMARY_MAX_TOKENS
     # End-if
@@ -110,7 +112,7 @@ def resolve_compact_summary_max_tokens(raw, profile_max_tokens=None):
         try:
             cap = int(profile_max_tokens)
             if 0 < cap < value:
-                print(f"[*] Compaction summary cap {value} exceeds profile "
+                emit(f"[*] Compaction summary cap {value} exceeds profile "
                       f"MAX_TOKENS={cap}; clamping to {cap}.")
                 value = cap
             # End-if
@@ -331,10 +333,11 @@ class CompressCondition:
  # Implements reactive error-driven compaction with 80% smooth sliding retention.
  #
 class ContextCompressor:
-    def __init__(self, safe_client, session_manager, config):
+    def __init__(self, safe_client, session_manager, config, runtime=None):
         self.client = safe_client
         self.session = session_manager
         self.config = config
+        self.runtime = runtime if runtime is not None else Runtime()
 
         self.max_context_tokens = int(config.get("MAX_CONTEXT_TOKENS", 128000))
         self.condition = CompressCondition(self.max_context_tokens)
@@ -426,11 +429,11 @@ class ContextCompressor:
         # 1. Check if history is long enough to compress
         min_required = self.head_size + self.recent_size + 2
         if len(history) < min_required:
-            print(f"[-] History length ({len(history)}) too short to compact (min {min_required}).")
+            self.runtime.emit(f"[-] History length ({len(history)}) too short to compact (min {min_required}).")
             return None, {"status": "too_short", "len": len(history)}
         # End-if
 
-        print(f"[*] Compacting context (~{int(target_reduction * 100)}% reduction target) via LLM...")
+        self.runtime.emit(f"[*] Compacting context (~{int(target_reduction * 100)}% reduction target) via LLM...")
 
         # 2. Backup raw history before any modification
         archive_dir = os.path.join(self.session.current_session_dir, "archives")
@@ -442,7 +445,7 @@ class ContextCompressor:
                           default=self.session._default_serializer)
             # End-with
         except OSError as e:
-            print(f"[-] Compaction archive failed: {e}")
+            self.runtime.emit(f"[-] Compaction archive failed: {e}")
             return None, {"status": "archive_failed", "error": str(e)}
         # End-try
 
@@ -476,7 +479,7 @@ class ContextCompressor:
         middle = history[trimmed_head_size:start_recent_idx]
 
         if not middle:
-            print("[-] No middle candidate messages available for compaction.")
+            self.runtime.emit("[-] No middle candidate messages available for compaction.")
             return None, {"status": "no_middle"}
         # End-if
 
@@ -491,7 +494,7 @@ class ContextCompressor:
 
         candidates = middle[candidates_start:]
         if not candidates:
-            print("[-] No candidates to compact beyond existing summary.")
+            self.runtime.emit("[-] No candidates to compact beyond existing summary.")
             return None, {"status": "no_candidates"}
         # End-if
 
@@ -532,6 +535,7 @@ class ContextCompressor:
         summary_max_tokens = resolve_compact_summary_max_tokens(
             self.config.get("COMPACT_SUMMARY_MAX_TOKENS"),
             self.config.get("MAX_TOKENS"),
+            runtime=self.runtime,
         )
 
         summary_payload = {
@@ -551,7 +555,7 @@ class ContextCompressor:
         summary_content = summary_response_text if status in ("ok", "truncated") else ""
 
         if status in ("empty", "error"):
-            print(f"[-] Compression failed: {reason}. Preserving original history without truncation.")
+            self.runtime.emit(f"[-] Compression failed: {reason}. Preserving original history without truncation.")
             self.session.log_api_call("POST LLM CALL - COMPRESSION SUMMARY", {
                 "status": status,
                 "reason": reason,
@@ -569,7 +573,7 @@ class ContextCompressor:
                 "archive_path": archive_path,
             }
         elif status == "truncated":
-            print(f"[-] Warning: compression summary hit output cap ({summary_max_tokens} tokens).")
+            self.runtime.emit(f"[-] Warning: compression summary hit output cap ({summary_max_tokens} tokens).")
         # End-if
 
         # 9. Assemble new history (only when summarization succeeded or was truncated)
@@ -591,7 +595,7 @@ class ContextCompressor:
             "archive_path": archive_path,
         })
 
-        print(f"[+] Context compacted successfully: compressed {len(slice_to_compress)} turns, "
+        self.runtime.emit(f"[+] Context compacted successfully: compressed {len(slice_to_compress)} turns, "
               f"retained {len(new_history)} turns (~{int((1 - target_reduction) * 100)}% kept).")
 
         return new_history, {

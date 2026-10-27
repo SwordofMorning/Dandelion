@@ -32,6 +32,7 @@
  #
 
 import os
+from src.runtime import Runtime
 
 ##
  # @brief Memory Management Class.
@@ -54,7 +55,7 @@ class MemoryManager:
      # @param logger Save logs.
      #
     def __init__(self, memory_dir="./llm/memory", session_memory_dir=None,
-                 session_manager=None, safe_client=None, logger=None):
+                 session_manager=None, safe_client=None, logger=None, runtime=None):
         self.memory_dir = memory_dir
         # Static override (used by tests / standalone usage). When
         # session_manager is provided it wins, so `checkout` (session switch)
@@ -63,6 +64,7 @@ class MemoryManager:
         self.session_manager = session_manager
         self.client = safe_client
         self.logger = logger
+        self.runtime = runtime if runtime is not None else Runtime()
 
         if not os.path.exists(self.memory_dir):
             os.makedirs(self.memory_dir)
@@ -197,7 +199,7 @@ class MemoryManager:
             except (OSError, UnicodeDecodeError) as e:
                 # Skip unreadable / invalid-UTF-8 files instead of breaking the
                 # whole memory scan (and the system prompt build).
-                print(f"[-] Warning: skipping unreadable memory file {fname}: {e}")
+                self.runtime.emit(f"[-] Warning: skipping unreadable memory file {fname}: {e}")
                 continue
             # End-try
 
@@ -256,7 +258,7 @@ class MemoryManager:
         except (OSError, UnicodeDecodeError) as e:
             # A corrupt/unreadable index must not break the system prompt
             # build; get_index_text() naturally skips this tier's section.
-            print(f"[-] Warning: skipping unreadable memory index {index_file}: {e}")
+            self.runtime.emit(f"[-] Warning: skipping unreadable memory index {index_file}: {e}")
             return ""
     # End-def
 

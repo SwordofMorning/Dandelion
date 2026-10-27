@@ -12,6 +12,7 @@ A CLI-style Agent tool built with Nuitka, capable of cross-platform deployment t
 - CLI-based interaction, no GUI;
 - All Tools are implemented under `src/tool` and can be built together with the main program;
 - Comprehensive logging and session management.
+- Dandelion Remote reuses the synchronous Core for activity sync, background jobs, Telegram and persistent reminders; see the [Remote guide](03_remote.en.md).
 
 ## 2. Using Source Code
 
@@ -116,6 +117,7 @@ Both scripts point to the `dandelion` binary file located in their subdirectorie
 
 1. Download and run TODO.
 2. [Architecture][02_arch.en.path]
+3. [Dandelion Remote: sync and server deployment](03_remote.en.md)
 
 [releases-url]: https://github.com/SwordofMorning/Dandelion/releases
 [02_arch.en.path]: 02_architecture.en.md

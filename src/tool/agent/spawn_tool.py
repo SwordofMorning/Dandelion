@@ -40,6 +40,7 @@ class SpawnSubagentTool(BaseTool):
     def __init__(self, pool):
         super().__init__()
         self.pool = pool
+        self.runtime = getattr(pool, "runtime", None)
     # End-def
 
     def get_name(self):
@@ -108,7 +109,7 @@ class SpawnSubagentTool(BaseTool):
         if expected_format:
             task_desc += f"\n\nExpected Output Format:\n{expected_format}"
             
-        print(f"\n[+] [SpawnSubagentTool] Spawning SubAgent for: {task_desc[:60]}...")
+        self._emit(f"\n[+] [SpawnSubagentTool] Spawning SubAgent for: {task_desc[:60]}...")
         
         result = self.pool.create_and_run(
             role_prompt=role_prompt,
@@ -144,6 +145,7 @@ class RestrictedSpawnTool(BaseTool):
     def __init__(self, pool, parent_subagent, current_depth, max_depth):
         super().__init__()
         self.pool = pool
+        self.runtime = getattr(pool, "runtime", None)
         self.parent = parent_subagent
         self.current_depth = current_depth
         self.max_depth = max_depth
@@ -228,7 +230,7 @@ class RestrictedSpawnTool(BaseTool):
             
         parent_tools = set(self.parent.tools.keys())
         
-        print(f"\n[+] [RestrictedSpawnTool] Spawning SubSubAgent (depth {self.current_depth+1}) for: {task_desc[:60]}...")
+        self._emit(f"\n[+] [RestrictedSpawnTool] Spawning SubSubAgent (depth {self.current_depth+1}) for: {task_desc[:60]}...")
         
         result = self.pool.create_and_run(
             role_prompt=role_prompt,

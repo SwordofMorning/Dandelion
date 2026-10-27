@@ -13,6 +13,7 @@ from src.utils import load_api_config
 from src.utils import SessionManager
 from src.utils import InteractiveCLI
 from src.core.agent import MyAgent
+from src.utils.cli.runtime import cli_runtime
 
 # Build metadata
 try:
@@ -38,7 +39,8 @@ def main():
     agent = MyAgent(
         config=config,
         session_manager=session_mgr,
-        workspace_dir=base_dir()
+        workspace_dir=base_dir(),
+        runtime=cli_runtime(),
     )
 
     print(f"[+] Agent Initialization Successful. Model: {config.get('NAME', config['MODEL_ID'])}")

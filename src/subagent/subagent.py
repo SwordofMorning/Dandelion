@@ -25,7 +25,7 @@ from .result import SubAgentResult
 from .dispatch import dispatch_tool_calls, in_worker_thread
 from src.tool.media import (MediaToolBase, estimate_messages_tokens,
                             attach_media_blocks, DEFAULT_MEDIA_LIMITS)
-from src.utils.cli.interrupt import is_requested as stop_requested
+from src.runtime import Runtime
 
 MAX_TURNS = 30
 
@@ -54,9 +54,10 @@ class SubAgent(ISubAgent):
     def __init__(
         self, safe_client, logger, config,
         pool, role_prompt, tools,
-        depth=1, max_depth=1, subagent_id=None, routing_context=None
+        depth=1, max_depth=1, subagent_id=None, routing_context=None, runtime=None
     ):
         super().__init__(safe_client, logger, tools, config)
+        self.runtime = runtime if runtime is not None else Runtime()
         self.pool = pool
         self.depth = depth
         self.max_depth = max_depth
@@ -282,9 +283,9 @@ class SubAgent(ISubAgent):
         model_alias = ""
         finished = False
         # Parallel siblings stream silently; their tokens would interleave.
-        echo = not in_worker_thread()
+        echo = self.runtime.echo and not in_worker_thread()
 
-        print(f"\n[*] [SubAgent:{self.subagent_id}] Spawned (depth={self.depth}/{self.max_depth})"
+        self.runtime.emit(f"\n[*] [SubAgent:{self.subagent_id}] Spawned (depth={self.depth}/{self.max_depth})"
               f" Task: {task_description[:80]}...")
 
         messages = [{"role": "user", "content": task_description}]
@@ -293,8 +294,8 @@ class SubAgent(ISubAgent):
         try:
             for turn in range(MAX_TURNS):
                 # A Ctrl+C asks the whole turn to stop: finish at a clean boundary.
-                if stop_requested():
-                    print(f"[!] [SubAgent:{self.subagent_id}] Stop requested; ending early.")
+                if self.runtime.cancelled():
+                    self.runtime.emit(f"[!] [SubAgent:{self.subagent_id}] Stop requested; ending early.")
                     return self._result(task_description, "cancelled",
                                         self._extract_final_summary(messages), start_time,
                                         tool_calls_made, model_alias,
@@ -353,7 +354,7 @@ class SubAgent(ISubAgent):
                 for block, success, output in dispatch_tool_calls(self.tools, resp.content, max_workers=1):
                     tool_calls_made += 1
                     self._record_artifact(block, success)
-                    print(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
+                    self.runtime.emit(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")
 
                     # Media result: the payload is kept aside and hydrated as
                     # a sibling part of this user message on every request of
@@ -394,7 +395,7 @@ class SubAgent(ISubAgent):
         # End-try
         except Exception as e:
             err_msg = f"Crash during internal loop: {e!s}"
-            print(f"[-] [SubAgent:{self.subagent_id}] {err_msg}")
+            self.runtime.emit(f"[-] [SubAgent:{self.subagent_id}] {err_msg}")
             return self._result(task_description, "failed",
                                 "Execution crashed before completion.", start_time,
                                 tool_calls_made, model_alias, err_msg)
@@ -414,7 +415,7 @@ class SubAgent(ISubAgent):
             error = f"SubAgent hit the {MAX_TURNS}-turn limit before finishing."
         # End-if
 
-        print(f"[*] [SubAgent:{self.subagent_id}] {status} in {time.time() - start_time:.1f}s "
+        self.runtime.emit(f"[*] [SubAgent:{self.subagent_id}] {status} in {time.time() - start_time:.1f}s "
               f"({tool_calls_made} tool calls, depth={self._depth_reached()}, "
               f"~{int(estimate_messages_tokens(messages))} tokens)")
 

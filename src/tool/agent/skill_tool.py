@@ -66,7 +66,7 @@ class LoadSkillTool(BaseTool):
         if not content:
             return False, f"Error: Skill '{name}' not found."
             
-        print(f"\n[+] [Skill Loaded] Agent fetched skill: {name}")
+        self._emit(f"\n[+] [Skill Loaded] Agent fetched skill: {name}")
         return True, content
     # End-def
 # End-class
