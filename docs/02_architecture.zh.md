@@ -97,7 +97,7 @@ nofollow_imports = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certi
 copy_packages = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
 
 # Custom config: Force compile standard libraries required by the bypassed packages.
-include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3
+include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree
 ```
 
 为了减少编译时间，对上述的 package 指定了不编译与手动拷贝。如果需要"全编译"，可以删除这几行配置。
@@ -163,21 +163,16 @@ windows_jobs = 2
 5. 生成运行脚本：为了可以在 `build/Dandelion` 这一层中运行程序，而不需要进到 `build/Dandelion/bin` 中，在外层放置了 `dandelion.cmd` 和 `dandelion.sh`，用于执行 `bin` 中的实际二进制程序；
     > Linux 侧采用 `exec` 包装脚本而非符号链接，以避免双路径解析（`$ORIGIN` 与 Nuitka 模块目录）不一致导致的崩溃；同时若环境存在 `patchelf`，会对二进制强制 `--force-rpath --set-rpath $ORIGIN`，保证 `bin/` 内置的 libpython 等库先于 `LD_LIBRARY_PATH` 被搜索，防止外部 libpython 抢先加载。
 6. 收尾：写入 `version.txt`；遍历产物清理 `__pycache__`。
-7. Strip（仅 Linux，`build.config` 中 `[strip]` 控制，可用 `DANDELION_STRIP=0/1` 覆盖）：在目标容器内对 `bin/` 下仍含 `.symtab`/`.debug*` 的 ELF 可执行文件与共享库执行 `strip --strip-unneeded`。每个对象先在临时副本上处理，只有动态段（NEEDED/SONAME/RPATH/RUNPATH）保持不变才替换原件，失败则保留原件；原件备份到 `build/unstripped/`，逐对象记录在 `build/strip-ledger.tsv`。第 5 步的 `$ORIGIN` RPATH 修正在 strip 之后执行。
-8. Manifest 与审计：`bin/MANIFEST.txt` 列出最终产物树中每个文件（路径、字节、sha256、权限、归属包）；若 `[audit] forbidden_packages`（当前为 `pandas,numpy`）出现在产物树或 Nuitka 报告（`build/nuitka-report.xml`）中，构建失败。`python mk/make.py audit` 可对已有构建重跑该步骤。
 
 ### 2.4 CI 构建发布
 
-`.github/workflows/release.yml` 实现"版本计算 + 契约测试 + 矩阵构建 + 归档冒烟 + 校验发布"：
+`.github/workflows/release.yml` 实现"版本计算 + 矩阵构建 + 上传产物"：
 
 1. `meta` job 计算版本：push tag 时用 `git describe --tags --match "v*"`；否则生成 `v0.0.0-dev-<yyMMdd>-<short-sha>`；非正式发布（CI中的workflow）追加 `-ci` 后缀。版本通过 `DANDELION_VERSION` 注入 `mk/make.py`。
-2. `test` job：在不含 pandas/numpy 的干净 venv 中运行离线契约测试（`test/test_excel_contract.py` 黄金样本、`test/test_build_contract.py` 归档/Manifest/工作流契约、`main.py --version/--self-test`）。
-3. `build` job 矩阵（11 个目标）：
+2. `build` job 矩阵：
     - Windows x86_64：GitHub host runner（Nuitka + MSVC + clcache）；
-    - Linux x86_64 与 arm64：各 5 个 Ubuntu 目标（18.04/20.04/22.04/24.04/26.04），全部走 `docker-build.sh` 容器构建（启用 `ccache`，`CCACHE_DIR=.nuitka-cache/ccache`）；
-    - 每个 job 用 `.github/scripts/package.py` 生成唯一归档（`dandelion-<target_id>-<version>.tar.gz|zip` + `.sha256`），并对该归档本身做冒烟：Linux 在干净的 `ubuntu:<distro>` 容器内以非 root 用户、`--network none` 运行（`.github/scripts/smoke-test.sh`），Windows 在全新目录、精简 `PATH` 下运行。检查项：权限、`ldd`、`--version` 与 tag 一致、`--self-test`、原有启动流程。
-4. `release` job（仅 tag）依赖 `meta`、`test` 与全部 11 个构建；下载归档后校验恰好 11 个、摘要与布局一致（`package.py verify-set`），生成 `SHA256SUMS`，原样附加（不重新打包）。
-5. 缓存策略：venv 使用精确键（`pyproject.toml` 变化即重建）；Nuitka 缓存键为 `build-cache-v6-<target_id>-<镜像摘要>-<输入哈希>-<run_id>-<run_attempt>`，按前缀恢复，各目标完全隔离。
+    - Linux x86_64 与 arm64：各 5 个 Ubuntu 目标（18.04/20.04/22.04/24.04/26.04），全部走 `docker-build.sh` 容器构建。
+3. 缓存策略：venv 与 Nuitka 缓存均按 `os_name-arch-distro` 隔离。
 
 ## 三、src 概览
 

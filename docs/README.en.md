@@ -99,16 +99,6 @@ On the [Releases][releases-url] page, Dandelion provides distributions for multi
 
 Additionally, due to layout length limitations, you may need to click `Show all xx assets` to display all complete build artifacts. Please keep this in mind.
 
-Archives are named `dandelion-<os>-<arch>[-ubuntu<NN>]-<version>`: `.tar.gz` on Linux (keeps the executable bit of `dandelion.sh` and `bin/dandelion`) and `.zip` on Windows. Every archive ships with a `.sha256` file, plus a combined `SHA256SUMS`:
-
-```sh
-sha256sum -c dandelion-linux-x86_64-ubuntu22-<version>.tar.gz.sha256
-tar -xzf dandelion-linux-x86_64-ubuntu22-<version>.tar.gz
-cd dandelion
-./dandelion.sh --version     # print the version
-./dandelion.sh --self-test   # offline self-check (deps, TLS, crypto, Excel); no config or network needed
-```
-
 ### 3.2 Usage
 
 The usage here is similar to the source code method mentioned above. After entering the `Dandelion` folder, execute the program via:

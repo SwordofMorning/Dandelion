@@ -3,32 +3,17 @@
  # @date 2026/08/13
  # 
  # @brief Excel Tool, with 2 class.
- # Read .xlsx files and write Markdown tables with openpyxl and tabulate.
+ # A general excel (xlsx) read/write tool powered by openpyxl and tabulate.
  #
 
-import datetime
 import importlib
-import math
 import os
 import re
-import zipfile
 from ..base_tool import BaseTool
-
-_NA_STRINGS = frozenset((
-    "", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan",
-    "1.#IND", "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null",
-))
-_NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
 ##
- # @brief Load only the required libraries (openpyxl + tabulate).
- #
- # Retains the legacy cache-invalidation retry for packages installed while
- # the agent is running. pandas/numpy are NOT required: openpyxl only probes
- # numpy as an optional extra, and the release artifact does not ship it.
- #
- # @return (openpyxl module, tabulate function); raises ImportError.
+ # @brief Load openpyxl and tabulate with cache-invalidation retry.
  #
 def _load_libraries():
     try:
@@ -44,146 +29,46 @@ def _load_libraries():
 
 
 ##
- # @brief Reproduce the legacy cell reader before column inference.
+ # @brief Normalize a single openpyxl cell value for tabular display.
  #
 def _cell_value(cell):
-    value = cell.value
-    if value is None:
+    val = cell.value
+    if val is None or getattr(cell, "data_type", None) == "e":
         return ""
-    elif cell.data_type == "e":
-        return float("nan")
-    elif cell.data_type == "n":
-        integer = int(value)
-        return integer if integer == value else float(value)
     # End-if
-    return value
+    if isinstance(val, float) and val.is_integer():
+        return int(val)
+    # End-if
+    return val
 # End-def
 
 
 ##
- # @brief Trim blanks exactly as the legacy openpyxl reader did, even at nrows.
+ # @brief Read non-empty rows from an openpyxl worksheet.
  #
-def _sheet_rows(sheet, header_row, max_rows):
+def _read_sheet_rows(sheet, header_row, max_rows):
     sheet.reset_dimensions()
-    limit = None if max_rows is None else (1 if header_row is None else header_row + 1) + max_rows
+    limit = None if max_rows is None else (0 if header_row is None else header_row + 1) + max_rows
     rows = []
-    last_data = 0
+    last_non_empty = 0
     for cells in sheet.rows:
-        row = [_cell_value(cell) for cell in cells]
+        row = [_cell_value(c) for c in cells]
         while row and row[-1] == "":
             row.pop()
         # End-while
         rows.append(row)
         if row:
-            last_data = len(rows)
+            last_non_empty = len(rows)
         # End-if
         if limit is not None and len(rows) >= limit:
             break
         # End-if
     # End-for
-    rows = rows[:last_data]
-    width = max((len(row) for row in rows), default=0)
-    return [row + [""] * (width - len(row)) for row in rows]
+    rows = rows[:last_non_empty]
+    width = max((len(r) for r in rows), default=0)
+    return [r + [""] * (width - len(r)) for r in rows]
 # End-def
 
-
-##
- # @brief Reserve explicit names before filling/mangling unnamed and duplicate headers.
- #
-def _column_names(row):
-    unnamed = [index for index, value in enumerate(row) if value == ""]
-    names = [f"Unnamed: {index}" if value == "" else value for index, value in enumerate(row)]
-    counts = {}
-    order = [index for index in range(len(names)) if index not in unnamed] + unnamed
-    for index in order:
-        name = names[index]
-        original = name
-        count = counts.get(name, 0)
-        while count > 0:
-            counts[original] = count + 1
-            name = f"{original}.{count}"
-            count = count + 1 if name in names else counts.get(name, 0)
-        # End-while
-        names[index] = name
-        counts[name] = count + 1
-    # End-for
-    return [str(name) for name in names]
-# End-def
-
-
-##
- # @brief Preserve the legacy NA vocabulary without stripping text first.
- #
-def _is_missing(value):
-    return value is None or (isinstance(value, str) and value in _NA_STRINGS) or (
-        isinstance(value, float) and math.isnan(value)
-    )
-# End-def
-
-
-##
- # @brief Infer each column, including missing-value promotion and boolean strings.
- #
-def _infer_column(values):
-    values = [None if _is_missing(value) else value for value in values]
-    present = [value for value in values if value is not None]
-    missing = len(present) != len(values)
-    if present and all(isinstance(value, datetime.datetime) for value in present):
-        return values, "datetime"
-    # End-if
-    if present and not missing and all(type(value) is bool for value in present):
-        return values, "bool"
-    # End-if
-    numeric = []
-    for value in values:
-        if value is None or isinstance(value, (int, float)):
-            numeric.append(value)
-        elif isinstance(value, str) and _NUMBER.fullmatch(value.strip()):
-            text = value.strip()
-            numeric.append(float(text) if any(char in text for char in ".eE") else int(text))
-        elif isinstance(value, str) and value.strip().lower() in ("inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"):
-            numeric.append(float(value))
-        else:
-            break
-        # End-if
-    else:
-        floating = missing or any(type(value) is float for value in numeric)
-        convert = float if floating else int
-        return ["" if value is None else convert(value) for value in numeric], "object" if missing else ("float" if floating else "int")
-    # End-for
-    booleans = {"True": True, "TRUE": True, "true": True, "False": False, "FALSE": False, "false": False}
-    if present and all(type(value) is bool or (isinstance(value, str) and value in booleans) for value in present):
-        return ["" if value is None else booleans.get(value, value) for value in values], "object" if missing else "bool"
-    # End-if
-    return ["" if value is None else value for value in values], "object"
-# End-def
-
-
-##
- # @brief Match the scalar promotion of the legacy DataFrame.values matrix.
- #
-def _table_rows(rows):
-    columns = [_infer_column(list(values)) for values in zip(*rows)]
-    kinds = {kind for values, kind in columns}
-    numeric_matrix = kinds <= {"int", "float"}
-    date_matrix = kinds == {"datetime"}
-    bool_matrix = kinds == {"bool"}
-    converted = []
-    for values, kind in columns:
-        if kind == "datetime":
-            values = [
-                ("NaT" if value is None else value.isoformat(timespec="microseconds"))
-                if date_matrix else ("NaT" if value is None else value)
-                for value in values
-            ]
-        elif (numeric_matrix and "float" in kinds) or bool_matrix:
-            # numpy bool scalars are numeric to tabulate; Python bools are not.
-            values = [float(value) for value in values]
-        # End-if
-        converted.append(values)
-    # End-for
-    return [list(row) for row in zip(*converted)]
-# End-def
 
 ##
  # @brief Excel Read Class.
@@ -242,11 +127,10 @@ class ReadExcelTool(BaseTool):
      # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
-        # Dynamic Import
         try:
             openpyxl, tabulate = _load_libraries()
-        except ImportError as error:
-            return False, f"Error: Missing libraries ({str(error)}). Run: pip install openpyxl tabulate"
+        except ImportError as ex:
+            return False, f"Error: Missing libraries ({str(ex)}). Run: pip install openpyxl tabulate"
         # End-try
 
         file_path = kwargs.get("file_path", "")
@@ -267,78 +151,80 @@ class ReadExcelTool(BaseTool):
             return False, f"Error: File not found: {file_path}"
 
         sheet = kwargs.get("sheet", 0)
+        if sheet is None:
+            sheet = 0
+        # End-if
         header_row = kwargs.get("header_row", 0)
         max_rows = kwargs.get("max_rows", 100)
 
-        if sheet is None:
-            return False, "Error: 'sheet' must be a sheet name or 0-based index; reading all sheets is not supported."
-        # End-if
-        workbook = None
+        wb = None
         try:
-            if header_row is not None:
-                if not isinstance(header_row, int):
-                    raise ValueError("header must be integer or list of integers")
-                elif header_row < 0:
-                    raise ValueError("Passing negative integer to header is invalid. For no header, use header=None instead")
-                # End-if
-            # End-if
-            if max_rows is not None and (not isinstance(max_rows, int) or max_rows < 0):
-                raise ValueError("'nrows' must be an integer >=0")
-            # End-if
-            # pandas supplied an open binary handle, so invalid .txt/.xls inputs
-            # reached ZIP validation rather than openpyxl's extension rejection.
-            if not zipfile.is_zipfile(resolved):
-                raise zipfile.BadZipFile("File is not a zip file")
-            # End-if
-            workbook = openpyxl.load_workbook(resolved, read_only=True, data_only=True)
+            wb = openpyxl.load_workbook(resolved, read_only=True, data_only=True)
             if isinstance(sheet, str):
-                if sheet not in workbook.sheetnames:
-                    raise ValueError(f"Worksheet named '{sheet}' not found")
+                if sheet not in wb.sheetnames:
+                    return False, f"Error reading Excel: Worksheet named '{sheet}' not found."
                 # End-if
-                worksheet = workbook[sheet]
+                ws = wb[sheet]
             else:
-                if sheet >= len(workbook.worksheets):
-                    raise ValueError(f"Worksheet index {sheet} is invalid, {len(workbook.worksheets)} worksheets found")
+                if sheet < 0 or sheet >= len(wb.worksheets):
+                    return False, f"Error reading Excel: Worksheet index {sheet} out of range."
                 # End-if
-                worksheet = workbook.worksheets[sheet]
+                ws = wb.worksheets[sheet]
             # End-if
-            rows = _sheet_rows(worksheet, header_row, max_rows)
-            if not rows:
-                return True, "(Empty table: no data rows found)"
-            # End-if
-            if header_row is not None and header_row >= len(rows):
-                raise ValueError(f"Passed header=[{header_row}], len of 1, but only {len(rows)} lines in file (sheet: {sheet})")
-            # End-if
-            headers = _column_names(rows[header_row]) if header_row is not None else ()
-            rows = rows[header_row + 1:] if header_row is not None else rows
-            if max_rows is not None:
-                rows = rows[:max_rows]
-            # End-if
-        except Exception as error:
-            return False, f"Error reading Excel: {str(error)}"
+
+            all_rows = _read_sheet_rows(ws, header_row, max_rows)
+        except Exception as e:
+            return False, f"Error reading Excel: {str(e)}"
         finally:
-            if workbook is not None:
-                workbook.close()
+            if wb is not None:
+                wb.close()
             # End-if
         # End-try
 
-        if not rows or not rows[0]:
+        if not all_rows:
             return True, "(Empty table: no data rows found)"
         # End-if
+
+        if header_row is not None:
+            if header_row < 0 or header_row >= len(all_rows):
+                return True, "(Empty table: no data rows found)"
+            # End-if
+            headers = [str(h) if h != "" else f"col_{i}" for i, h in enumerate(all_rows[header_row])]
+            data_rows = all_rows[header_row + 1:]
+        else:
+            headers = ()
+            data_rows = all_rows
+        # End-if
+
+        if max_rows is not None:
+            data_rows = data_rows[:max_rows]
+        # End-if
+
+        if not data_rows or not data_rows[0]:
+            return True, "(Empty table: no data rows found)"
+        # End-if
+
         try:
-            table_str = tabulate(_table_rows(rows), headers=headers, tablefmt="github", showindex=False)
-        except Exception as error:
-            return False, f"Error formatting table: {str(error)}"
+            table_str = tabulate(
+                data_rows,
+                headers=headers,
+                tablefmt="github",
+                showindex=False
+            )
+        except Exception as e:
+            return False, f"Error formatting table: {str(e)}"
         # End-try
+
         meta = [
             "[Excel Table Extract]",
             f"File: {os.path.basename(file_path)}",
-            f"Shape: {len(rows)} rows x {len(rows[0])} cols",
+            f"Shape: {len(data_rows)} rows x {len(data_rows[0])} cols",
             ""
         ]
         return True, "\n".join(meta) + "\n" + table_str
     # End-def execute
 # End-class
+
 
 ##
  # @brief Excel Write Class.
@@ -393,11 +279,10 @@ class WriteExcelTool(BaseTool):
      # @return (success_bool, result_string)
      #
     def execute(self, **kwargs):
-        # Dynamic Import
         try:
             openpyxl, _ = _load_libraries()
-        except ImportError as error:
-            return False, f"Error: Missing libraries ({str(error)}). Run: pip install openpyxl tabulate"
+        except ImportError as ex:
+            return False, f"Error: Missing libraries ({str(ex)}). Run: pip install openpyxl"
         # End-try
 
         file_path = kwargs.get("file_path", "")
@@ -417,56 +302,67 @@ class WriteExcelTool(BaseTool):
             return False, err
         # End-if
 
-        workbook = None
+        wb = None
         try:
             headers, rows = self._parse_markdown_table(md_table)
             if not headers or not rows:
                 return False, "Error: No valid data parsed from markdown table."
             # End-if
+
             os.makedirs(os.path.dirname(resolved), exist_ok=True)
-            workbook = openpyxl.Workbook()
-            worksheet = workbook.active
-            worksheet.title = sheet_name
-            worksheet.append(headers)
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+            ws.append(headers)
             for row in rows:
-                worksheet.append(row)
+                ws.append(row)
             # End-for
-            # The pinned pandas version writes plain, unstyled header cells.
-            workbook.save(resolved)
+            wb.save(resolved)
             return True, f"Successfully wrote {len(rows)} rows to '{file_path}'."
-        except Exception as error:
-            return False, f"Error writing Excel: {str(error)}"
+        except Exception as e:
+            return False, f"Error writing Excel: {str(e)}"
         finally:
-            if workbook is not None:
-                workbook.close()
+            if wb is not None:
+                wb.close()
             # End-if
         # End-try
     # End-def execute
 
     ##
-     # @brief Parse a Markdown table using the legacy stripping and alignment rules.
+     # @brief Parse a GitHub-flavored Markdown table into (headers, rows).
      #
      # @param md Markdown table string (GFM).
-     # @return (headers, rows), preserving text without numeric coercion.
+     # @return (headers_list, rows_list)
      #
     def _parse_markdown_table(self, md: str):
         lines = [line.strip() for line in md.strip().split("\n") if line.strip()]
         data_lines = [line for line in lines if not re.match(r"^\|[\s\-\|:]+\|$", line)]
-        rows = []
-        for line in data_lines:
-            if line.startswith("|") and line.endswith("|"):
-                line = line[1:-1]
-            # End-if
-            rows.append([cell.strip() for cell in line.split("|")])
-        # End-for
-        if not rows:
+        if len(data_lines) < 2:
             return [], []
         # End-if
-        headers, data = rows[0], rows[1:]
-        width = max((len(row) for row in data), default=len(headers))
-        if width != len(headers):
-            raise ValueError(f"{len(headers)} columns passed, passed data had {width} columns")
-        # End-if
-        return headers, [row + [""] * (width - len(row)) for row in data]
+
+        parsed = []
+        for line in data_lines:
+            if line.startswith("|"):
+                line = line[1:]
+            # End-if
+            if line.endswith("|"):
+                line = line[:-1]
+            # End-if
+            parsed.append([cell.strip() for cell in line.split("|")])
+        # End-for
+
+        headers = parsed[0]
+        width = len(headers)
+        rows = []
+        for row in parsed[1:]:
+            if len(row) < width:
+                row = row + [""] * (width - len(row))
+            elif len(row) > width:
+                row = row[:width]
+            # End-if
+            rows.append(row)
+        # End-for
+        return headers, rows
     # End-def
 # End-class
