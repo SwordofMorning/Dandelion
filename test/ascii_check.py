@@ -24,13 +24,17 @@ SKIP_DIRS = {
     "build", "dist", "node_modules", "venv", ".venv",
 }
 
+SKIP_FILES = {
+    "sysprompt.py",
+}
+
 
 def iter_py_files(root):
-    """Yield *.py files under root, skipping noise directories."""
+    """Yield *.py files under root, skipping noise directories and excluded files."""
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for fn in filenames:
-            if fn.endswith(".py"):
+            if fn.endswith(".py") and fn not in SKIP_FILES:
                 yield os.path.join(dirpath, fn)
 
 
@@ -71,7 +75,7 @@ def main():
     for p in args.paths:
         if os.path.isdir(p):
             files.extend(iter_py_files(p))
-        else:
+        elif os.path.basename(p) not in SKIP_FILES:
             files.append(p)
     files = sorted(set(files))
 
