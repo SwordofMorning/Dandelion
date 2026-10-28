@@ -2,18 +2,20 @@
 
 # Dandelion
 
-一个CLI式的Agent工具，采用Nuitka构建，可以配合交叉编译工具链实现跨平台。基础结构如下：
+一个CLI式的Agent工具，采用Nuitka构建，可以配合交叉编译工具链实现跨平台。`src/` 仅分为 `cli`、`core`、`remote` 三个主包；工具、SubAgent 和通用接口分别位于 `core/tool`、`core/subagent`、`core/utils`。基础结构如下：
 
-1. 在`src/utils/cli/cli.py`中的“Interactive Loop”相当于Agent Loop；
-2. 并将每一次的Agent Iterate (Tool Call)动作放到`src/core/agent.py`中的“step”执行。
+1. `src/cli/cli.py` 提供外层 CLI Loop，`src/remote/` 提供 Remote 的外层 Event Loop；
+2. 两者共用 `src/core/runner.py` 中的 Agent Loop；
+3. 每一次 Agent Iterate（LLM 与 Tool Call）由 `src/core/agent.py` 中的 `step` 执行。
 
 
 ## 一、功能特性
 
 - CLI式交互，无GUI；
-- Tools均在`src/tool`下实现，可跟随主程序一并构建；
+- Tools均在`src/core/tool`下实现，可跟随主程序一并构建；
 - 完善的日志、会话管理。
-- 复用同步 Core 的 Dandelion Remote：摘要同步、后台任务、Telegram 与持久化提醒，详见[Remote 使用说明](docs/03_remote.zh.md)。
+- 手动将会话的原始历史和元数据备份到 Remote；
+- 复用同步 Core 的 Dandelion Remote：后台任务、Telegram 与持久化提醒，详见[Remote 使用说明](docs/03_remote.zh.md)。
 
 ## 二、使用源码
 

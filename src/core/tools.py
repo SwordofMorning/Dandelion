@@ -1,12 +1,11 @@
-"""Build fresh tool instances for one agent/session runtime.
+##
+ # @file src/core/tools.py
+ # @brief Build fresh tool instances and delegation catalogs for one agent runtime.
+ #
 
-Callers may independently restrict the main-agent tools and the worker catalog.
-No mutable agent or session instances are shared between remote jobs.
-"""
+from src.core.subagent import SubAgentPool
 
-from src.subagent import SubAgentPool
-
-from src.tool import (
+from src.core.tool import (
     BashTool, LoadSkillTool, MarkdownTool,
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
@@ -17,20 +16,34 @@ from src.tool import (
 )
 
 
+##
+ # @brief Select named tools while rejecting unknown or unavailable names.
+ #
+ # @param tools Available tool instances indexed by tool name.
+ # @param names Names of the requested tools.
+ #
+ # @return New dictionary containing the selected tool instances.
+ #
 def _select_tools(tools, names):
     names = tuple(names)
     unknown = set(names) - tools.keys()
     if unknown:
         raise ValueError("Unknown or unavailable tools: " + ", ".join(sorted(unknown)))
+    # End-if
     return {name: tools[name] for name in names}
+# End-def
 
 
+##
+ # @brief Build the main toolset and mount a separate synchronous worker catalog.
+ #
+ # @param agent Agent whose runtime, session and history are used.
+ # @param main_tool_names Optional names restricting the main-agent toolset.
+ # @param worker_tool_names Optional names restricting the synchronous worker catalog.
+ #
+ # @return Main-agent tool dictionary; also assigns agent.pool.
+ #
 def build_tools(agent, main_tool_names=None, worker_tool_names=None):
-    """Return the CLI toolset by default; mount a separate worker catalog.
-
-    Also assigns ``agent.pool`` for synchronous delegation. A background caller
-    must construct a new agent/session rather than retaining the main pool.
-    """
     # ----- @par 1. Create Tools Object -----
 
     # Pass BASE_DIR to all file-system related tools
@@ -109,8 +122,10 @@ def build_tools(agent, main_tool_names=None, worker_tool_names=None):
 
     if worker_tool_names is not None:
         all_tools = _select_tools(all_tools, worker_tool_names)
+    # End-if
     for tool in all_tools.values():
         tool.runtime = agent.runtime
+    # End-for
 
     agent.pool = SubAgentPool(
         safe_client=agent.client,
@@ -148,6 +163,9 @@ def build_tools(agent, main_tool_names=None, worker_tool_names=None):
     tools = {tool.get_name(): tool for tool in tool_list}
     if main_tool_names is not None:
         tools = _select_tools(tools, main_tool_names)
+    # End-if
     for tool in tools.values():
         tool.runtime = agent.runtime
+    # End-for
     return tools
+# End-def

@@ -23,9 +23,16 @@ _EXPORTS = {
 __all__ = list(_EXPORTS)
 
 
+##
+ # @brief Resolve a public Core helper without loading either frontend.
+ # @param name Public helper name.
+ # @return Lazily imported helper.
+ #
 def __getattr__(name):
     if name not in _EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    # End-if
     value = getattr(import_module(_EXPORTS[name], __name__), name)
     globals()[name] = value
     return value
+# End-def

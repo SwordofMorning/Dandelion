@@ -198,9 +198,15 @@ class PromptBuilder:
         return "\n\n".join(sections)
     # End-def build
 
+    ##
+     # @brief Check whether the caller exposes a named tool.
+     # @param name Tool name to check.
+     # @return True when the tool is available.
+     #
     def _has_tool(self, name):
         # None preserves the standalone builder's historical behavior.
         return self.tool_names is None or name in self.tool_names
+    # End-def
 
     ##
      # @brief Render the Task State block text (Attention Anchor).

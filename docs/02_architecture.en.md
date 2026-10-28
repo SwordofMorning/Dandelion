@@ -44,9 +44,12 @@ The overall request path (details expanded in subsequent chapters) is:
 ```sh
 main.py
   -> InteractiveCLI.run()       # CLI Loop (Interactive Layer)
-    -> _run_agent_loop()        # Agent Loop (Multi-turn tool iteration)
-      -> MyAgent.step()         # Single Round-Trip (Iterate in Tools Loop)
+    -> _run_agent_loop()        # CLI stop / rollback adapter
+      -> core.run_agent_loop() # Shared Agent Loop (multi-turn tool iteration)
+        -> MyAgent.step()      # Single round-trip (tools loop iteration)
 ```
+
+Remote starts with `python -m src.remote` and calls the same Core Agent Loop from a blocking Event Loop, without passing through the CLI or automatically importing terminal modules. Both hosts inject output, approval and cancellation through `src/core/runtime.py`.
 
 ## 2. Build Scripts
 
@@ -176,22 +179,22 @@ Because we manually excluded certain libraries in the previous section to save c
 
 ## 3. `src` Overview
 
-The source code under `src/` is divided into four modules by function:
+`src/` contains three main packages:
 
-1. `core`: Core Agent logic, covering context compression, memory management, etc.
-2. `subagent`: SubAgent "Agent Pool", message passing structures, etc.
-3. `tool`: Various tools invoked by the Agent.
-4. `utils`: Universal interfaces, including configuration loading, CLI, and log management.
+1. `core`: The common foundation: Agent Loop, runtime callbacks, tool assembly, context compression, memory and the manual session-backup client. `core/subagent` manages SubAgents, `core/tool` implements tools, and `core/utils` provides configuration, logging, model routing and API requests.
+2. `cli`: Terminal interaction, commands and Ctrl+C rollback.
+3. `remote`: Server events, background jobs, session-backup ingestion, Telegram and scheduling.
+
+CLI and Remote each depend on Core; Core imports neither host. Nuitka explicitly includes only `src.cli` and `src.core` with their subpackages, and excludes `src.remote`. See the [Remote guide](03_remote.en.md) for deployment.
 
 ## 4. General Classes
 
-The `src/utils` directory provides general methods, such as reading configs. However, it also contains complex interactive logic involving the Agent, like the CLI. Therefore, we will explain the core project logic in a bottom-up sequence based on relevance to the Agent.
+`src/core/utils` provides general configuration, logging and API request methods. Terminal interaction lives separately in `src/cli`. This chapter covers shared interfaces before explaining how CLI calls the common Agent Loop.
 
 After understanding how the Agent Loop is implemented in the [CLI Section](#46-cli) of this chapter, we will proceed to the [next chapter](#5-agent-core-design) to review the specific implementations of the Agent classes.
 
 ```sh
 .
-├── cli                 # CLI Terminal
 ├── config              # Config Loader
 ├── __init__.py
 ├── llm_provider        # Dynamic API SDK configuration
@@ -202,20 +205,20 @@ After understanding how the Agent Loop is implemented in the [CLI Section](#46-c
 
 ### 4.1 Config Loading (`config`)
 
-`src/utils/config/config.py` provides functions to read configurations under `.env/`. Among them:
+`src/core/utils/config/config.py` provides functions to read configurations under `.env/`. Among them:
 
 1. `load_api_config()` reads `api.cfg`.
-2. `load_devices_config()` reads `devices.yaml` containing SSH device aliases, addresses, auth methods, etc. This is accessed during the execution phase in `src/tool/shell/ssh_tool.py` (LLMs can only see aliases, not credentials).
+2. `load_devices_config()` reads `devices.yaml` containing SSH device aliases, addresses, auth methods, etc. This is accessed during the execution phase in `src/core/tool/shell/ssh_tool.py` (LLMs can only see aliases, not credentials).
 
 ### 4.2 Logging and Sessions (`logging`)
 
-`src/utils/logging/logger.py` (`AgentLogger`) is primarily responsible for writing runtime data into daily log files (`YYYY_MM_DD.log`), allowing the upper-level `SessionManager` to reuse the same serialization logic:
+`src/core/utils/logging/logger.py` (`AgentLogger`) is primarily responsible for writing runtime data into daily log files (`YYYY_MM_DD.log`), allowing the upper-level `SessionManager` to reuse the same serialization logic:
 
 ```sh
 Agent/SubAgent -> log_api_call() -> `.log/`
 ```
 
-`src/utils/logging/session.py` (`SessionManager`) implements session management for the CLI. Each session branch is stored in `.log/` under the format `sess_yyyymmdd_hhmmss_ms`. A session folder typically contains:
+`src/core/utils/logging/session.py` (`SessionManager`) implements session management for the CLI. Each session branch is stored in `.log/` under the format `sess_yyyymmdd_hhmmss_ms`. A session folder typically contains:
 
 ```log
 .
@@ -249,7 +252,7 @@ Details:
 
 ### 4.3 API Requests (`llm_provider`)
 
-`src/utils/llm_provider` derives API request formats for OpenAI and Anthropic SDKs. `base.py` provides universal base class methods, from which the rest are derived. `SafeLLMClient._create_provider()` selects them based on `SDK_TYPE`.
+`src/core/utils/llm_provider` derives API request formats for OpenAI and Anthropic SDKs. `base.py` provides universal base class methods, from which the rest are derived. `SafeLLMClient._create_provider()` selects them based on `SDK_TYPE`.
 
 For the Anthropic API, the Reasoning Effort (Think Level) utilized by DeepSeek adopts OpenAI-style `low`, `med`, `high` strings instead of Anthropic's specific "Think Budget" (thinking/effort injection logic is handled inside the Provider).
 
@@ -257,7 +260,7 @@ For OpenAI, basic frameworks and contents are implemented, but they need future 
 
 ### 4.4 Model Routing (`routing`)
 
-`src/utils/routing` aims to solve two issues:
+`src/core/utils/routing` aims to solve two issues:
 
 1. Auto-selection of SubAgent models: High reasoning capability models handle complex tasks, while lower capability ones execute simple tool-calling tasks.
 2. Handling TPM/RPM access limits enforced by some LLM providers through local rate control to avoid 429 Too Many Requests errors.
@@ -266,7 +269,7 @@ Note that this Rate Limit currently does not implement a global, dynamic control
 
 ### 4.5 LLM Requests (`llm_request`)
 
-`src/utils/llm_request` is primarily responsible for sending requests to the LLM. The workflow is as follows:
+`src/core/utils/llm_request` is primarily responsible for sending requests to the LLM. The workflow is as follows:
 
 ```py
 # - Main Agent
@@ -290,9 +293,9 @@ Details:
 
 ### 4.6 CLI
 
-`src/utils/cli/printer.py` provides terminal color printing without other core logic.
+`src/cli/printer.py` provides terminal color printing without other core logic.
 
-`src/utils/cli/cli.py` is based on `prompt_toolkit` (falling back to standard `input` if missing) to provide an interactive CLI mimicking git-style commands. Noteworthy points include:
+`src/cli/cli.py` is based on `prompt_toolkit` (falling back to standard `input` if missing) to provide an interactive CLI mimicking git-style commands. Noteworthy points include:
 
 1. `_build_completer()` defines commands and their sub-command auto-completion.
 2. `run()` uses an infinite loop to implement the "CLI Loop", structured internally in two layers:
@@ -309,7 +312,7 @@ Details:
 
 ## 5. Agent Core Design
 
-This chapter covers the design under `src/core`, focusing on memory management, context compression, and skill loading in the Main Agent. We will start from the simplest `sysprompt` to explain the function of each file. After grasping the Main Agent here, we will look into the SubAgent design in the next chapter.
+`src/core` is shared by CLI and Remote: `runner.py` provides the synchronous Agent Loop, `runtime.py` defines output, approval and cancellation callbacks, `tools.py` selects Main and Worker tools, and `sync.py` implements manual raw-session backups. Other modules handle Main Agent memory, context compression and skills. We start with `sysprompt`, then cover SubAgent design in the next chapter.
 
 ### 5.1 sysprompt
 
@@ -409,7 +412,7 @@ The SubAgent design is structured as follows:
 3. Each SubAgent has an exclusive ID (`sa-<hex>`) enabling the pool to manage them and boundary-defining outputs/logs for the parent.
 4. SubAgent system prompts combine `role_prompt` + depth information (may delegate / may not delegate) + security rules + a shared-workspace note.
 5. LLM requests go through `route_request()`, routed by four categories `media`/`review`/`complex`/`simple` (priority media > review > complex > simple; within a category, `SUB_LIST` order), rather than reusing the Main Agent's model.
-6. Concurrency: consecutive `spawn_subagent` calls in one Main Agent response run in parallel via `src/subagent/dispatch.py` (bounded by `[Main] SUB_CONCURRENCY`, default 4); any other tool is a barrier run alone and in order, and every tool_use gets exactly one result. Tool calls inside a SubAgent (including nested spawns) stay serial. Parallel SubAgents share the workspace with no file-level isolation, so the Main Agent must give them different files. On Ctrl+C, SubAgents stop at their next turn boundary and `step()` returns only after all of them finished.
+6. Concurrency: consecutive `spawn_subagent` calls in one Main Agent response run in parallel via `src/core/subagent/dispatch.py` (bounded by `[Main] SUB_CONCURRENCY`, default 4); any other tool is a barrier run alone and in order, and every tool_use gets exactly one result. Tool calls inside a SubAgent (including nested spawns) stay serial. Parallel SubAgents share the workspace with no file-level isolation, so the Main Agent must give them different files. On Ctrl+C, SubAgents stop at their next turn boundary and `step()` returns only after all of them finished.
 
 `pool.py` creates an agent pool (`SubAgentPool`, a singleton held by `MyAgent`) to manage SubAgents. The `registry.py` predefined five classes of toolsets (`minimal`/`filesystem`/`code_analysis`/`data_processing`/`full`) which the LLM refers to by name. The execution flow typically looks like:
 
@@ -441,7 +444,7 @@ For detailed design, refer to the inline comments in the corresponding source fi
 
 ## 7. Tool Classes
 
-All tool classes under `src/tool` derive from `base_tool.py` (`BaseTool`) and expose themselves to the Agent via four interfaces: `get_name()`, `get_description()`, `get_schema()`, and `execute()`. They are registered within `MyAgent._init_tools()`.
+All tool classes under `src/core/tool` derive from `base_tool.py` (`BaseTool`) and expose themselves to the Agent via four interfaces: `get_name()`, `get_description()`, `get_schema()`, and `execute()`. They are registered within `MyAgent._init_tools()`.
 
 The security model (sandbox protection) is the most crucial cross-cutting concern at the tool layer:
 

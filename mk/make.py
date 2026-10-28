@@ -164,17 +164,16 @@ def _run_nuitka(cfg, name, version):
     # End-if
     extra_args = shlex.split(cfg.get("nuitka", "extra_args", fallback=""))
 
+    # ----- @par CLI / Core package boundary -----
+    # @note Explicit selection keeps src.remote out of CLI artifacts.
     cmd = [
         sys.executable, "-m", "nuitka",
         "--mode=standalone",
         "--output-dir=" + output_dir,
         "--output-filename=" + name,
+        "--include-package=src.cli",
         "--include-package=src.core",
-        "--include-package=src.subagent",
-        "--include-package=src.tool",
-        "--include-package=src.utils",
-        "--include-module=src.runtime",
-        "--nofollow-import-to=dandelion_remote",
+        "--nofollow-import-to=src.remote",
         "--include-module=mk.lib.paths",
         "--include-module=mk.lib.build_info",
         "--assume-yes-for-downloads",

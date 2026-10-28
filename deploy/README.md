@@ -17,8 +17,13 @@ into the image. Named volumes preserve Remote state and the Worker workspace.
 Add an HTTPS reverse proxy to the loopback port before connecting other devices.
 The service runs as UID 1000; any replacement bind mounts must allow that UID
 to write. Mount additional skills under `/workspace/llm/skill` if needed.
+CLI devices configure their destination explicitly in the `[Remote]` section of
+their local `api.cfg`; manual `sync` uploads raw session history and metadata.
+It does not run on startup or generate activity summaries.
 
 For backups, stop the service and back up both named volumes before restarting.
+Keep the same data volume when moving from the earlier package layout; the
+`/data/remote.sqlite3` path and existing task tables remain compatible.
 The supplied configuration is a deployment example; no server is provisioned
 or published by installing the Python package.
 
@@ -26,5 +31,5 @@ Optional Drive credentials are passed through the Compose environment. To
 export existing activity reports explicitly:
 
 ```sh
-docker compose exec remote python -m dandelion_remote drive-export --data-dir /data
+docker compose exec remote python -m src.remote drive-export --data-dir /data
 ```

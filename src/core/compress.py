@@ -10,7 +10,7 @@
 import datetime
 import json
 import os
-from src.runtime import Runtime
+from src.core.runtime import Runtime
 
 DEFAULT_COMPACT_SUMMARY_MAX_TOKENS = 128000
 MIN_COMPACT_SUMMARY_CHARS = 40

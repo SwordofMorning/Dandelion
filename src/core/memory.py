@@ -32,7 +32,7 @@
  #
 
 import os
-from src.runtime import Runtime
+from src.core.runtime import Runtime
 
 ##
  # @brief Memory Management Class.

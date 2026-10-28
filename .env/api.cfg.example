@@ -135,3 +135,17 @@ MODEL_LIST = [
         }
     }
     ]
+
+; ============================================================
+; Part 3: Optional Dandelion Remote Sync
+; ============================================================
+; Sync reads this explicit section only; no URL is inherited from environment.
+; Copy and uncomment the example to enable a destination.
+; HTTPS is required except for a local loopback development server.
+; TOKEN accepts a literal value or one complete $VAR / ${VAR} placeholder.
+; Never include credentials, a query string or a fragment in URL.
+; [Remote]
+; NAME=origin
+; URL=https://dr.example.com
+; TOKEN=${DANDELION_DR_TOKEN}
+; DEVICE_ID=work-laptop

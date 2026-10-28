@@ -19,15 +19,15 @@ import re
 import json
 import time
 
-from src.utils import SafeLLMClient
-from src.runtime import Runtime
+from src.core.utils import SafeLLMClient
+from src.core.runtime import Runtime
 from src.core.memory import MemoryManager
 from src.core.skill import SkillManager
 from src.core.sysprompt import PromptBuilder
 from src.core.tools import build_tools
-from src.subagent.dispatch import dispatch_tool_calls
+from src.core.subagent.dispatch import dispatch_tool_calls
 
-from src.tool.media import (
+from src.core.tool.media import (
     attach_media_blocks, DEFAULT_MEDIA_LIMITS
 )
 from .compress import (
@@ -185,6 +185,7 @@ class MyAgent:
         self.tools = self.tool_factory(self)
         for tool in self.tools.values():
             tool.runtime = self.runtime
+        # End-for
         self.tool_schemas = [
             {
                 "name": tool.get_name(),
@@ -403,7 +404,7 @@ class MyAgent:
      # CLI -> agent.step() -> Request LLM -> Execute All Tools -> Return ->
      # CLI (continue? or stop?) -> agent.step() | Stop in CLI
      #
-     # @see src/utils/cli/cli.py
+     # @see src/cli/cli.py
      #
      # @return (continue_loop, error) tuple.
      # @retval (True, None) This round executed a tool call, need to feed back

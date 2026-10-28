@@ -1,177 +1,205 @@
-"""Portable activity summaries and a small, durable local sync outbox."""
+##
+ # @file src/core/sync.py
+ # @date 2026/10/27
+ #
+ # @brief Manual, byte-preserving session backups to a configured Remote.
+ #
 
-import datetime
+import base64
 import hashlib
+import ipaddress
 import json
-import os
 from pathlib import Path
-import socket
-import tempfile
 from urllib.parse import urlsplit
-import uuid
 
 import requests
 
+CHUNK_SIZE = 256 * 1024
+MAX_REQUEST_SIZE = 1024 * 1024
+SESSION_FILES = ("history.log", "meta.log")
 
-def _text_blocks(content):
-    if isinstance(content, str):
-        return content.strip()
-    if not isinstance(content, list):
-        return ""
-    if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content):
-        return ""
-    return "\n".join(
-        str(b.get("text", "")) for b in content
-        if isinstance(b, dict) and b.get("type") == "text"
-    ).strip()
+##
+ # @brief Upload fixed session snapshots without changing local session state.
+ #
+class SessionSync:
+    ##
+     # @brief Store the backup source and explicit Remote configuration.
+     #
+     # @param log_dir SessionManager log directory.
+     # @param workspace_dir Project workspace, used only to identify the project.
+     # @param remote Configured name, url, token and device_id mapping.
+     #
+     # @return None.
+     #
+    def __init__(self, log_dir, workspace_dir, remote):
+        self.log_dir = Path(log_dir).resolve()
+        workspace = Path(workspace_dir).resolve()
+        suffix = hashlib.sha256(str(workspace).encode("utf-8")).hexdigest()[:12]
+        self.project = workspace.name + "-" + suffix
+        self.remote = remote if isinstance(remote, dict) else {}
+    # End-def
 
-
-def summarize_session(session):
-    """Summarize final replies and task state without exporting raw tool logs."""
-    finals = []
-    for message in session.load_history():
-        if message.get("role") == "assistant":
-            text = _text_blocks(message.get("content"))
-            if text:
-                finals.append(text[:1800])
-    sections = []
-    if finals:
-        sections.append("Recent completed replies:\n" + "\n\n".join(finals[-3:]))
-    state_file = Path(session.current_session_dir) / "task_state.json"
-    if state_file.exists():
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        if isinstance(state, dict):
-            items = {key: state.get(key) for key in ("target", "todos", "completed")
-                     if state.get(key)}
-            if items.get("target") == "No specific target set.":
-                items.pop("target")
-            if items:
-                sections.append("Task state:\n" + json.dumps(items, ensure_ascii=False)[:1800])
-    return "\n\n".join(sections)[:7200]
-
-
-class SyncOutbox:
-    """Keep independent records until the remote explicitly acknowledges them."""
-
-    def __init__(self, log_dir, workspace_dir):
-        self.directory = Path(log_dir) / "sync"
-        self.pending_dir = self.directory / "pending"
-        self.workspace_dir = Path(workspace_dir).resolve()
-        self.receipts_file = self.directory / "receipts.jsonl"
-
-    def _receipts(self):
-        if not self.receipts_file.exists():
-            return set()
-        receipts = set()
-        for line in self.receipts_file.read_text(encoding="utf-8").splitlines():
-            # A process stopped during append may leave an incomplete last line.
-            try:
-                receipts.add(json.loads(line)["event_id"])
-            except (ValueError, KeyError, TypeError):
-                continue
-        return receipts
-
-    @staticmethod
-    def _atomic_write(path, content):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=".sync-", dir=path.parent)
+    ##
+     # @brief Validate connection settings without consulting environment defaults.
+     #
+     # @return Remote URL and device identity, or raise ValueError.
+     #
+    def _connection(self):
+        url = self.remote.get("url", "")
+        token = self.remote.get("token", "")
+        device = self.remote.get("device_id", "")
+        if not all(isinstance(value, str) and value.strip() for value in (url, token, device)):
+            raise ValueError("Remote is not configured; set URL, TOKEN and DEVICE_ID in [Remote].")
+        # End-if
+        parsed = urlsplit(url)
+        local = parsed.hostname == "localhost"
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-
-    def enqueue(self, session, summary=None):
-        text = summarize_session(session) if summary is None else str(summary).strip()
-        if not text:
-            return None
-        if len(text) > 7200:
-            raise ValueError("Activity summaries must be at most 7200 characters.")
-        device = (os.environ.get("DANDELION_DEVICE_ID") or socket.gethostname())[:200]
-        session_id = str(session.current_session_id)
-        project = self.workspace_dir.name
-        fingerprint = json.dumps([device, str(self.workspace_dir), session_id, text],
-                                 ensure_ascii=False, separators=(",", ":"))
-        event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, hashlib.sha256(
-            fingerprint.encode("utf-8")).hexdigest()))
-        record_file = self.pending_dir / (event_id + ".json")
-        if record_file.exists():
-            return json.loads(record_file.read_text(encoding="utf-8"))
-        record = {
-            "event_id": event_id,
-            "device": device,
-            "project": project,
-            "session_id": session_id,
-            "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "summary": text,
-            "sources": [{"kind": "dandelion-session", "session_id": session_id}],
-        }
-        if event_id not in self._receipts():
-            self._atomic_write(record_file, json.dumps(record, ensure_ascii=False) + "\n")
-        return record
-
-    def _pending(self):
-        if not self.pending_dir.exists():
-            return []
-        return [json.loads(path.read_text(encoding="utf-8"))
-                for path in sorted(self.pending_dir.glob("*.json"))]
-
-    def export(self, path):
-        records = self._pending()
-        self._atomic_write(Path(path).expanduser().resolve(), "".join(
-            json.dumps(record, ensure_ascii=False) + "\n" for record in records))
-        return len(records)
-
-    def flush(self):
-        records = self._pending()
-        result = {"sent": 0, "pending": len(records), "error": None}
-        if not records:
-            return result
-        base_url = (os.environ.get("DANDELION_DR_URL") or os.environ.get("DR_URL") or "").strip()
-        token = os.environ.get("DANDELION_DR_TOKEN") or os.environ.get("DR_TOKEN")
-        if not base_url or not token:
-            result["error"] = "Set DANDELION_DR_URL and DANDELION_DR_TOKEN to upload."
-            return result
-        parsed = urlsplit(base_url)
-        local = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            local = local or ipaddress.ip_address(parsed.hostname or "").is_loopback
+        except ValueError:
+            pass
+        # End-try
         if (parsed.scheme != "https" and not (parsed.scheme == "http" and local)) or (
                 not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment):
-            result["error"] = "DR URL must use HTTPS (HTTP is allowed only on loopback)."
-            return result
-        try:
-            # Batch size also bounds the amount retried after an interrupted send.
-            for offset in range(0, len(records), 100):
-                batch = records[offset:offset + 100]
-                response = requests.post(
-                    base_url.rstrip("/") + "/sync", json={"records": batch},
-                    headers={"Authorization": "Bearer " + token},
-                    timeout=(3, 15), allow_redirects=False,
-                )
-                if response.status_code != 200:
-                    result["error"] = f"Remote sync returned HTTP {response.status_code}; records retained."
-                    break
-                accepted = response.json().get("accepted")
-                if not isinstance(accepted, list) or any(not isinstance(i, str) for i in accepted):
-                    result["error"] = "Remote sync did not acknowledge record IDs; records retained."
-                    break
-                acknowledged = set(accepted) & {record["event_id"] for record in batch}
-                self.directory.mkdir(parents=True, exist_ok=True)
-                with self.receipts_file.open("a", encoding="utf-8") as stream:
-                    for event_id in acknowledged:
-                        stream.write(json.dumps({"event_id": event_id}) + "\n")
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                for event_id in acknowledged:
-                    (self.pending_dir / (event_id + ".json")).unlink(missing_ok=True)
-                result["sent"] += len(acknowledged)
-                if len(acknowledged) != len(batch):
-                    result["error"] = "Remote acknowledged only part of the batch; remaining records retained."
-                    break
-        except (requests.RequestException, ValueError, AttributeError):
-            result["error"] = "Remote sync failed; records retained for retry or export."
-        result["pending"] = len(self._pending())
+            raise ValueError("Remote URL must use HTTPS, or HTTP on loopback, without embedded credentials.")
+        # End-if
+        parsed.port
+        return url.rstrip("/"), device
+    # End-def
+
+    ##
+     # @brief Find valid session metadata without opening or switching a session.
+     #
+     # @return Session IDs corresponding to readable SessionManager metadata.
+     #
+    def _session_ids(self):
+        result = []
+        for path in sorted(self.log_dir.glob("*/meta.log")):
+            try:
+                metadata = json.loads(path.read_bytes())
+                if isinstance(metadata, dict) and metadata.get("id") == path.parent.name:
+                    result.append(metadata["id"])
+                # End-if
+            except (OSError, ValueError):
+                continue
+            # End-try
+        # End-for
         return result
+    # End-def
+
+    ##
+     # @brief Read both allowed files once and derive a stable snapshot identity.
+     #
+     # @param session_id Exact session directory ID, never a path.
+     # @param device Configured device identity.
+     #
+     # @return Identity and manifest payload, plus fixed file bytes.
+     #
+    def _snapshot(self, session_id, device):
+        if (not isinstance(session_id, str) or not session_id or
+                Path(session_id).name != session_id or session_id in (".", "..") or
+                "/" in session_id or "\\" in session_id):
+            raise ValueError("Invalid session ID.")
+        # End-if
+        directory = (self.log_dir / session_id).resolve()
+        if directory.parent != self.log_dir:
+            raise ValueError("Session directory is outside the log directory.")
+        # End-if
+        content = {}
+        files = {}
+        for name in SESSION_FILES:
+            path = directory / name
+            if path.resolve().parent != directory:
+                raise ValueError("Session file is outside its session directory.")
+            # End-if
+            content[name] = path.read_bytes()
+            files[name] = {"size": len(content[name]), "sha256": hashlib.sha256(content[name]).hexdigest()}
+        # End-for
+        manifest = {"device": device, "project": self.project, "session_id": session_id, "files": files}
+        canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        manifest["snapshot_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return manifest, content
+    # End-def
+
+    ##
+     # @brief Send a bounded UTF-8 JSON request without following redirects.
+     #
+     # @param url Configured Remote base URL.
+     # @param payload One file chunk or a final commit request.
+     #
+     # @return Decoded response object, or raise ValueError on protocol failure.
+     #
+    def _post(self, url, payload):
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(body) >= MAX_REQUEST_SIZE:
+            raise ValueError("Session identity is too large for a backup request.")
+        # End-if
+        response = requests.post(
+            url + "/sync", data=body,
+            headers={"Authorization": "Bearer " + self.remote["token"], "Content-Type": "application/json"},
+            timeout=(5, 30), allow_redirects=False,
+        )
+        if response.status_code != 200:
+            raise ValueError(f"Remote sync returned HTTP {response.status_code}; local session files are unchanged.")
+        # End-if
+        reply = response.json()
+        if not isinstance(reply, dict):
+            raise ValueError("Remote returned an invalid backup acknowledgement.")
+        # End-if
+        return reply
+    # End-def
+
+    ##
+     # @brief Manually upload all listed sessions or an explicit set of IDs.
+     #
+     # @param session_ids Exact IDs, or None for every valid session directory.
+     #
+     # @return Counts of committed sessions/files and a safe error, if any.
+     #
+    def sync(self, session_ids=None):
+        result = {"sessions": 0, "files": 0, "error": None}
+        try:
+            url, device = self._connection()
+            selected = self._session_ids() if session_ids is None else session_ids
+            if not isinstance(selected, (list, tuple)):
+                raise ValueError("Session IDs must be a list.")
+            # End-if
+            seen = set()
+            for session_id in selected:
+                if not isinstance(session_id, str):
+                    raise ValueError("Invalid session ID.")
+                # End-if
+                if session_id in seen:
+                    continue
+                # End-if
+                seen.add(session_id)
+                manifest, content = self._snapshot(session_id, device)
+                for name in SESSION_FILES:
+                    raw = content[name]
+                    for offset in range(0, max(1, len(raw)), CHUNK_SIZE):
+                        chunk = raw[offset:offset + CHUNK_SIZE]
+                        payload = dict(manifest, file=name, offset=offset,
+                                       data=base64.b64encode(chunk).decode("ascii"))
+                        reply = self._post(url, payload)
+                        received = reply.get("received")
+                        if type(received) is not int or received != offset + len(chunk):
+                            raise ValueError("Remote did not acknowledge the uploaded file chunk.")
+                        # End-if
+                    # End-for
+                # End-for
+                reply = self._post(url, dict(manifest, commit=True))
+                if reply.get("accepted") != manifest["snapshot_id"]:
+                    raise ValueError("Remote did not commit the session snapshot.")
+                # End-if
+                result["sessions"] += 1
+                result["files"] += len(SESSION_FILES)
+            # End-for
+        except requests.RequestException:
+            result["error"] = "Remote sync failed; local session files are unchanged. Run sync again to retry."
+        except OSError:
+            result["error"] = "Cannot read session backup files; local session files are unchanged."
+        except (ValueError, TypeError) as exc:
+            result["error"] = str(exc)
+        # End-try
+        return result
+    # End-def
+# End-class
