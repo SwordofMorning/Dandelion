@@ -24,6 +24,9 @@ class SkillManager:
      # @brief Constructor.
      #
      # @param skill_dir Path to load skill.
+     # @param runtime Optional Runtime callbacks for emitting warnings.
+     #
+     # @return None.
      #
     def __init__(self, skill_dir, runtime=None):
         self.skill_dir = skill_dir

@@ -21,6 +21,13 @@ class RemoteLoop:
     ##
      # @brief Bind lifecycle storage, worker execution, agent construction and replies.
      #
+     # @param store Shared durable store with its connection lock.
+     # @param jobs Background job manager used by remote delegation tools.
+     # @param agent_factory Callable creating a core agent for one conversation.
+     # @param notify Callback persisting or emitting a conversation reply.
+     #
+     # @return None.
+     #
     def __init__(self, store, jobs, agent_factory, notify):
         self.store, self.jobs = store, jobs
         self.agent_factory, self.notify = agent_factory, notify
@@ -32,6 +39,13 @@ class RemoteLoop:
 
     ##
      # @brief Persist a user or analysis event without touching agent history.
+     #
+     # @param kind Event category ("message" or "analysis").
+     # @param session_id Conversation identifier used to scope persisted records.
+     # @param payload Event text or dictionary containing a non-empty text field.
+     # @param event_id Optional deterministic event identifier for deduplication.
+     #
+     # @return Persisted event identifier.
      #
     def post(self, kind, session_id, payload, event_id=None):
         if kind not in ("message", "analysis"):
@@ -49,6 +63,10 @@ class RemoteLoop:
     ##
      # @brief Request cancellation of the named conversation at a safe boundary.
      #
+     # @param session_id Conversation identifier whose active turn should stop.
+     #
+     # @return True when an active conversation agent was signaled; False otherwise.
+     #
     def cancel(self, session_id):
         with self._agents_lock:
             agent = self._agents.get(str(session_id))
@@ -64,6 +82,10 @@ class RemoteLoop:
     ##
      # @brief Construct or reuse a conversation agent on its owner thread.
      #
+     # @param session_id Conversation identifier used to scope persisted records.
+     #
+     # @return Conversation agent bound to the supplied session_id.
+     #
     def _agent(self, session_id):
         # Factory construction also stays on the agent owner thread.
         with self._agents_lock:
@@ -78,6 +100,10 @@ class RemoteLoop:
 
     ##
      # @brief Render an event with bounded reference data and the current UTC clock.
+     #
+     # @param event Claimed durable event dictionary.
+     #
+     # @return Formatted user message text for the main agent turn.
      #
     def _message(self, event):
         payload = event["payload"]
@@ -102,6 +128,10 @@ class RemoteLoop:
 
     ##
      # @brief Process one event and produce a reply without retrying tool side effects.
+     #
+     # @param event Claimed durable event dictionary.
+     #
+     # @return Reply text produced for the completed or cancelled turn.
      #
     def _handle(self, event):
         from src.core.agent.runner import run_agent_loop
@@ -146,6 +176,8 @@ class RemoteLoop:
     ##
      # @brief Deliver due reminders and queued notifications independently of model work.
      #
+     # @return None.
+     #
     def _schedule(self):
         while not self._stop.is_set():
             try:
@@ -174,6 +206,8 @@ class RemoteLoop:
 
     ##
      # @brief Block for durable events and execute one complete agent turn at a time.
+     #
+     # @return None.
      #
     def run(self):
         self.jobs.start()
@@ -210,6 +244,8 @@ class RemoteLoop:
 
     ##
      # @brief Wake the loop and cooperatively stop active main-agent execution.
+     #
+     # @return None.
      #
     def stop(self):
         self._stop.set()

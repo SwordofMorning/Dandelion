@@ -21,6 +21,13 @@ class SubmitTaskTool(BaseTool):
     ##
      # @brief Bind the tool to its remote conversation and job manager.
      #
+     # @param jobs Background job manager used by remote delegation tools.
+     # @param session_id Conversation identifier used to scope persisted records.
+     # @param workspace Workspace assigned to the task or remote session.
+     # @param context Callable returning an immutable snapshot of recent history.
+     #
+     # @return None.
+     #
     def __init__(self, jobs, session_id, workspace, context):
         super().__init__(workspace_dir=workspace)
         self.jobs, self.session_id, self.context = jobs, session_id, context
@@ -29,6 +36,8 @@ class SubmitTaskTool(BaseTool):
     ##
      # @brief Return the registered tool name.
      #
+     # @return Tool identifier string.
+     #
     def get_name(self):
         return "submit_task"
     # End-def
@@ -36,12 +45,16 @@ class SubmitTaskTool(BaseTool):
     ##
      # @brief Describe the tool capability to the model.
      #
+     # @return Human-readable tool description.
+     #
     def get_description(self):
         return "Submit background work and immediately receive a job_id. Completion arrives as a later event."
     # End-def
 
     ##
      # @brief Return the model-visible JSON input schema.
+     #
+     # @return JSON schema dictionary.
      #
     def get_schema(self):
         return {"type": "object", "properties": {
@@ -53,6 +66,12 @@ class SubmitTaskTool(BaseTool):
 
     ##
      # @brief Execute one validated tool action and return its structured outcome.
+     #
+     # @param task_description Nonempty natural-language task description.
+     # @param role_prompt System role for the delegated worker.
+     # @param toolset Registered worker toolset name.
+     #
+     # @return (success, payload_or_error) tuple.
      #
     def execute(self, task_description, role_prompt="", toolset="full"):
         try:
@@ -73,6 +92,11 @@ class TaskControlTool(BaseTool):
     ##
      # @brief Bind the tool to its remote conversation and job manager.
      #
+     # @param jobs Background job manager owning the shared durable store.
+     # @param session_id Conversation identifier used to scope persisted records.
+     #
+     # @return None.
+     #
     def __init__(self, jobs, session_id):
         super().__init__()
         self.jobs, self.session_id = jobs, session_id
@@ -81,12 +105,16 @@ class TaskControlTool(BaseTool):
     ##
      # @brief Return the registered tool name.
      #
+     # @return Tool identifier string.
+     #
     def get_name(self):
         return "task_control"
     # End-def
 
     ##
      # @brief Describe the tool capability to the model.
+     #
+     # @return Human-readable tool description.
      #
     def get_description(self):
         return ("List/get/cancel this conversation's jobs, or create/list/cancel persistent schedules. "
@@ -98,6 +126,8 @@ class TaskControlTool(BaseTool):
 
     ##
      # @brief Return the model-visible JSON input schema.
+     #
+     # @return JSON schema dictionary.
      #
     def get_schema(self):
         return {"type": "object", "properties": {
@@ -115,6 +145,21 @@ class TaskControlTool(BaseTool):
 
     ##
      # @brief Execute one validated tool action and return its structured outcome.
+     #
+     # @param action Requested control or inspection operation.
+     # @param job_id Target background job identifier for get or cancel.
+     # @param schedule_id Target schedule identifier for cancel_schedule.
+     # @param due_at Timezone-aware ISO8601 timestamp for schedule creation.
+     # @param text Reminder or analysis text for schedule creation.
+     # @param kind Schedule delivery mode ("reminder" or "analysis").
+     # @param interval Optional repeat interval in seconds.
+     # @param snapshot_id Target backup snapshot identifier for read_session.
+     # @param device Optional device filter for list_sessions.
+     # @param project Optional project filter for list_sessions.
+     # @param offset Starting message index for read_session pagination.
+     # @param limit Maximum number of messages returned by read_session.
+     #
+     # @return (success, payload_or_error) tuple.
      #
     def execute(self, action, job_id="", schedule_id="", due_at="", text="", kind="reminder", interval=None,
                 snapshot_id="", device=None, project=None, offset=0, limit=20):

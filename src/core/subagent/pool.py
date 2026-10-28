@@ -29,6 +29,9 @@ class SubAgentPool:
      # @param config environment config.
      # @param all_tools all tools, used to resolve toolset to subagents.
      # @param max_depth max SubAgent depth ([Main] SUB_DEPTH; 0 disables).
+     # @param runtime Optional Runtime callbacks for output, cancellation and approval.
+     #
+     # @return None.
      #
     def __init__(self, safe_client, logger, config, all_tools, max_depth=1, runtime=None):
         self.safe_client = safe_client

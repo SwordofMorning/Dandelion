@@ -85,6 +85,7 @@ def classify_compaction_summary(text, stop_reason, err):
  #
  # @param raw Raw COMPACT_SUMMARY_MAX_TOKENS value from the profile.
  # @param profile_max_tokens Profile output cap (config MAX_TOKENS).
+ # @param runtime Optional Runtime callbacks for emitting warnings.
  #
  # @return Clamped int output limit.
  #
@@ -333,6 +334,16 @@ class CompressCondition:
  # Implements reactive error-driven compaction with 80% smooth sliding retention.
  #
 class ContextCompressor:
+    ##
+     # @brief Initialize context compaction thresholds and runtime callbacks.
+     #
+     # @param safe_client SafeLLMClient instance used for summarization calls.
+     # @param session_manager SessionManager used to archive and persist history.
+     # @param config Loaded configuration dictionary.
+     # @param runtime Optional Runtime callbacks for emitting status messages.
+     #
+     # @return None.
+     #
     def __init__(self, safe_client, session_manager, config, runtime=None):
         self.client = safe_client
         self.session = session_manager

@@ -53,6 +53,9 @@ class MemoryManager:
      # @param session_manager Used to call session's functions.
      # @param safe_client SafeLLMClient instance, reserved for future LLM-assisted memory features (summarize/merge/extract). Currently stored but not consumed.
      # @param logger Save logs.
+     # @param runtime Optional Runtime callbacks for emitting warnings.
+     #
+     # @return None.
      #
     def __init__(self, memory_dir="./llm/memory", session_memory_dir=None,
                  session_manager=None, safe_client=None, logger=None, runtime=None):

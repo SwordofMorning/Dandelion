@@ -77,7 +77,8 @@ def _load_config():
 def _load_pyproject():
     with open(os.path.join(ROOT_DIR, "pyproject.toml"), "rb") as f:
         return tomllib.load(f)
-# End-with
+    # End-with
+# End-def
 
 ##
  # @brief Get project name and version (single source of truth).

@@ -9,6 +9,9 @@
  # @note Transport delivery and acknowledgement are managed by their channel adapters.
  #
 
+##
+ # @brief Persist outgoing conversation replies and channel delivery cursors.
+ #
 class ChannelHub:
     ##
      # @brief Create the reply and channel-state tables.

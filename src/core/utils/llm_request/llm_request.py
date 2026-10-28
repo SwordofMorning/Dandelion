@@ -45,11 +45,15 @@ class SafeLLMClient:
      # @param model_id Model identifier for the main agent.
      # @param sdk_type SDK type ("Message", "Chat Completions").
      # @param all_models Full model list for sub-agent routing.
+     # @param sub_list Allowed sub-agent model alias list.
      # @param thinking "enabled" or "disabled" - extended thinking toggle for the main agent.
      # @param effort Reasoning effort: "low", "medium", "high", or "max".
      # @param compat Endpoint flavor of the main agent's link terminal family
      # ("auto" detects it); see llm_provider/effort.py.
      # @param logger Optional SessionManager for logging final API payloads (post-injection).
+     # @param runtime Optional Runtime callbacks for emitting routing messages.
+     #
+     # @return None.
      #
     def __init__(self, api_key, base_url, model_id, sdk_type="Message",
                  all_models=None, sub_list=None,

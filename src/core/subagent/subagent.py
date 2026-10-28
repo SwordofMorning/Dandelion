@@ -50,6 +50,9 @@ class SubAgent(ISubAgent):
      # @param max_depth maximum depth allowed ([Main] SUB_DEPTH).
      # @param subagent_id ID, used to manage in pool.
      # @param routing_context used to dynamic choose LLM models.
+     # @param runtime Optional Runtime callbacks for output, cancellation and approval.
+     #
+     # @return None.
      #
     def __init__(
         self, safe_client, logger, config,

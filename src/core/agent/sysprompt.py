@@ -37,6 +37,10 @@ class PromptBuilder:
      # @param config Flat config dict from load_api_config.
      # @param workspace_dir Workspace root (path confinement).
      # @param session_manager SessionManager (session-scoped task state), optional.
+     # @param delegation_prompt Optional override for delegation instructions.
+     # @param tool_names Optional set of registered tool names for prompt filtering.
+     #
+     # @return None.
      #
     def __init__(self, memory_manager, skill_manager, config, workspace_dir=".",
                  session_manager=None, delegation_prompt=None, tool_names=None):
@@ -61,6 +65,7 @@ class PromptBuilder:
             self.terminal_hint = "Windows Environment but using 'bash' (Git Bash/MSYS). Use standard unix commands."
         else:
             self.terminal_hint = f"{self.os_name} Environment. Primary shell is 'bash'."
+        # End-if
     # End-def
 
     ##
@@ -87,6 +92,7 @@ class PromptBuilder:
         if self.delegation_prompt is not None:
             if self.delegation_prompt:
                 sections.append(self.delegation_prompt)
+            # End-if
         elif (sub_list and sub_depth > 0
               and self._has_tool("plan_tool") and self._has_tool("spawn_subagent")):
             nesting = (
@@ -123,6 +129,7 @@ class PromptBuilder:
                 f"Available Skills:\n{catalog}\n"
                 "Use the 'load_skill' tool to fetch the full content of a skill when you need specific formats or rules."
             )
+        # End-if
         
         # 4. Security Rules
         sections.append(
@@ -223,13 +230,20 @@ class PromptBuilder:
      #
     @staticmethod
     def render_task_state_text(state, session_hint=""):
+        ##
+         # @brief Normalize a task-state list field into a comma-separated string.
+         #
+         # @param value Raw task-state field value.
+         #
+         # @return Normalized text representation.
+         #
         def _coerce_list(value):
-            """Safely render todos/completed: null -> '', list -> joined
-            strings, anything else (e.g. a bare string) -> str(value)."""
             if value is None:
                 return ""
+            # End-if
             if isinstance(value, list):
                 return ", ".join(str(x) for x in value if x is not None)
+            # End-if
             return str(value)
         # End-def
 
@@ -242,4 +256,4 @@ class PromptBuilder:
             "(You must frequently use the 'update_state' tool to keep this updated)"
         )
     # End-def
-#End-class
+# End-class

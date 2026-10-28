@@ -76,10 +76,12 @@ def strip_dynamic_context(content):
         start = content.find(_DYN_CTX_START)
         if start == -1:
             return content
+        # End-if
         end = content.find(_DYN_CTX_END, start)
         if end == -1:
             # Unterminated block (e.g. manually truncated history): drop the tail.
             return content[:start].rstrip()
+        # End-if
         # Complete block: keep the prefix, drop the block, then keep scanning
         # the suffix so stacked/adjacent blocks are removed as well.
         content = content[:start].rstrip() + content[end + len(_DYN_CTX_END):]
@@ -103,6 +105,11 @@ class MyAgent:
      # @param config api.cfg loaded from .env/.
      # @param session_manager SessionManager object.
      # @param workspace_dir current pwd, used to avoid agent(llm) escape.
+     # @param runtime Optional Runtime callbacks for output, cancellation and approval.
+     # @param tool_factory Optional callable constructing the main-agent tool mapping.
+     # @param delegation_prompt Optional override for delegation instructions.
+     #
+     # @return None.
      #
     def __init__(self, config, session_manager, workspace_dir, runtime=None,
                  tool_factory=None, delegation_prompt=None):
@@ -392,6 +399,7 @@ class MyAgent:
         # stale block never survives a resume/re-run.
         if changed:
             self.session.save_history(self.history)
+        # End-if
     # End-def
 
     ##
@@ -399,6 +407,23 @@ class MyAgent:
      # @section IV. Agent-Loop
      # ========================================
      #
+
+    ##
+     # @brief Display token usage metrics in muted gray (Ubuntu / VSCode SSH style).
+     #
+     # @param usage_info Token usage dictionary from the LLM response.
+     #
+     # @return None.
+     #
+    def _print_token_usage(self, usage_info):
+        if not usage_info:
+            return
+        # End-if
+        self.runtime.emit(
+            f"    Token: {usage_info['total']} | Input: {usage_info['input']} | "
+            f"Output: {usage_info['output']} | Cached: {usage_info['cached']}"
+        )
+    # End-def
 
     ##
      # @brief LLM Round-Trip Step. A tools iterator.
@@ -420,19 +445,6 @@ class MyAgent:
      # @retval (False, err_str) An API error occurred and all bounded retries
      #                          (_LLM_RETRY_COUNT) were exhausted. Breakout.
      #
-    ##
-     # @brief Display token usage metrics in muted gray (Ubuntu / VSCode SSH style).
-     #
-    def _print_token_usage(self, usage_info):
-        if not usage_info:
-            return
-        # End-if
-        self.runtime.emit(
-            f"    Token: {usage_info['total']} | Input: {usage_info['input']} | "
-            f"Output: {usage_info['output']} | Cached: {usage_info['cached']}"
-        )
-    # End-def
-
     def step(self):
         # 1. Build System Prompt (STATIC)
         # Dynamic content (task state / memories) is injected as a

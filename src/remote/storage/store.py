@@ -22,6 +22,10 @@ from pathlib import Path
 ##
  # @brief Parse finite Unix seconds or an ISO timestamp with an explicit timezone.
  #
+ # @param value Numeric Unix timestamp or timezone-aware ISO8601 string.
+ #
+ # @return Parsed Unix timestamp in seconds.
+ #
 def timestamp(value):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         result = float(value)
@@ -44,6 +48,10 @@ def timestamp(value):
 class Store:
     ##
      # @brief Open the lifecycle database and initialize thread-safe storage.
+     #
+     # @param db_path Filesystem path to the SQLite database file.
+     #
+     # @return None.
      #
     def __init__(self, db_path):
         path = Path(db_path)
@@ -86,6 +94,10 @@ class Store:
     ##
      # @brief Decode an optional job row and its structured result.
      #
+     # @param row SQLite job row or None.
+     #
+     # @return Decoded job dictionary, or None.
+     #
     @staticmethod
     def _job(row):
         if row is None:
@@ -99,6 +111,13 @@ class Store:
     ##
      # @brief Insert one durable event inside the caller-owned transaction.
      #
+     # @param kind Event category string.
+     # @param session_id Conversation identifier used to scope persisted records.
+     # @param payload JSON-serializable event payload.
+     # @param event_id Optional deterministic event identifier.
+     #
+     # @return Persisted event identifier.
+     #
     def _event(self, kind, session_id, payload, event_id=None):
         event_id = event_id or "evt_" + uuid.uuid4().hex
         self.conn.execute(
@@ -111,6 +130,13 @@ class Store:
     ##
      # @brief Persist an event and notify blocked consumers.
      #
+     # @param kind Event category string.
+     # @param session_id Conversation identifier used to scope persisted records.
+     # @param payload JSON-serializable event payload.
+     # @param event_id Optional deterministic event identifier.
+     #
+     # @return Persisted event identifier.
+     #
     def add_event(self, kind, session_id, payload, event_id=None):
         with self.changed, self.conn:
             result = self._event(kind, session_id, payload, event_id)
@@ -121,6 +147,8 @@ class Store:
 
     ##
      # @brief Return unclaimed events in creation order.
+     #
+     # @return Ordered list of pending event dictionaries.
      #
     def pending_events(self):
         with self.lock:
@@ -133,6 +161,10 @@ class Store:
 
     ##
      # @brief Claim one main or notification event atomically.
+     #
+     # @param notifications True to claim notification events; False for conversation events.
+     #
+     # @return Claimed event dictionary, or None when none are pending.
      #
     def claim_event(self, notifications=False):
         with self.lock, self.conn:
@@ -152,6 +184,10 @@ class Store:
     ##
      # @brief Mark a successfully delivered event complete.
      #
+     # @param event_id Identifier of the delivered event.
+     #
+     # @return None.
+     #
     def ack_event(self, event_id):
         with self.lock, self.conn:
             self.conn.execute("UPDATE events SET status='done' WHERE id=?", (event_id,))
@@ -160,6 +196,12 @@ class Store:
 
     ##
      # @brief Atomically acknowledge a turn and save its reply notification.
+     #
+     # @param event_id Completed conversation event identifier.
+     # @param session_id Conversation identifier receiving the reply.
+     # @param reply Reply text to queue for delivery.
+     #
+     # @return None.
      #
     def complete_event(self, event_id, session_id, reply):
         with self.changed, self.conn:
@@ -172,6 +214,10 @@ class Store:
     ##
      # @brief Make a notification available for another delivery attempt.
      #
+     # @param event_id Notification event identifier to return to pending state.
+     #
+     # @return None.
+     #
     def retry_event(self, event_id):
         with self.changed, self.conn:
             self.conn.execute("UPDATE events SET status='pending' WHERE id=?", (event_id,))
@@ -181,6 +227,8 @@ class Store:
 
     ##
      # @brief Report interrupted execution and replay pending notifications.
+     #
+     # @return None.
      #
     def recover(self):
         with self.changed, self.conn:
@@ -209,6 +257,15 @@ class Store:
     ##
      # @brief Save a queued job with its fixed submission context.
      #
+     # @param session_id Conversation identifier used to scope persisted records.
+     # @param workspace Resolved workspace directory assigned to the job.
+     # @param task_description Nonempty natural-language task description.
+     # @param role_prompt System role for the delegated worker.
+     # @param toolset Registered worker toolset name.
+     # @param context Immutable submission context snapshot.
+     #
+     # @return Persisted job dictionary.
+     #
     def create_job(self, session_id, workspace, task_description, role_prompt, toolset, context):
         job_id = "job_" + uuid.uuid4().hex
         now = time.time()
@@ -224,6 +281,10 @@ class Store:
     ##
      # @brief Read one persisted job by its stable identifier.
      #
+     # @param job_id Persistent job identifier.
+     #
+     # @return Decoded job dictionary, or None when absent.
+     #
     def get_job(self, job_id):
         with self.lock:
             return self._job(self.conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
@@ -232,6 +293,10 @@ class Store:
 
     ##
      # @brief List jobs, optionally restricted to one conversation.
+     #
+     # @param session_id Optional conversation identifier filter.
+     #
+     # @return Ordered list of job dictionaries, newest first.
      #
     def list_jobs(self, session_id=None):
         with self.lock:
@@ -246,6 +311,10 @@ class Store:
     ##
      # @brief Transition a queued job to running exactly once.
      #
+     # @param job_id Persistent job identifier.
+     #
+     # @return True when the job transitioned from queued to running.
+     #
     def start_job(self, job_id):
         with self.lock, self.conn:
             return bool(self.conn.execute(
@@ -257,6 +326,12 @@ class Store:
 
     ##
      # @brief Save a terminal job result and completion event in one transaction.
+     #
+     # @param row Persisted job row.
+     # @param status Terminal job status string.
+     # @param result Structured worker result dictionary.
+     #
+     # @return None.
      #
     def _finish(self, row, status, result):
         self.conn.execute(
@@ -271,6 +346,11 @@ class Store:
 
     ##
      # @brief Complete an active job while preserving cancellation semantics.
+     #
+     # @param job_id Persistent job identifier.
+     # @param result Structured worker result dictionary.
+     #
+     # @return None.
      #
     def finish_job(self, job_id, result):
         with self.changed, self.conn:
@@ -290,6 +370,10 @@ class Store:
 
     ##
      # @brief Cancel queued work or request cooperative cancellation of running work.
+     #
+     # @param job_id Persistent job identifier.
+     #
+     # @return True when the job was cancelled or marked cancel_requested.
      #
     def cancel_job(self, job_id):
         with self.changed, self.conn:
@@ -311,6 +395,10 @@ class Store:
 
     ##
      # @brief Import a legacy activity record with immutable event identity.
+     #
+     # @param record Validated activity record dictionary.
+     #
+     # @return True when a new activity was inserted; False on idempotent duplicate.
      #
     def ingest_activity(self, record):
         required = ("event_id", "device", "project", "session_id", "occurred_at", "summary", "sources")
@@ -343,6 +431,10 @@ class Store:
     ##
      # @brief Read legacy activities, optionally without a result limit.
      #
+     # @param limit Maximum number of activity records to return, or None for all.
+     #
+     # @return List of activity dictionaries ordered newest first.
+     #
     def list_activities(self, limit=100):
         with self.lock:
             query = "SELECT record FROM activities ORDER BY received_at DESC"
@@ -357,6 +449,14 @@ class Store:
 
     ##
      # @brief Persist a reminder or analysis schedule.
+     #
+     # @param session_id Conversation identifier used to scope persisted records.
+     # @param due_at Timezone-aware ISO8601 timestamp or Unix timestamp.
+     # @param payload Schedule text or dictionary payload.
+     # @param interval Optional repeat interval in seconds.
+     # @param kind Delivery kind ("reminder" or "analysis").
+     #
+     # @return Persisted schedule dictionary.
      #
     def create_schedule(self, session_id, due_at, payload, interval=None, kind="reminder"):
         due = timestamp(due_at)
@@ -381,6 +481,11 @@ class Store:
     ##
      # @brief List schedules by conversation and active state.
      #
+     # @param session_id Optional conversation identifier filter.
+     # @param active_only Whether to restrict results to active schedules.
+     #
+     # @return Ordered list of schedule dictionaries sorted by due_at.
+     #
     def list_schedules(self, session_id=None, active_only=True):
         query, args = "SELECT * FROM schedules WHERE 1=1", []
         if session_id is not None:
@@ -398,6 +503,11 @@ class Store:
     ##
      # @brief Deactivate a matching schedule without deleting its record.
      #
+     # @param schedule_id Persistent schedule identifier.
+     # @param session_id Optional conversation identifier scope check.
+     #
+     # @return True when an active schedule was deactivated.
+     #
     def cancel_schedule(self, schedule_id, session_id=None):
         query, args = "UPDATE schedules SET active=0 WHERE id=? AND active=1", [schedule_id]
         if session_id is not None:
@@ -413,6 +523,10 @@ class Store:
 
     ##
      # @brief Convert due schedules into durable events and advance repeats.
+     #
+     # @param now Optional evaluation timestamp in Unix seconds.
+     #
+     # @return None.
      #
     def fire_due_schedules(self, now=None):
         now = time.time() if now is None else now
@@ -442,6 +556,8 @@ class Store:
 
     ##
      # @brief Close the SQLite connection after runtime workers stop.
+     #
+     # @return None.
      #
     def close(self):
         with self.lock:
