@@ -3,18 +3,20 @@
  # @date 2026/10/28
  #
  # @brief Remote service assembly and command dispatch.
- # Parses serve and drive-export commands, initializes the unrestricted Remote
- # runtime and pure-filesystem SyncStore, and coordinates HTTP, workers and Telegram.
+ # Loads remote.cfg (containing LLM providers plus [Server], [Telegram], and
+ # [Drive] sections), initializes the unrestricted Remote runtime and pure-FS
+ # SyncStore, and coordinates HTTP, workers and Telegram.
  #
 
 import argparse
-import json
 import logging
 import os
 from pathlib import Path
 import signal
 import threading
 
+from mk.lib.paths import remote_config_path
+from src.core.utils.config import load_remote_config
 from .channels.telegram import Telegram
 from .storage.replies import ChannelHub
 from .storage.backups import BackupStore
@@ -30,34 +32,46 @@ from .storage.store import Store
  # @return None.
  #
 def main(argv=None):
+    default_cfg = remote_config_path()
     parser = argparse.ArgumentParser(
         description="Run the Dandelion Remote service or export daily synced session reports to Google Drive."
     )
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--workspace", default=".")
-    serve.add_argument("--config", default=".env/api.cfg")
-    serve.add_argument("--workers", type=int, default=4)
+    serve.add_argument("--host", default=None)
+    serve.add_argument("--port", type=int, default=None)
+    serve.add_argument("--workspace", default=None)
+    serve.add_argument("--workers", type=int, default=None)
     drive = commands.add_parser("drive-export")
-    drive.add_argument("--workspace", default=".")
+    drive.add_argument("--workspace", default=None)
     for command in (serve, drive):
-        command.add_argument("--data-dir", default=".remote")
+        command.add_argument("--config", default=default_cfg)
+        command.add_argument("--data-dir", default=None)
     # End-for
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    data_dir = Path(args.data_dir).resolve()
+
+    config = load_remote_config(args.config)
+    if not config:
+        parser.error("Cannot load remote config: " + str(args.config))
+    # End-if
+    srv_cfg = config.get("SERVER") or {}
+
+    raw_data_dir = args.data_dir or srv_cfg.get("data_dir") or ".remote"
+    raw_workspace = args.workspace or srv_cfg.get("workspace") or "./workspace"
+    data_dir = Path(raw_data_dir).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
+    workspace = str(Path(raw_workspace).resolve())
+    Path(workspace).mkdir(parents=True, exist_ok=True)
+
     store = Store(str(data_dir / "remote.sqlite3"))
     try:
         if args.command == "drive-export":
             from .exports.drive import export_drive
-            workspace = str(Path(args.workspace).resolve())
-            result = export_drive(store, workspace_dir=workspace)
+            result = export_drive(store, workspace_dir=workspace, drive_cfg=config.get("DRIVE"))
             print(f"Exported {result['exported']} daily documents to Google Drive.")
         else:
-            _serve(args, parser, store, data_dir)
+            _serve(args, parser, config, store, data_dir, workspace)
         # End-if
     finally:
         store.close()
@@ -70,46 +84,52 @@ def main(argv=None):
  #
  # @param args Parsed remote-service command arguments.
  # @param parser Argument parser used to report invalid service configuration.
+ # @param config Loaded remote.cfg dictionary.
  # @param store Shared durable store with its connection lock.
  # @param data_dir Private remote-service data directory.
+ # @param workspace Resolved server workspace directory.
  #
  # @return None.
  #
-def _serve(args, parser, store, data_dir):
-    from src.core.utils.config import load_api_config
+def _serve(args, parser, config, store, data_dir, workspace):
     from .execution.jobs import JobExecutor, JobManager
     from .execution.loop import RemoteLoop
     from .execution.agent import make_agent_factory
 
-    token = os.environ.get("DANDELION_DR_TOKEN", "")
-    if not token:
-        parser.error("DANDELION_DR_TOKEN is required")
+    srv_cfg = config.get("SERVER") or {}
+    tg_cfg = config.get("TELEGRAM") or {}
+
+    host = args.host or srv_cfg.get("host") or "0.0.0.0"
+    port = args.port if args.port is not None else int(srv_cfg.get("port", 8765))
+    workers = args.workers if args.workers is not None else int(srv_cfg.get("workers", 4))
+
+    access_key = (
+        srv_cfg.get("access_key")
+        or os.environ.get("DANDELION_DR_TOKEN", "")
+    ).strip()
+    if not access_key:
+        parser.error("ACCESS_KEY is required in [Server] section of " + str(args.config))
     # End-if
-    device_tokens = json.loads(os.environ.get("DANDELION_DR_DEVICES") or "{}")
-    if not isinstance(device_tokens, dict) or any(
-            not isinstance(k, str) or not isinstance(v, str) or not v
-            for k, v in device_tokens.items()):
-        parser.error("DANDELION_DR_DEVICES must map device names to nonempty tokens")
+
+    telegram_token = (
+        tg_cfg.get("bot_token")
+        or os.environ.get("DANDELION_TELEGRAM_TOKEN", "")
+    ).strip()
+    chats = list(tg_cfg.get("allowed_chats") or [])
+    if not chats and os.environ.get("DANDELION_TELEGRAM_CHATS"):
+        chats = [c.strip() for c in os.environ.get("DANDELION_TELEGRAM_CHATS", "").split(",") if c.strip()]
     # End-if
-    telegram_token = os.environ.get("DANDELION_TELEGRAM_TOKEN", "")
-    chats = [chat.strip() for chat in os.environ.get("DANDELION_TELEGRAM_CHATS", "").split(",") if chat.strip()]
     if telegram_token and not chats:
-        parser.error("Set DANDELION_TELEGRAM_CHATS to authorized private chat IDs")
+        parser.error("Set ALLOWED_CHATS in [Telegram] section of " + str(args.config))
     # End-if
-    config = load_api_config(args.config)
-    if not config:
-        parser.error("Cannot load LLM config: " + args.config)
-    # End-if
-    workspace = str(Path(args.workspace).resolve())
-    Path(workspace).mkdir(parents=True, exist_ok=True)
+
     backups = BackupStore(str(data_dir), workspace_dir=workspace)
-    jobs = JobManager(store, JobExecutor(config, str(data_dir)), max_workers=args.workers)
+    jobs = JobManager(store, JobExecutor(config, str(data_dir)), max_workers=workers)
     hub = ChannelHub(store)
     factory = make_agent_factory(config, str(data_dir), workspace, jobs, hub=hub, backups=backups)
     loop = RemoteLoop(store, jobs, factory, hub.notify)
     server = make_server(
-        args.host, args.port, store, jobs, loop, hub, token,
-        device_tokens=device_tokens, backups=backups,
+        host, port, store, jobs, loop, hub, access_key, backups=backups,
     )
     telegram = Telegram(telegram_token, chats, loop, hub) if telegram_token else None
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -133,7 +153,7 @@ def _serve(args, parser, store, data_dir):
         if telegram:
             telegram.start()
         # End-if
-        logging.info("Dandelion Remote listening on %s:%s", args.host, server.server_address[1])
+        logging.info("Dandelion Remote listening on %s:%s", host, server.server_address[1])
         loop.run()
     finally:
         server.shutdown()

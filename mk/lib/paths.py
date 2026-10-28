@@ -127,10 +127,24 @@ def log_dir():
 # End-def
 
 ##
- # @brief Resolve the api config file path.
+ # @brief Resolve the CLI config file path (cli.cfg, with fallback to legacy api.cfg).
  #
- # @return Absolute path to api.cfg (str).
+ # @return Absolute path to cli.cfg (str).
  #
 def config_path():
-    return os.path.join(config_dir(), "api.cfg")
+    cli_cfg = os.path.join(config_dir(), "cli.cfg")
+    legacy_cfg = os.path.join(config_dir(), "api.cfg")
+    if not os.path.exists(cli_cfg) and os.path.exists(legacy_cfg):
+        return legacy_cfg
+    # End-if
+    return cli_cfg
+# End-def
+
+##
+ # @brief Resolve the Remote server config file path (remote.cfg).
+ #
+ # @return Absolute path to remote.cfg (str).
+ #
+def remote_config_path():
+    return os.path.join(config_dir(), "remote.cfg")
 # End-def

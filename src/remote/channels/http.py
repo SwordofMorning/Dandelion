@@ -3,15 +3,16 @@
  # @date 2026/10/27
  #
  # @brief Authenticated remote HTTP interface.
- # Dispatches conversation, job, schedule and session-sync requests, enforces
- # device/admin credential scopes, and triggers sync_received interrupts.
- #
- # @note Public HTTPS termination belongs to the deployment reverse proxy.
+ # Verifies incoming requests using constant-time MD5 ACCESS_KEY comparison,
+ # dispatches conversation, job, schedule and session-sync requests, and
+ # triggers sync_received interrupts.
  #
 
+import hashlib
 import hmac
 import json
 import logging
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -21,7 +22,19 @@ MAX_BODY = 1024 * 1024
 
 
 ##
- # @brief Create an authenticated API with bounded chunk uploads.
+ # @brief Normalize a configured or supplied key into its 32-byte ASCII MD5 hex digest.
+ #
+ # @param value Raw access key string.
+ #
+ # @return 32-byte lowercase ASCII hex MD5 digest.
+ #
+def _md5_digest_bytes(value):
+    return hashlib.md5(str(value).strip().encode("utf-8")).hexdigest().encode("ascii")
+# End-def
+
+
+##
+ # @brief Create an authenticated API with MD5 access-key verification.
  #
  # @param host Local address on which the API listens.
  # @param port TCP port, or zero to allocate a local port.
@@ -29,29 +42,27 @@ MAX_BODY = 1024 * 1024
  # @param jobs Background job manager used by remote delegation tools.
  # @param loop Remote conversation event loop.
  # @param hub Persistent reply and channel-state hub.
- # @param token Administrative API credential.
- # @param device_tokens Device IDs mapped to sync-only credentials.
+ # @param access_key Shared ACCESS_KEY configured in remote.cfg [Server].
+ # @param device_tokens Optional legacy device token map (kept for test compatibility).
  # @param backups Optional shared BackupStore instance.
  #
  # @return Configured threaded HTTP server.
  #
-def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None, backups=None):
-    if not token:
-        raise ValueError("Set DANDELION_DR_TOKEN before starting the server")
+def make_server(host, port, store, jobs, loop, hub, access_key, device_tokens=None, backups=None):
+    if not access_key or not str(access_key).strip():
+        raise ValueError("Set ACCESS_KEY in [Server] of remote.cfg before starting the server")
     # End-if
+    expected_md5 = _md5_digest_bytes(access_key)
     device_tokens = device_tokens or {}
-    if (not isinstance(device_tokens, dict)
-            or any(not isinstance(k, str) or not k.strip()
-                   or not isinstance(v, str) or not v for k, v in device_tokens.items())
-            or len(set(device_tokens.values())) != len(device_tokens)
-            or token in device_tokens.values()):
-        raise ValueError("Device credentials must have unique nonempty names/tokens, separate from the admin token")
-    # End-if
-
+    device_md5_map = {
+        str(dev): _md5_digest_bytes(cred)
+        for dev, cred in device_tokens.items()
+        if isinstance(dev, str) and dev.strip() and isinstance(cred, str) and cred.strip()
+    }
     backups = backups if backups is not None else BackupStore(store)
 
     ##
-     # @brief Handle JSON requests and authenticated backup downloads.
+     # @brief Handle JSON requests and authenticated session sync uploads.
      #
     class Handler(BaseHTTPRequestHandler):
         ##
@@ -94,18 +105,29 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None, b
         # End-def
 
         ##
-         # @brief Match administrative or device-scoped bearer credentials.
+         # @brief Verify the Bearer credential by comparing MD5 digests in constant time.
          #
-         # @return Authenticated role and optional device ID.
+         # @return Authenticated role ("admin" or "device") and optional device ID.
          #
         def _identity(self):
             header = self.headers.get("Authorization", "")
-            supplied = header[7:] if header.startswith("Bearer ") else ""
-            if supplied and hmac.compare_digest(supplied.encode(), token.encode()):
+            supplied = header[7:].strip() if header.startswith("Bearer ") else ""
+            if not supplied:
+                return None, None
+            # End-if
+            hashed_supplied = _md5_digest_bytes(supplied)
+            raw_hex = (
+                supplied.lower().encode("ascii")
+                if re.fullmatch(r"[0-9a-fA-F]{32}", supplied)
+                else b""
+            )
+            if (hmac.compare_digest(hashed_supplied, expected_md5)
+                    or (raw_hex and hmac.compare_digest(raw_hex, expected_md5))):
                 return "admin", None
             # End-if
-            for device, credential in device_tokens.items():
-                if supplied and hmac.compare_digest(supplied.encode(), credential.encode()):
+            for device, dev_md5 in device_md5_map.items():
+                if (hmac.compare_digest(hashed_supplied, dev_md5)
+                        or (raw_hex and hmac.compare_digest(raw_hex, dev_md5))):
                     return "device", device
                 # End-if
             # End-for

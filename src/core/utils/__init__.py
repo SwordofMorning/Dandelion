@@ -6,7 +6,7 @@
  # Exposes configuration, provider, logging and routing helpers.
  #
 
-from .config import load_api_config
+from .config import load_api_config, load_remote_config
 from .llm_provider import (
     LLMProvider,
     AnthropicProvider,
@@ -19,6 +19,7 @@ from .llm_request import SafeLLMClient
 
 __all__ = [
     "load_api_config",
+    "load_remote_config",
     "LLMProvider",
     "AnthropicProvider",
     "OpenAIProvider",

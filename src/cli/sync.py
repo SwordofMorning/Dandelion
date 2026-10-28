@@ -54,10 +54,10 @@ class SessionSync:
      #
     def _connection(self):
         url = self.remote.get("url", "")
-        token = self.remote.get("token", "")
+        access_key = self.remote.get("access_key") or self.remote.get("token") or ""
         device = self.remote.get("device_id", "")
         missing = [
-            label for label, val in (("URL", url), ("TOKEN", token), ("DEVICE_ID", device))
+            label for label, val in (("URL", url), ("ACCESS_KEY", access_key), ("DEVICE_ID", device))
             if not isinstance(val, str) or not val.strip()
         ]
         if missing:
@@ -151,10 +151,12 @@ class SessionSync:
         if len(body) >= MAX_REQUEST_SIZE:
             raise ValueError("Session backup request exceeds maximum payload size.")
         # End-if
+        raw_key = str(self.remote.get("access_key") or self.remote.get("token") or "").strip()
+        key_md5 = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
         response = requests.post(
             url + "/sync",
             data=body,
-            headers={"Authorization": "Bearer " + self.remote["token"], "Content-Type": "application/json"},
+            headers={"Authorization": "Bearer " + key_md5, "Content-Type": "application/json"},
             timeout=(5, 30),
             allow_redirects=False,
         )

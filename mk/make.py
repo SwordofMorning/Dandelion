@@ -614,18 +614,21 @@ def _postprocess(cfg, name, version):
     # End-for
     print("  [+] Created directories: .env, llm, .log")
 
-    # Pre-fill .env/api.cfg from the example template if present.
+    # Pre-fill cli.cfg from the example template if present.
     env_dir = os.path.join(target_dir, ".env")
-    example_cfg = os.path.join(ROOT_DIR, ".env", "api.cfg.example")
+    example_cfg = os.path.join(ROOT_DIR, ".env", "cli.cfg.example")
+    if not os.path.exists(example_cfg):
+        example_cfg = os.path.join(ROOT_DIR, ".env", "api.cfg.example")
+    # End-if
     if os.path.exists(example_cfg):
-        shutil.copy2(example_cfg, os.path.join(env_dir, "api.cfg"))
+        shutil.copy2(example_cfg, os.path.join(env_dir, "cli.cfg"))
         keep = os.path.join(env_dir, ".keep")
         if os.path.exists(keep):
             os.remove(keep)
         # End-if
-        print("  [+] Pre-filled: .env/api.cfg (from api.cfg.example)")
+        print("  [+] Pre-filled: cli.cfg")
     else:
-        print("  [-] Note: .env/api.cfg.example not found; .env kept as .keep")
+        print("  [-] Note: example config not found; config dir kept as .keep")
     # End-if
 
     # ----- @par 3. Create fake entry (shell script / cmd wrapper) -----

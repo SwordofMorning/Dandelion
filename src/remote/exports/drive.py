@@ -27,16 +27,19 @@ UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files"
  #
 class _Google:
     ##
-     # @brief Read explicitly configured access or refresh credentials.
+     # @brief Read explicitly configured access or refresh credentials from [Drive] config.
+     #
+     # @param drive_cfg Optional [Drive] configuration dictionary from remote.cfg.
      #
      # @return None.
      #
-    def __init__(self):
-        self.token = os.environ.get("DANDELION_DRIVE_ACCESS_TOKEN", "")
+    def __init__(self, drive_cfg=None):
+        cfg = drive_cfg if isinstance(drive_cfg, dict) else {}
+        self.token = (cfg.get("access_token") or os.environ.get("DANDELION_DRIVE_ACCESS_TOKEN", "")).strip()
         self.refresh = {
-            "client_id": os.environ.get("DANDELION_DRIVE_CLIENT_ID", ""),
-            "client_secret": os.environ.get("DANDELION_DRIVE_CLIENT_SECRET", ""),
-            "refresh_token": os.environ.get("DANDELION_DRIVE_REFRESH_TOKEN", ""),
+            "client_id": (cfg.get("client_id") or os.environ.get("DANDELION_DRIVE_CLIENT_ID", "")).strip(),
+            "client_secret": (cfg.get("client_secret") or os.environ.get("DANDELION_DRIVE_CLIENT_SECRET", "")).strip(),
+            "refresh_token": (cfg.get("refresh_token") or os.environ.get("DANDELION_DRIVE_REFRESH_TOKEN", "")).strip(),
             "grant_type": "refresh_token",
         }
         if not self.token:
@@ -186,17 +189,19 @@ def _multipart(metadata, text):
  #
  # @param store Remote Store with persistent export mappings.
  # @param workspace_dir Optional workspace root containing assets/syncs/.
+ # @param drive_cfg Optional [Drive] configuration dictionary from remote.cfg.
  #
  # @return Mapping containing the number of changed documents exported.
  #
-def export_drive(store, workspace_dir=None):
+def export_drive(store, workspace_dir=None, drive_cfg=None):
     backups = BackupStore(store, workspace_dir=workspace_dir)
     reports = list(_reports(backups.list_sessions()))
     if not reports:
         return {"exported": 0}
     # End-if
-    google = _Google()
-    folder = os.environ.get("DANDELION_DRIVE_FOLDER_ID", "")
+    cfg = drive_cfg if isinstance(drive_cfg, dict) else {}
+    google = _Google(drive_cfg=cfg)
+    folder = (cfg.get("folder_id") or os.environ.get("DANDELION_DRIVE_FOLDER_ID", "")).strip()
     with store.lock, store.conn:
         store.conn.executescript("""
             CREATE TABLE IF NOT EXISTS drive_reports (

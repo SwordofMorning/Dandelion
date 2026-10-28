@@ -549,20 +549,101 @@ def _parse_remote_config(config):
         return {}
     # End-if
 
-    token = read("TOKEN")
-    placeholder = re.fullmatch(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", token)
+    access_key = read("ACCESS_KEY") or read("TOKEN")
+    placeholder = re.fullmatch(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", access_key)
     if placeholder:
-        token = os.environ.get(placeholder.group(1) or placeholder.group(2), "").strip()
-        if not token:
-            print("[!] [Remote] TOKEN environment placeholder is unset. Upload requires a token.")
+        access_key = os.environ.get(placeholder.group(1) or placeholder.group(2), "").strip()
+        if not access_key:
+            print("[!] [Remote] ACCESS_KEY environment placeholder is unset. Upload requires an access key.")
         # End-if
     # End-if
-    if any(character.isspace() or ord(character) <= 32 or ord(character) >= 127 for character in token):
-        print("[!] [Remote] TOKEN contains invalid or non-ASCII characters. Sync is disabled.")
+    if any(character.isspace() or ord(character) <= 32 or ord(character) >= 127 for character in access_key):
+        print("[!] [Remote] ACCESS_KEY contains invalid or non-ASCII characters. Sync is disabled.")
         return {}
     # End-if
 
-    return {"name": name, "url": url.rstrip("/"), "token": token, "device_id": device_id}
+    return {
+        "name": name,
+        "url": url.rstrip("/"),
+        "access_key": access_key,
+        "token": access_key,
+        "device_id": device_id,
+    }
+# End-def
+
+
+##
+ # @brief Parse [Server], [Telegram], and [Drive] sections from remote.cfg.
+ #
+ # @param config ConfigParser instance.
+ #
+ # @return Tuple of (server_dict, telegram_dict, drive_dict).
+ #
+def _parse_remote_server_sections(config):
+    ##
+     # @brief Read one raw option from a named section with stripping.
+     #
+     # @param section Section name.
+     # @param key Option key name.
+     # @param default Fallback value when absent.
+     #
+     # @return Stripped option string.
+     #
+    def read_opt(section, key, default=""):
+        if not config.has_section(section):
+            return default
+        # End-if
+        val = config.get(section, key, fallback=default, raw=True).strip()
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1].strip()
+        # End-if
+        return val
+    # End-def
+
+    host = read_opt("Server", "HOST", "0.0.0.0") or "0.0.0.0"
+    try:
+        port = int(read_opt("Server", "PORT", "8765") or "8765")
+    except ValueError:
+        port = 8765
+    # End-try
+    try:
+        workers = max(1, int(read_opt("Server", "WORKERS", "4") or "4"))
+    except ValueError:
+        workers = 4
+    # End-try
+    workspace = read_opt("Server", "WORKSPACE", "./workspace") or "./workspace"
+    data_dir = read_opt("Server", "DATA_DIR", "./.remote") or "./.remote"
+    access_key = (
+        read_opt("Server", "ACCESS_KEY")
+        or read_opt("Server", "TOKEN")
+        or read_opt("Server", "ADMIN_TOKEN")
+    )
+
+    server_cfg = {
+        "host": host,
+        "port": port,
+        "workers": workers,
+        "workspace": workspace,
+        "data_dir": data_dir,
+        "access_key": access_key,
+    }
+
+    bot_token = read_opt("Telegram", "BOT_TOKEN") or read_opt("Telegram", "TOKEN")
+    raw_chats = read_opt("Telegram", "ALLOWED_CHATS") or read_opt("Telegram", "CHATS")
+    allowed_chats = [c.strip() for c in raw_chats.split(",") if c.strip()]
+    telegram_cfg = {
+        "bot_token": bot_token,
+        "allowed_chats": allowed_chats,
+    }
+
+    drive_cfg = {
+        "access_token": read_opt("Drive", "ACCESS_TOKEN"),
+        "client_id": read_opt("Drive", "CLIENT_ID"),
+        "client_secret": read_opt("Drive", "CLIENT_SECRET"),
+        "refresh_token": read_opt("Drive", "REFRESH_TOKEN"),
+        "folder_id": read_opt("Drive", "FOLDER_ID"),
+    }
+    return server_cfg, telegram_cfg, drive_cfg
 # End-def
 
 ##
@@ -625,7 +706,7 @@ def load_api_config(file_path):
 
     # Iterate through all sections to parse providers and find the main agent.
     for section in config.sections():
-        if section in ("Main", "Remote"):
+        if section in ("Main", "Remote", "Server", "Telegram", "Drive"):
             continue
         # End-if
 
@@ -685,6 +766,8 @@ def load_api_config(file_path):
         return None
     # End-if
 
+    server_cfg, telegram_cfg, drive_cfg = _parse_remote_server_sections(config)
+
     # Return a flat dict compatible with existing agent.py expectations,
     # with the ALL_MODELS registry for future dynamic routing.
     return {
@@ -716,9 +799,24 @@ def load_api_config(file_path):
         "MEDIA_EXTS": active_profile["file"],
         "MEDIA_LIMITS": active_profile["media_limits"],
         "ACTIVE_MODEL_PROFILE": active_profile,
-        # Explicit CLI sync destination; the token is never printed.
+        # Explicit CLI sync destination; the access key is never printed.
         "REMOTE": _parse_remote_config(config),
+        "SERVER": server_cfg,
+        "TELEGRAM": telegram_cfg,
+        "DRIVE": drive_cfg,
     }
+# End-def
+
+
+##
+ # @brief Load remote.cfg containing LLM providers plus [Server], [Telegram], and [Drive].
+ #
+ # @param file_path Path to remote.cfg.
+ #
+ # @return Parsed configuration dictionary, or None on error.
+ #
+def load_remote_config(file_path):
+    return load_api_config(file_path)
 # End-def
 
 ##

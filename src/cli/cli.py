@@ -412,14 +412,15 @@ class InteractiveCLI:
         # End-if
         remote = self.agent.config.get("REMOTE") or {}
         if not remote.get("url"):
-            self.cli.info("Remote is not configured; add [Remote] to .env/api.cfg.")
+            self.cli.info("Remote is not configured; add [Remote] to cli.cfg.")
             return
         # End-if
         self.cli.info(f"Remote: {remote.get('name', 'origin')}")
         if args:
-            self.cli.info(f"URL   : {remote['url']}")
-            self.cli.info(f"Device: {remote.get('device_id') or '(unset)'}")
-            self.cli.info(f"Token : {'(configured)' if remote.get('token') else '(missing)'}")
+            has_key = bool(remote.get("access_key") or remote.get("token"))
+            self.cli.info(f"URL       : {remote['url']}")
+            self.cli.info(f"Device    : {remote.get('device_id') or '(unset)'}")
+            self.cli.info(f"Access Key: {'(configured)' if has_key else '(missing)'}")
         # End-if
     # End-def
 
