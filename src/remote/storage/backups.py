@@ -281,7 +281,14 @@ class BackupStore:
             if isinstance(prev_meta.get("files"), dict) else None
         )
         changed = (new_hist_sha != prev_hist_sha)
-        has_summary = (dest_dir / "summary.md").is_file()
+        prev_queued = prev_meta.get("queued_snapshot_id", "") if not changed else ""
+        summary_file = dest_dir / "summary.md"
+        hist_file = dest_dir / "history.log"
+        summary_fresh = (
+            summary_file.is_file()
+            and hist_file.is_file()
+            and summary_file.stat().st_mtime >= hist_file.stat().st_mtime
+        )
 
         sync_meta = dict(
             manifest,
@@ -290,6 +297,7 @@ class BackupStore:
             last_used_at=metadata.get("last_used_at", ""),
             turns=len(history),
             synced_at=time.time(),
+            queued_snapshot_id=prev_queued,
             path=str(dest_dir),
         )
         tmp_meta = prev_meta_file.with_suffix(".json.tmp")
@@ -300,9 +308,36 @@ class BackupStore:
             "accepted": snapshot_id,
             "session_id": session_id,
             "changed": changed,
-            "needs_digest": bool(changed or not has_summary),
+            "needs_digest": bool(changed or prev_queued != snapshot_id or not summary_fresh),
             "path": f"assets/syncs/{session_id}",
         }
+    # End-def
+
+    ##
+     # @brief Record that a sync_received interrupt event was durably queued for snapshot_id.
+     #
+     # @param session_id Synced session directory identifier.
+     # @param snapshot_id Snapshot digest whose digest event was queued.
+     #
+     # @return None.
+     #
+    def mark_digest_queued(self, session_id, snapshot_id):
+        with self.lock:
+            dest_dir = (self.syncs_dir / str(session_id)).resolve()
+            meta_file = dest_dir / "sync_meta.json"
+            if dest_dir.parent != self.syncs_dir or not meta_file.is_file():
+                return
+            # End-if
+            try:
+                sync_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                sync_meta["queued_snapshot_id"] = str(snapshot_id)
+                tmp_meta = meta_file.with_suffix(".json.tmp")
+                tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(tmp_meta, meta_file)
+            except (OSError, ValueError):
+                pass
+            # End-try
+        # End-with
     # End-def
 
     ##

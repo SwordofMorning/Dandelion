@@ -3,8 +3,8 @@
  # @date 2026/10/28
  #
  # @brief Outgoing message router and transport cursor store.
- # Routes SendMessageTool and reminder messages directly to Telegram when
- # configured, and records durable replies for HTTP clients.
+ # Enqueues outgoing messages with exclusive in-flight ownership (sent=-1)
+ # before releasing the database lock to perform Telegram network delivery.
  #
 
 import logging
@@ -15,7 +15,7 @@ import logging
  #
 class ChannelHub:
     ##
-     # @brief Create the reply and channel-state tables.
+     # @brief Create the reply and channel-state tables and recover in-flight rows.
      #
      # @param store Shared durable store with its connection lock.
      #
@@ -35,6 +35,7 @@ class ChannelHub:
                 CREATE TABLE IF NOT EXISTS channel_state (
                     name TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
+                UPDATE replies SET sent=0 WHERE sent=-1;
             """)
         # End-with
     # End-def
@@ -58,7 +59,60 @@ class ChannelHub:
     # End-def
 
     ##
-     # @brief Persist and deliver an outgoing message for one conversation.
+     # @brief Enqueue a reply row with in-flight status (sent=-1) inside a short DB lock.
+     #
+     # @param session_id Target conversation identifier (or "default").
+     # @param text Message text to persist.
+     #
+     # @return (resolved_session_id, reply_id, body_text) tuple.
+     #
+    def enqueue(self, session_id, text):
+        target = str(session_id or "").strip()
+        if (not target or target in ("default", "system", "sync")) and self.default_telegram_session:
+            target = self.default_telegram_session
+        # End-if
+        body = str(text or "")
+        with self.store.lock, self.store.conn:
+            cur = self.store.conn.execute(
+                "INSERT INTO replies(session_id,text,sent) VALUES (?,?,-1)",
+                (target, body),
+            )
+            reply_id = int(cur.lastrowid)
+        # End-with
+        return target, reply_id, body
+    # End-def
+
+    ##
+     # @brief Perform network delivery outside the DB lock and finalize row state.
+     #
+     # @param target Resolved conversation identifier.
+     # @param reply_id Primary key of the enqueued reply row.
+     # @param body Message text to send.
+     #
+     # @return Resolved session_id.
+     #
+    def deliver(self, target, reply_id, body):
+        if self.telegram is not None and target.startswith("telegram:"):
+            chat_id = target.split(":", 1)[1]
+            try:
+                self.telegram.send_text(chat_id, body)
+                self.mark_sent(reply_id)
+            except Exception:
+                logging.warning("Direct Telegram send failed; queued for retry")
+                with self.store.lock, self.store.conn:
+                    self.store.conn.execute("UPDATE replies SET sent=0 WHERE id=?", (int(reply_id),))
+                # End-with
+            # End-try
+        else:
+            with self.store.lock, self.store.conn:
+                self.store.conn.execute("UPDATE replies SET sent=0 WHERE id=?", (int(reply_id),))
+            # End-with
+        # End-if
+        return target
+    # End-def
+
+    ##
+     # @brief Persist and deliver an outgoing message without holding the DB lock across I/O.
      #
      # @param session_id Target conversation identifier (or "default").
      # @param text Message text to deliver.
@@ -66,33 +120,59 @@ class ChannelHub:
      # @return Resolved session_id to which the message was delivered.
      #
     def notify(self, session_id, text):
-        target = str(session_id or "").strip()
-        if (not target or target in ("default", "system", "sync")) and self.default_telegram_session:
-            target = self.default_telegram_session
-        # End-if
-        body = str(text or "")
-        # Persist the pending reply row first (sent=0) so an interrupted network
-        # call can be retried on restart without losing the message.
-        with self.store.lock, self.store.conn:
-            cur = self.store.conn.execute(
-                "INSERT INTO replies(session_id,text,sent) VALUES (?,?,0)",
-                (target, body),
-            )
-            reply_id = cur.lastrowid
-        # End-with
+        target, reply_id, body = self.enqueue(session_id, text)
+        return self.deliver(target, reply_id, body)
+    # End-def
 
-        if self.telegram is not None and target.startswith("telegram:"):
-            chat_id = target.split(":", 1)[1]
-            try:
-                self.telegram.send_text(chat_id, body)
-                with self.store.lock, self.store.conn:
-                    self.store.conn.execute("UPDATE replies SET sent=1 WHERE id=?", (reply_id,))
-                # End-with
-            except Exception:
-                logging.warning("Direct Telegram send failed; queued for retry")
-            # End-try
-        # End-if
-        return target
+    ##
+     # @brief Claim unsent retryable replies (sent=0) atomically as in-flight (sent=-1).
+     #
+     # @param allowed_chats Iterable of authorized Telegram chat IDs.
+     #
+     # @return Ordered list of claimed reply rows.
+     #
+    def unsent_replies(self, allowed_chats):
+        rows = []
+        with self.store.lock, self.store.conn:
+            for chat in allowed_chats:
+                rows.extend(self.store.conn.execute(
+                    "SELECT id,session_id,text FROM replies "
+                    "WHERE sent=0 AND session_id=? ORDER BY id LIMIT 20",
+                    ("telegram:" + str(chat),),
+                ).fetchall())
+            # End-for
+            claimed = [dict(r) for r in sorted(rows, key=lambda r: r["id"])]
+            for item in claimed:
+                self.store.conn.execute("UPDATE replies SET sent=-1 WHERE id=?", (item["id"],))
+            # End-for
+        # End-with
+        return claimed
+    # End-def
+
+    ##
+     # @brief Mark a queued reply row as sent (sent=1).
+     #
+     # @param reply_id Primary key of the delivered reply row.
+     #
+     # @return None.
+     #
+    def mark_sent(self, reply_id):
+        with self.store.lock, self.store.conn:
+            self.store.conn.execute("UPDATE replies SET sent=1 WHERE id=?", (int(reply_id),))
+        # End-with
+    # End-def
+
+    ##
+     # @brief Release an in-flight reply row back to retryable state (sent=0) on failure.
+     #
+     # @param reply_id Primary key of the failed reply row.
+     #
+     # @return None.
+     #
+    def mark_retry(self, reply_id):
+        with self.store.lock, self.store.conn:
+            self.store.conn.execute("UPDATE replies SET sent=0 WHERE id=?", (int(reply_id),))
+        # End-with
     # End-def
 
     ##
@@ -112,40 +192,6 @@ class ChannelHub:
             ).fetchall()
         # End-with
         return [dict(row) for row in rows]
-    # End-def
-
-    ##
-     # @brief Read unsent replies for the supplied Telegram chat identifiers.
-     #
-     # @param allowed_chats Iterable of authorized Telegram chat IDs.
-     #
-     # @return Ordered list of unsent reply rows (up to 20 per chat).
-     #
-    def unsent_replies(self, allowed_chats):
-        rows = []
-        with self.store.lock:
-            for chat in allowed_chats:
-                rows.extend(self.store.conn.execute(
-                    "SELECT id,session_id,text FROM replies "
-                    "WHERE sent=0 AND session_id=? ORDER BY id LIMIT 20",
-                    ("telegram:" + str(chat),),
-                ).fetchall())
-            # End-for
-        # End-with
-        return [dict(r) for r in sorted(rows, key=lambda r: r["id"])]
-    # End-def
-
-    ##
-     # @brief Mark a queued reply row as sent.
-     #
-     # @param reply_id Primary key of the delivered reply row.
-     #
-     # @return None.
-     #
-    def mark_sent(self, reply_id):
-        with self.store.lock, self.store.conn:
-            self.store.conn.execute("UPDATE replies SET sent=1 WHERE id=?", (int(reply_id),))
-        # End-with
     # End-def
 
     ##

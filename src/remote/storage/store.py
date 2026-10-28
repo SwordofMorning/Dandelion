@@ -214,6 +214,12 @@ class Store:
                     "error_message": "Server stopped during execution; resubmit explicitly.",
                 })
             # End-for
+            has_replies = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='replies'"
+            ).fetchone()
+            if has_replies:
+                self.conn.execute("UPDATE replies SET sent=0 WHERE sent=-1")
+            # End-if
             self.changed.notify_all()
         # End-with
         if notify is not None:
@@ -486,7 +492,10 @@ class Store:
      #
     def fire_due_schedules(self, now=None, notify=None):
         now = time.time() if now is None else now
-        with self.changed:
+        hub = getattr(notify, "__self__", None)
+        queued_deliveries = []
+        plain_callbacks = []
+        with self.changed, self.conn:
             rows = self.conn.execute("SELECT * FROM schedules WHERE active=1 AND due_at<=?", (now,)).fetchall()
             for row in rows:
                 payload = json.loads(row["payload"])
@@ -495,26 +504,42 @@ class Store:
                 # End-if
                 payload = dict(payload, schedule_id=row["id"], due_at=row["due_at"])
                 if row["kind"] == "reminder" and notify is not None:
-                    # Persist the outgoing reply record before advancing the schedule.
-                    notify(row["session_id"], str(payload.get("text", "")))
-                else:
-                    with self.conn:
-                        self._event("analysis", row["session_id"], payload)
-                    # End-with
-                # End-if
-                with self.conn:
-                    if row["interval"]:
-                        next_due = row["due_at"] + (int((now - row["due_at"]) // row["interval"]) + 1) * row["interval"]
-                        self.conn.execute("UPDATE schedules SET due_at=? WHERE id=?", (next_due, row["id"]))
+                    text = str(payload.get("text", ""))
+                    if hub is not None and hasattr(hub, "enqueue") and hasattr(hub, "deliver"):
+                        queued_deliveries.append(hub.enqueue(row["session_id"], text))
                     else:
-                        self.conn.execute("UPDATE schedules SET active=0 WHERE id=?", (row["id"],))
+                        plain_callbacks.append((row["session_id"], text))
                     # End-if
-                # End-with
+                else:
+                    self._event("analysis", row["session_id"], payload)
+                # End-if
+                if row["interval"]:
+                    next_due = row["due_at"] + (int((now - row["due_at"]) // row["interval"]) + 1) * row["interval"]
+                    self.conn.execute("UPDATE schedules SET due_at=? WHERE id=?", (next_due, row["id"]))
+                else:
+                    self.conn.execute("UPDATE schedules SET active=0 WHERE id=?", (row["id"],))
+                # End-if
             # End-for
             if rows:
                 self.changed.notify_all()
             # End-if
         # End-with
+
+        # Perform network delivery AFTER releasing self.changed lock.
+        for target, reply_id, body in queued_deliveries:
+            try:
+                hub.deliver(target, reply_id, body)
+            except Exception:
+                pass
+            # End-try
+        # End-for
+        for session_id, text in plain_callbacks:
+            try:
+                notify(session_id, text)
+            except Exception:
+                pass
+            # End-try
+        # End-for
     # End-def
 
     ##

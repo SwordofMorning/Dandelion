@@ -114,6 +114,7 @@ class Telegram:
                 self.send_text(chat, row["text"])
                 self.hub.mark_sent(row["id"])
             except Exception:
+                self.hub.mark_retry(row["id"])
                 break
             # End-try
         # End-for

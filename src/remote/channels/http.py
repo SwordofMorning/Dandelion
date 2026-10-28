@@ -168,6 +168,12 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None, b
                         "path": result.get("path", ""),
                         "snapshot_id": result.get("accepted", ""),
                     })
+                    if hasattr(backups, "mark_digest_queued"):
+                        backups.mark_digest_queued(
+                            result.get("session_id", data.get("session_id", "")),
+                            result.get("accepted", ""),
+                        )
+                    # End-if
                 # End-if
                 self._reply(200, result)
             elif self.command == "GET" and path == "/sessions":

@@ -238,12 +238,16 @@ class RemoteLoop:
 
         session_id = event["session_id"]
         agent = self._agent(session_id)
-        self._check_daily_rollover(agent, session_id)
-        repair_interrupted_tools(agent)
-
         cancel = getattr(agent, "_remote_cancel_event", None)
         if cancel is not None:
             cancel.clear()
+        # End-if
+
+        self._check_daily_rollover(agent, session_id)
+        repair_interrupted_tools(agent)
+
+        if agent.runtime.cancelled() and not self._stop.is_set():
+            return True, "Turn cancelled before execution."
         # End-if
 
         send_tool = agent.tools.get("send_message")
