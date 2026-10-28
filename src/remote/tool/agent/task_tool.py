@@ -1,16 +1,15 @@
 ##
- # @file src/remote/execution/tools.py
+ # @file src/remote/tool/agent/task_tool.py
  # @date 2026/10/27
  #
- # @brief Remote main-agent delegation and schedule/sync inspection tools.
- # Exposes non-blocking background job submission, job and schedule control,
- # and bounded reads of synced sessions in assets/syncs/.
+ # @brief Remote main-agent delegation and schedule control tools.
+ # Exposes non-blocking background job submission and job/schedule management
+ # to the Dandelion Remote main agent.
  #
 
 import json
 from src.core.tool.base_tool import BaseTool
 from src.core.subagent.registry import TOOLSET_REGISTRY
-from ..storage.backups import BackupStore
 
 
 ##
@@ -98,23 +97,21 @@ class SubmitTaskTool(BaseTool):
 
 
 ##
- # @brief Expose conversation jobs, schedules and synced sessions in assets/syncs/.
+ # @brief Expose conversation background jobs and persistent schedules.
  #
 class TaskControlTool(BaseTool):
     ##
-     # @brief Bind the tool to its remote conversation, job manager and shared BackupStore.
+     # @brief Bind the tool to its remote conversation and job manager.
      #
      # @param jobs Background job manager owning the shared durable store.
      # @param session_id Conversation identifier used to scope persisted records.
-     # @param backups Optional shared BackupStore instance.
      #
      # @return None.
      #
-    def __init__(self, jobs, session_id, backups=None):
+    def __init__(self, jobs, session_id):
         super().__init__()
         self.jobs = jobs
         self.session_id = session_id
-        self.backups = backups if backups is not None else BackupStore(jobs.store)
     # End-def
 
     ##

@@ -3,8 +3,9 @@
  # @date 2026/10/27
  #
  # @brief Remote conversation agent assembly.
- # Builds an unrestricted Core agent with RemotePromptBuilder, inspection/file/
- # memory/pruning tools, SendMessageTool, and background delegation tools.
+ # Builds an unrestricted Core agent with RemotePromptBuilder, full direct
+ # shell/SSH/search/file/memory/pruning tools, SendMessageTool, and background
+ # delegation tools.
  #
 
 import hashlib
@@ -12,12 +13,13 @@ import json
 import threading
 from pathlib import Path
 
-from .tools import SubmitTaskTool, TaskControlTool
-from .jobs import JobExecutor
 from ..sysprompt import RemotePromptBuilder
-from ..tool.communication import SendMessageTool
+from ..tool import SubmitTaskTool, TaskControlTool, SendMessageTool
 
 MAIN_DIRECT_TOOLS = (
+    "bash",
+    "ssh",
+    "web_search",
     "read_file",
     "write_file",
     "edit_file",
@@ -122,7 +124,7 @@ def repair_interrupted_tools(agent):
  # @param workspace Workspace assigned to the task or remote session.
  # @param jobs Background job manager used by remote delegation tools.
  # @param hub Optional ChannelHub for SendMessageTool.
- # @param backups Optional shared BackupStore for synced session access.
+ # @param backups Optional shared BackupStore for synced session overview.
  #
  # @return Callable creating a core agent for one conversation.
  #
@@ -175,7 +177,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
         # End-def
 
         ##
-         # @brief Mount fast inspection/memory/pruning tools plus Remote delegation and communication tools.
+         # @brief Mount direct shell/SSH/search/file/memory/pruning tools plus Remote delegation and communication tools.
          #
          # @param agent Agent whose runtime, session and history are used.
          #
@@ -199,7 +201,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
                 if name in shared
             }
             result["submit_task"] = SubmitTaskTool(jobs, str(session_id), workspace, context)
-            result["task_control"] = TaskControlTool(jobs, str(session_id), backups=backups)
+            result["task_control"] = TaskControlTool(jobs, str(session_id))
             if hub is not None:
                 result["send_message"] = SendMessageTool(hub, str(session_id))
             # End-if

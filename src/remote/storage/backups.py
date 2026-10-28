@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import threading
 import time
 
 REQUIRED_FILES = ("history.log", "meta.log")
@@ -31,16 +32,18 @@ class BackupStore:
     ##
      # @brief Initialize staging and assets/syncs directories.
      #
-     # @param store Shared Remote Store owning data_dir and backup_lock.
+     # @param data_dir Private remote-service data directory (or Store owning data_dir).
      # @param workspace_dir Optional workspace root where assets/syncs/ is placed.
      #
      # @return None.
      #
-    def __init__(self, store, workspace_dir=None):
-        self.store = store
-        base = Path(workspace_dir).resolve() if workspace_dir else Path(store.data_dir).resolve()
+    def __init__(self, data_dir, workspace_dir=None):
+        raw_data_dir = getattr(data_dir, "data_dir", data_dir)
+        resolved_data = Path(raw_data_dir).resolve()
+        base = Path(workspace_dir).resolve() if workspace_dir else resolved_data
+        self.lock = threading.RLock()
         self.syncs_dir = base / "assets" / "syncs"
-        self.staging_dir = Path(store.data_dir).resolve() / "staging_syncs"
+        self.staging_dir = resolved_data / "staging_syncs"
         self.syncs_dir.mkdir(parents=True, exist_ok=True)
         self.staging_dir.mkdir(parents=True, exist_ok=True)
     # End-def
@@ -143,7 +146,7 @@ class BackupStore:
         manifest = self._manifest(payload)
         snapshot_id = manifest["snapshot_id"]
         session_id = manifest["session_id"]
-        with self.store.backup_lock:
+        with self.lock:
             if payload.get("commit") is True:
                 return self._commit(manifest)
             # End-if
@@ -357,7 +360,7 @@ class BackupStore:
      # @return List of synced session metadata dictionaries.
      #
     def list_sessions(self, device=None, project=None):
-        with self.store.backup_lock:
+        with self.lock:
             items = []
             for entry in self.syncs_dir.iterdir():
                 if not entry.is_dir():

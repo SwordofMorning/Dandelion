@@ -8,11 +8,6 @@
  #
 
 import os
-import threading
-
-# Only one approval prompt may own the terminal at a time: parallel SubAgents
-# would otherwise read each other's answers from stdin.
-_APPROVAL_LOCK = threading.Lock()
 
 ##
  # @brief Virtual Base Tool Class.

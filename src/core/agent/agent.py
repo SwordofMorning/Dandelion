@@ -40,6 +40,7 @@ from .compress import (
     ContextCompressor,
     extract_usage_tokens,
 )
+from .prune import ContextPruner
 
 # Dynamic Context injection markers: the [Dandelion Context] block is
 # appended to the newest plain-text user message (fresh region) instead of the
@@ -177,8 +178,9 @@ class MyAgent:
         self._memories_key = None
         self._memories_cache = ""
 
-        # ----- Context compressor & usage metrics -----
+        # ----- Context compressor, pruner & usage metrics -----
         self.compressor = ContextCompressor(self.client, self.session, self.config, runtime=self.runtime)
+        self.pruner = ContextPruner(self.client, self.session, runtime=self.runtime, config=self.config)
         self._if_compress = self.compressor.condition
         self.last_usage = {"total": 0, "input": 0, "output": 0, "cached": 0}
 

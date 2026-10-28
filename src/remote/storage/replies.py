@@ -115,6 +115,40 @@ class ChannelHub:
     # End-def
 
     ##
+     # @brief Read unsent replies for the supplied Telegram chat identifiers.
+     #
+     # @param allowed_chats Iterable of authorized Telegram chat IDs.
+     #
+     # @return Ordered list of unsent reply rows (up to 20 per chat).
+     #
+    def unsent_replies(self, allowed_chats):
+        rows = []
+        with self.store.lock:
+            for chat in allowed_chats:
+                rows.extend(self.store.conn.execute(
+                    "SELECT id,session_id,text FROM replies "
+                    "WHERE sent=0 AND session_id=? ORDER BY id LIMIT 20",
+                    ("telegram:" + str(chat),),
+                ).fetchall())
+            # End-for
+        # End-with
+        return [dict(r) for r in sorted(rows, key=lambda r: r["id"])]
+    # End-def
+
+    ##
+     # @brief Mark a queued reply row as sent.
+     #
+     # @param reply_id Primary key of the delivered reply row.
+     #
+     # @return None.
+     #
+    def mark_sent(self, reply_id):
+        with self.store.lock, self.store.conn:
+            self.store.conn.execute("UPDATE replies SET sent=1 WHERE id=?", (int(reply_id),))
+        # End-with
+    # End-def
+
+    ##
      # @brief Read one persistent transport cursor.
      #
      # @param name Persistent channel-state key.

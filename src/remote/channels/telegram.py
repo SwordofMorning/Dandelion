@@ -108,23 +108,11 @@ class Telegram:
      # @return None.
      #
     def _flush_unsent(self):
-        rows = []
-        with self.hub.store.lock:
-            for chat in self.allowed:
-                rows.extend(self.hub.store.conn.execute(
-                    "SELECT id,session_id,text FROM replies "
-                    "WHERE sent=0 AND session_id=? ORDER BY id LIMIT 20",
-                    ("telegram:" + chat,),
-                ).fetchall())
-            # End-for
-        # End-with
-        for row in sorted(rows, key=lambda r: r["id"]):
+        for row in self.hub.unsent_replies(self.allowed):
             chat = row["session_id"].split(":", 1)[1]
             try:
                 self.send_text(chat, row["text"])
-                with self.hub.store.lock, self.hub.store.conn:
-                    self.hub.store.conn.execute("UPDATE replies SET sent=1 WHERE id=?", (row["id"],))
-                # End-with
+                self.hub.mark_sent(row["id"])
             except Exception:
                 break
             # End-try

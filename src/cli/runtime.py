@@ -7,12 +7,13 @@
  # approvals to the terminal with colored status prefixes.
  #
 
+import threading
 from src.core.runtime import Runtime
-from src.core.tool.base_tool import _APPROVAL_LOCK
 from .interrupt import is_requested, request
 from .printer import CLIPrinter
 
 _PRINTER = CLIPrinter()
+_APPROVAL_LOCK = threading.Lock()
 
 
 ##

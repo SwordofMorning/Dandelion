@@ -55,7 +55,6 @@ class Store:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.data_dir = path.resolve().parent
-        self.backup_lock = threading.RLock()
         self.lock = threading.RLock()
         self.changed = threading.Condition(self.lock)
         self.conn = sqlite3.connect(path, check_same_thread=False)

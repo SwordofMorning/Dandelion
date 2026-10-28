@@ -3,13 +3,12 @@
  # @date 2026/10/28
  #
  # @brief Agent-initiated context pruning tool.
- # Allows the Main Agent to invoke the ContextPruner SubAgent to fold or drop
+ # Allows the Main Agent to invoke its ContextPruner SubAgent to fold or drop
  # obsolete tool outputs and completed turns from history.log safely.
  #
 
 import json
 from ..base_tool import BaseTool
-from src.core.agent.prune import ContextPruner
 
 
 ##
@@ -19,7 +18,7 @@ class PruneContextTool(BaseTool):
     ##
      # @brief Constructor.
      #
-     # @param agent Host MyAgent instance owning history, client and session.
+     # @param agent Host MyAgent instance owning history, pruner and session.
      #
      # @return None.
      #
@@ -86,13 +85,7 @@ class PruneContextTool(BaseTool):
     def execute(self, **kwargs):
         focus_hint = str(kwargs.get("focus_hint") or "").strip()
         keep_recent = int(kwargs.get("keep_recent_units") or 4)
-        pruner = ContextPruner(
-            safe_client=self.agent.client,
-            session_manager=self.agent.session,
-            runtime=self.agent.runtime,
-            config=self.agent.config,
-        )
-        new_history, stats = pruner.prune(
+        new_history, stats = self.agent.pruner.prune(
             self.agent.history,
             focus_hint=focus_hint,
             keep_recent_units=keep_recent,
@@ -102,7 +95,6 @@ class PruneContextTool(BaseTool):
         if stats.get("status") == "ok":
             self.agent.history[:] = new_history
             self.agent.session.save_history(self.agent.history)
-            return True, json.dumps(stats, ensure_ascii=False)
         # End-if
         return True, json.dumps(stats, ensure_ascii=False)
     # End-def

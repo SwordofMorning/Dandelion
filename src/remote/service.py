@@ -77,9 +77,9 @@ def main(argv=None):
  #
 def _serve(args, parser, store, data_dir):
     from src.core.utils.config import load_api_config
-    from .execution.jobs import JobManager
+    from .execution.jobs import JobExecutor, JobManager
     from .execution.loop import RemoteLoop
-    from .execution.agent import JobExecutor, make_agent_factory
+    from .execution.agent import make_agent_factory
 
     token = os.environ.get("DANDELION_DR_TOKEN", "")
     if not token:
@@ -102,7 +102,7 @@ def _serve(args, parser, store, data_dir):
     # End-if
     workspace = str(Path(args.workspace).resolve())
     Path(workspace).mkdir(parents=True, exist_ok=True)
-    backups = BackupStore(store, workspace_dir=workspace)
+    backups = BackupStore(str(data_dir), workspace_dir=workspace)
     jobs = JobManager(store, JobExecutor(config, str(data_dir)), max_workers=args.workers)
     hub = ChannelHub(store)
     factory = make_agent_factory(config, str(data_dir), workspace, jobs, hub=hub, backups=backups)
