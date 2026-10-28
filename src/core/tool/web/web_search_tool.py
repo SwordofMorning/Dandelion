@@ -45,7 +45,7 @@ class WebSearchTool(BaseTool):
      # @brief Return tool's name.
      #
     def get_name(self):
-        return "web_search"
+        return "tavily_search"
     # End-def
 
     ##
@@ -100,7 +100,7 @@ class WebSearchTool(BaseTool):
         if not self.api_key:
             return False, (
                 "Error: TAVILY_API_KEY is missing. "
-                "Please add TAVILY_API_KEY=tvly-... to the [Main] section of .env/api.cfg."
+                "Please add TAVILY_API_KEY=tvly-... to the [Main] section of cli.cfg or remote.cfg."
             )
         # End-if
 

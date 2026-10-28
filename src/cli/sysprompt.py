@@ -50,9 +50,9 @@ class CLIPromptBuilder(BasePromptBuilder):
                 "### Available Toolsets:\n"
                 "- 'minimal': read_file, write_file, list_directory, get_time\n"
                 "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, load_skill, read_pdf, read_image\n"
-                "- 'code_analysis': read_file, grep_search, list_directory, bash, ssh, web_search\n"
+                "- 'code_analysis': read_file, grep_search, list_directory, bash, ssh, tavily_search\n"
                 "- 'data_processing': read_excel, write_excel, write_file, markdown_editor, load_skill\n"
-                "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel, get_time, load_skill, web_search, read_pdf, read_image"
+                "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel, get_time, load_skill, tavily_search, read_pdf, read_image"
             )
         # End-if
 

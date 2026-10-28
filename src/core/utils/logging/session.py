@@ -552,8 +552,17 @@ class SessionManager:
 
         # One record per lock hold; serialization happens before, outside the lock.
         with self._log_lock:
+            try:
+                if os.path.exists(log_file) and os.path.getsize(log_file) >= 20 * 1024 * 1024:
+                    os.replace(log_file, log_file + ".old")
+                # End-if
+            except OSError:
+                pass
+            # End-try
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(f"{header}\n{json_str}\n\n")
+            # End-with
+        # End-with
     # End-def
 
     ##

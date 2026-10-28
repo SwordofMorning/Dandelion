@@ -19,7 +19,7 @@ from ..tool import SubmitTaskTool, TaskControlTool, SendMessageTool, GoogleDrive
 MAIN_DIRECT_TOOLS = (
     "bash",
     "ssh",
-    "web_search",
+    "tavily_search",
     "read_file",
     "write_file",
     "edit_file",

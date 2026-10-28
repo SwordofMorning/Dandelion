@@ -63,7 +63,15 @@ class AgentLogger:
         json_str = json.dumps(payload, ensure_ascii=False, indent=2, default=self._default_serializer)
         
         # C-style direct write, check path beforehand
+        try:
+            if os.path.exists(log_file) and os.path.getsize(log_file) >= 20 * 1024 * 1024:
+                os.replace(log_file, log_file + ".old")
+            # End-if
+        except OSError:
+            pass
+        # End-try
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"{header}\n{json_str}\n\n")
+        # End-with
     # End-def
 # End-class

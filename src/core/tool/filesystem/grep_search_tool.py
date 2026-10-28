@@ -199,9 +199,8 @@ class GrepSearchTool(BaseTool):
         # End-if
 
         if not os.path.exists(resolved):
-            return False, f"Error: Directory not found at '{path}'"
-        if not os.path.isdir(resolved):
-            return False, f"Error: Path is not a directory: '{path}'"
+            return False, f"Error: Path not found at '{path}'"
+        # End-if
 
         # Compile regex
         try:
@@ -209,14 +208,22 @@ class GrepSearchTool(BaseTool):
             regex = re.compile(pattern, flags)
         except re.error as e:
             return False, f"Error: Invalid regular expression pattern: {e}"
+        # End-try
 
-        # Collect files
+        # Collect files (supports both a directory and a single file path)
         try:
-            target_files = self._collect_files(resolved, file_pattern)
+            if os.path.isfile(resolved):
+                target_files = [resolved]
+            elif os.path.isdir(resolved):
+                target_files = self._collect_files(resolved, file_pattern)
+            else:
+                return False, f"Error: Path is not a searchable file or directory: '{path}'"
+            # End-if
         except PermissionError:
-            return False, f"Error: Permission denied while scanning directories in '{path}'."
+            return False, f"Error: Permission denied while scanning '{path}'."
         except Exception as e:
-            return False, f"Error scanning directories: {e}"
+            return False, f"Error scanning '{path}': {e}"
+        # End-try
 
         if not target_files:
             return False, (

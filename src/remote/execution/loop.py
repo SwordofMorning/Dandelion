@@ -177,7 +177,9 @@ class RemoteLoop:
      #
     @staticmethod
     def _message(event):
-        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        utc_now = dt.datetime.now(dt.timezone.utc)
+        cn_tz = dt.timezone(dt.timedelta(hours=8))
+        now = f"{utc_now.astimezone(cn_tz).strftime('%Y-%m-%d %H:%M:%S+08:00')} ({utc_now.isoformat()})"
         kind = event["kind"]
         payload = event["payload"]
 

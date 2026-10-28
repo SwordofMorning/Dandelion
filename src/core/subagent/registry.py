@@ -10,9 +10,9 @@
 TOOLSET_REGISTRY = {
     "minimal": ["read_file", "write_file", "list_directory", "get_time"],
     "filesystem": ["read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file", "load_skill", "read_pdf", "read_image"],
-    "code_analysis": ["read_file", "grep_search", "list_directory", "bash", "ssh", "web_search"],
+    "code_analysis": ["read_file", "grep_search", "list_directory", "bash", "ssh", "tavily_search"],
     "data_processing": ["read_excel", "write_excel", "write_file", "markdown_editor", "load_skill"],
-    "full": ["bash", "ssh", "read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file", "read_excel", "write_excel", "get_time", "load_skill", "web_search", "read_pdf", "read_image"]
+    "full": ["bash", "ssh", "read_file", "write_file", "list_directory", "grep_search", "markdown_editor", "edit_file", "read_excel", "write_excel", "get_time", "load_skill", "tavily_search", "read_pdf", "read_image"]
 }
 
 ##
