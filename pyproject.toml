@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dandelion"
 version = "0.1.0"
-description = "A CLI-style Agent tool."
+description = "A shared agent core with CLI and remote assistant interfaces."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -33,3 +33,11 @@ dev = [
     "pytest",
     "tzdata",
 ]
+
+# Keep the src.* and mk.* namespaces in wheels.
+# Explicit discovery avoids setuptools treating src/ as an implicit src layout.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src", "src.*", "mk", "mk.*"]
+exclude = ["*.egg-info", "*.__pycache__"]
+namespaces = true

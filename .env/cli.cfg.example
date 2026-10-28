@@ -1,0 +1,149 @@
+; ============================================================
+; Part 1: Main Agent Configuration (Dandelion CLI)
+; ============================================================
+[Main]
+; Specify the model alias (from MODEL_LIST below) used by the main agent
+MAIN_AGENT=opus
+SUB_LIST=[
+    "opus",
+    "gemini"
+    ]
+SUB_DEPTH=1
+SUB_CONCURRENCY=4
+; Search Tool
+TAVILY_API_KEY=tvly-
+
+; ============================================================
+; Part 2: Provider Profiles & Model Registries
+;
+; @ SDK_TYPE:
+;   "Message" (Anthropic) or "Chat Completions" (OpenAI).
+;   do not support "Responses" (OpenAI New), "Interactions" (Gemini New) or "Generate Content"(Gemini)
+; @ BASE_URL:
+;   URL to LLM provider.
+; ============================================================
+
+[Sub2API_Antigravity]
+SDK_TYPE="Message"
+BASE_URL=
+API_KEY=sk-
+MODEL_LIST = [
+    {
+        "provider": {
+            "model_id": "gemini-3.8-flash-tiered",
+            "compat": "gemini"
+        },
+        "basic": {
+            "name": "gemini",
+            "conditions": ["media", "simple"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "high"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    },
+    {
+        "provider": {
+            "model_id": "claude-opus-5-5-high",
+            "compat": "anthropic"
+        },
+        "basic": {
+            "name": "opus",
+            "conditions": ["complex", "review"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "max"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    }
+    ]
+
+[Sub2API_OpenAI]
+SDK_TYPE="Message"
+BASE_URL=
+API_KEY=sk-
+MODEL_LIST = [
+    {
+        "provider": {
+            "model_id": "gpt-6.1-sol",
+            "compat": "openai"
+        },
+        "basic": {
+            "name": "gpt",
+            "conditions": ["complex", "review"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "max"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    }
+    ]
+
+[DeepSeek]
+SDK_TYPE="Message"
+BASE_URL=
+API_KEY=sk-
+MODEL_LIST = [
+    {
+        "provider": {
+            "model_id": "deepseek-v4-flash",
+            "compat": "deepseek"
+        },
+        "basic": {
+            "name": "deepseek-v4",
+            "conditions": ["media", "simple"],
+            "max_token": 160000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "max"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    }
+    ]
+
+; ============================================================
+; Part 3: Optional Dandelion Remote Sync
+; ============================================================
+; Configure this section to enable manual 'sync' and 'remote -v' in CLI.
+; ACCESS_KEY must match [Server] ACCESS_KEY on your Dandelion Remote server
+; (the client hashes ACCESS_KEY with MD5 before sending over HTTP/HTTPS).
+; [Remote]
+; NAME=origin
+; URL=https://sub2api.swordofmorning.com/dandelion-sync
+; ACCESS_KEY=dr-your-shared-secret-key
+; DEVICE_ID=work-laptop

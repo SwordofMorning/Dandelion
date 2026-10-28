@@ -44,9 +44,12 @@
 ```sh
 main.py
   -> InteractiveCLI.run()       # CLI Loop（交互层）
-    -> _run_agent_loop()        # Agent Loop（多轮 tool 迭代）
-      -> MyAgent.step()         # 单轮 Round-Trip（Tools Loop 的迭代）
+    -> _run_agent_loop()        # CLI 的停止/回滚适配
+      -> core.run_agent_loop() # 共用 Agent Loop（多轮 tool 迭代）
+        -> MyAgent.step()      # 单轮 Round-Trip（Tools Loop 的迭代）
 ```
+
+Remote 以 `python -m src.remote` 启动，用阻塞 Event Loop 调用同一个 Core Agent Loop；不经过 CLI，也不自动加载终端模块。两种入口通过 `src/core/runtime.py` 注入输出、审批和取消接口。
 
 ## 二、构建脚本
 
@@ -137,7 +140,7 @@ windows_jobs = 2
 3. 通过 `nofollow_imports` 明确 Nuitka 不应该追踪哪些大文件（`--nofollow-import-to`）；
 4. 通过 `include_std_modules` 引入哪些标准库必须包含，避免后期 C 编译时的错误；
 5. Windows 下追加 PE 版本资源（`--product-name/--product-version/--file-version`，版本号必须为纯数字，故使用 pyproject 静态版本而非 CI tag）与图标参数；
-6. 最后通过 `subprocess.run` 调用 Nuitka（`--mode=standalone`、`--include-package=src`、`--include-module=mk.lib.*`），生成构建产物。
+6. 最后通过 `subprocess.run` 调用 Nuitka（`--mode=standalone`、`--include-package=src.cli`、`--include-package=src.core`、`--nofollow-import-to=src.remote`、`--include-module=mk.lib.*`），生成构建产物。
 
 #### 2.3.3 后处理
 
@@ -148,7 +151,7 @@ windows_jobs = 2
     > ```sh
     > build/Dandelion/
     > ├── bin/                  # 实际二进制 + 拷贝的依赖
-    > ├── .env/                 # api.cfg（由 api.cfg.example 预填）
+    > ├── .env/                 # cli.cfg（由 cli.cfg.example 预填）
     > ├── llm/                  # memory/、skill/（空目录以 .keep 占位）
     > ├── .log/
     > ├── dandelion.sh/.cmd     # 启动脚本
@@ -176,22 +179,22 @@ windows_jobs = 2
 
 ## 三、src 概览
 
-`src/` 下的源码按照功能分为了四个模块：
+`src/` 下仅有三个主包：
 
-1. `core`，Agent 的核心逻辑，涉及上下文压缩、记忆管理等；
-2. `subagent`，涉及 SubAgent 的"Agent 池"、消息传递结构等；
-3. `tool`，Agent 调用的各类工具；
-4. `utils`，包含配置调用、CLI、日志管理等多种通用的接口。
+1. `core`，公共支柱：`core/agent` 收纳 Main Agent、同步 Agent Loop、工具装配、上下文压缩、记忆与提示词；`core/runtime.py` 定义两种宿主共用的回调接口，`core/subagent` 管理子代理，`core/tool` 实现工具，`core/utils` 提供配置、日志、模型路由与 API 请求；
+2. `cli`，终端交互、命令处理、Ctrl+C 回滚，以及 `cli/sync.py` 中的手动会话备份客户端；
+3. `remote`，服务器事件循环、后台任务、会话备份接收、Telegram 和调度。
+
+CLI 和 Remote 分别依赖 Core，Core 不导入它们。Nuitka 仅显式包含 `src.cli` 和 `src.core`（连同其子包），并排除 `src.remote`。Remote 的用法见[部署说明](03_remote.zh.md)。
 
 ## 四、通用类
 
-`src/utils` 下提供了一些通用的方法，比如读取配置；但也有一些复杂的、涉及 Agent 的交互逻辑，比如 CLI。为此，这里将和 Agent 按照相关性，按照从低到高的顺序来讲述工程的核心逻辑。
+`src/core/utils` 提供配置读取、日志和 API 请求等通用方法；终端交互单独放在 `src/cli`。这里先介绍通用接口，再介绍 CLI 对共享 Agent Loop 的调用。
 
 在本章节中的[CLI 小节](#46-cli)中了解 Agent Loop 是如何实现之后，我们进入[下一章](#五agent核心设计)，查看 Agent 类的具体实现。
 
 ```sh
 .
-├── cli                 # CLI 终端
 ├── config              # 配置加载
 ├── __init__.py
 ├── llm_provider        # API SDK 动态配置
@@ -202,20 +205,20 @@ windows_jobs = 2
 
 ### 4.1 配置加载 config
 
-`src/utils/config/config.py` 提供了读取 `.env/` 下各项配置的函数。其中：
+`src/core/utils/config/config.py` 提供了读取 `.env/` 下各项配置的函数。其中：
 
 1. `load_api_config()` 读取 `api.cfg`：
-2. `load_devices_config()` 读取 `devices.yaml`，包含 SSH 设备的别名、地址、认证方式等，在 `src/tool/shell/ssh_tool.py` 中的执行阶段被调用（LLM 只可见别名，不可见凭据）。
+2. `load_devices_config()` 读取 `devices.yaml`，包含 SSH 设备的别名、地址、认证方式等，在 `src/core/tool/shell/ssh_tool.py` 中的执行阶段被调用（LLM 只可见别名，不可见凭据）。
 
 ### 4.2 日志与会话 logging
 
-`src/utils/logging/logger.py`（`AgentLogger`）主要职责是将程序运行中的数据写入日志文件（按天 `YYYY_MM_DD.log`），供上层 `SessionManager` 复用同一套序列化逻辑：
+`src/core/utils/logging/logger.py`（`AgentLogger`）主要职责是将程序运行中的数据写入日志文件（按天 `YYYY_MM_DD.log`），供上层 `SessionManager` 复用同一套序列化逻辑：
 
 ```sh
 Agent/SubAgent -> log_api_call() -> `.log/`
 ```
 
-`src/utils/logging/session.py`（`SessionManager`）则为 CLI 实现了会话管理功能，每一个会话都以 `sess_yyyymmdd_hhmmss_ms` 的格式存放在 `.log/` 下。每一个会话文件夹下的内容有如下内容：
+`src/core/utils/logging/session.py`（`SessionManager`）则为 CLI 实现了会话管理功能，每一个会话都以 `sess_yyyymmdd_hhmmss_ms` 的格式存放在 `.log/` 下。每一个会话文件夹下的内容有如下内容：
 
 ```log
 .
@@ -249,7 +252,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ### 4.3 各 API 请求 llm_provider
 
-`src/utils/llm_provider` 下针对 OpenAI 和 Anthropic 的不同 SDK/API 请求格式进行了派生。其中 `base.py` 提供了通用的基类方法，剩下的几个类由它派生而来，`SafeLLMClient._create_provider()` 按 `SDK_TYPE` 选择。
+`src/core/utils/llm_provider` 下针对 OpenAI 和 Anthropic 的不同 SDK/API 请求格式进行了派生。其中 `base.py` 提供了通用的基类方法，剩下的几个类由它派生而来，`SafeLLMClient._create_provider()` 按 `SDK_TYPE` 选择。
 
 对于 Anthropic API 来说，其中 DeepSeek 使用的 Reasoning Effort (Think Level) 采用 OpenAI 风格的 `low`、`med`、`high` 等字符，而不是像 Anthropic 一样使用 Think Budget（`thinking/effort` 注入逻辑在 Provider 内完成）。
 
@@ -257,7 +260,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ### 4.4 模型路由 routing
 
-`src/utils/routing` 旨在解决两个问题：
+`src/core/utils/routing` 旨在解决两个问题：
 
 1. SubAgent 的模型自动选择：高推理能力的模型执行复杂任务、低推理能力的模型执行简单的工具调用任务。
 2. 部分 LLM 服务商存在 TPM、RPM 等访问限制，需要实现一个本地的速率控制，避免 429 too many requests。
@@ -266,7 +269,7 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ### 4.5 LLM 请求 llm_request
 
-`src/utils/llm_request` 核心职责是为程序发送 request 到 LLM，其流程如下：
+`src/core/utils/llm_request` 核心职责是为程序发送 request 到 LLM，其流程如下：
 
 ```py
 # - Main Agent
@@ -290,9 +293,9 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ### 4.6 CLI
 
-`src/utils/cli/printer.py` 提供了终端彩色打印的功能，无其他核心功能。
+`src/cli/printer.py` 提供了终端彩色打印的功能，无其他核心功能。
 
-`src/utils/cli/cli.py` 基于 `prompt_toolkit`（缺失时降级为普通 `input`），模仿 git 风格的命令行控制，提供了一套交互式的 CLI。其中值得关注的点有：
+`src/cli/cli.py` 基于 `prompt_toolkit`（缺失时降级为普通 `input`），模仿 git 风格的命令行控制，提供了一套交互式的 CLI。其中值得关注的点有：
 
 1. `_build_completer()` 中定义了命令以及其补全的次级命令；
 2. `run()` 中通过死循环实现"CLI Loop"，其内部又分为两层：
@@ -309,11 +312,21 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ## 五、Agent 核心设计
 
-在本章节，将介绍 `src/core` 下的设计，主要是 Main Agent 中的记忆管理、上下文压缩、Skill 加载。这里我们将从最简单的 `sysprompt` 入手，开始讲解每一个文件的作用。在完成本章节的阅读之后，对 Main Agent 有了初步的了解，我们将在下一章中阅读 SubAgent 的设计。
+`src/core/agent/` 集中保存 Main Agent 的实现：`agent.py` 执行单轮请求与工具迭代，`runner.py` 提供同步 Agent Loop，`tools.py` 装配 Main 与 Worker 工具，其余模块负责提示词、记忆、上下文压缩与 Skill。跨宿主的输出、审批和取消接口仍独立放在 `src/core/runtime.py`；手动备份客户端归入 `src/cli/sync.py`。下面从 `sysprompt` 入手介绍，再阅读 SubAgent 的设计。
+
+```text
+src/core/
+├── agent/       # Main Agent、循环、上下文与工具装配
+├── subagent/    # 同步委派、路由结果与并发分发
+├── tool/        # 具体工具及工具基类
+├── utils/       # 配置、日志、LLM 请求与模型路由
+├── runtime.py   # 宿主提供的输出、审批、取消回调
+└── __init__.py  # 按需导出的公共入口
+```
 
 ### 5.1 sysprompt
 
-Dandelion 的 sysprompt 被以常量的方式定义在 `src/core/sysprompt.py`（`PromptBuilder`）中，而不是采用文件加载的方式来实现。对于 sysprompt，其中的拼接方式是：
+Dandelion 的 sysprompt 被以常量的方式定义在 `src/core/agent/sysprompt.py`（`PromptBuilder`）中，而不是采用文件加载的方式来实现。对于 sysprompt，其中的拼接方式是：
 
 1. 首先，定义 `[Dandelion]` 身份与环境信息，以便于 LLM 使用正确的 shell 命令；
 2. 其次，如果启用了 SubAgent，那么添加相应的 SubAgent 调用规则；
@@ -337,7 +350,7 @@ Dandelion 的 sysprompt 被以常量的方式定义在 `src/core/sysprompt.py`�
 
 ### 5.2 skill
 
-`src/core/skill.py`（`SkillManager`）负责将 `llm/skill` 下的各 skill 文件扫描注册为"名称 -> 描述/内容"的目录，`get_catalog()` 将 `- name: description` 列表插入到 sysprompt 中。如果 LLM 需要读取 skill 全文，则通过 `load_skill` 工具（`LoadSkillTool`）按名称获取。
+`src/core/agent/skill.py`（`SkillManager`）负责将 `llm/skill` 下的各 skill 文件扫描注册为"名称 -> 描述/内容"的目录，`get_catalog()` 将 `- name: description` 列表插入到 sysprompt 中。如果 LLM 需要读取 skill 全文，则通过 `load_skill` 工具（`LoadSkillTool`）按名称获取。
 
 ### 5.3 memory
 
@@ -354,11 +367,11 @@ Dandelion 的记忆管理可以简要地分为：
 
 记忆写入的目录（层级）由 LLM 通过 `remember` 工具的 `scope` 参数（`global`/`session`）指定；session 层未配置时写入 session 层会明确报错，而不是落盘在 global 中。
 
-值得注意的是，为了方便 LLM 进行索引（提取），记忆中的内容均采用英文（ASCII）撰写（语言策略）。在 `src/core/memory.py` 中，以 `class MemoryManager` 的形式将记忆的读、写进行了封装；工具层（`remember`/`update_state`）会拒绝非 ASCII 输入并提示翻译，`test/ascii_check.py` 则保证源码/记忆文件本身不混入非 ASCII。详细的函数调用链可以在 `@file` 部分注释中查看。
+值得注意的是，为了方便 LLM 进行索引（提取），记忆中的内容均采用英文（ASCII）撰写（语言策略）。在 `src/core/agent/memory.py` 中，以 `class MemoryManager` 的形式将记忆的读、写进行了封装；工具层（`remember`/`update_state`）会拒绝非 ASCII 输入并提示翻译，`test/ascii_check.py` 则保证源码/记忆文件本身不混入非 ASCII。详细的函数调用链可以在 `@file` 部分注释中查看。
 
 ### 5.4 agent
 
-`src/core/agent.py` 中定义了 Main Agent（`MyAgent`）所需要的全部功能。在前述的[CLI 小节](#46-cli)中我们可以看到，agent 中的 `step()` 并不是传统意义上的 Agent Loop，而是每一次 Agent Loop 中的、针对 Tools 的 Loop/Iterate。因此，让我们直接从 `step()` 开始阅读。
+`src/core/agent/agent.py` 中定义了 Main Agent（`MyAgent`）所需要的全部功能。在前述的[CLI 小节](#46-cli)中我们可以看到，agent 中的 `step()` 并不是传统意义上的 Agent Loop，而是每一次 Agent Loop 中的、针对 Tools 的 Loop/Iterate。因此，让我们直接从 `step()` 开始阅读。
 
 #### 5.4.1 step()
 
@@ -409,7 +422,7 @@ soft_limit = MAX_CONTEXT_TOKENS - MAX_TOKENS - 固定开销(sysprompt + tool sch
 3. 每个 subagent 有一个专属的 ID（`sa-<hex>`），以便于 pool 进行管理、为 parent 界定返回值与日志记录；
 4. 子代理的系统提示词由 `role_prompt` + 深度信息（可委派 / 不可委派两种措辞）+ 安全规则 + 共享工作区提示拼接；
 5. LLM 请求走 `route_request()`，按 `media`/`review`/`complex`/`simple` 四类路由（优先级 media > review > complex > simple，同类按 `SUB_LIST` 顺序），而不是复用 Main Agent 的模型；
-6. 并发：Main Agent 同一轮响应中连续的多个 `spawn_subagent` 由 `src/subagent/dispatch.py` 并行执行（上限 `[Main] SUB_CONCURRENCY`，默认 4），其他工具作为屏障按原顺序串行执行，每个 tool_use 恰好得到一个结果。子代理内部的工具调用（含嵌套派生）保持串行。并行子代理共享工作区，不提供文件级隔离，需由 Main Agent 为其分配不同文件；Ctrl+C 时子代理在下一轮边界停止，`step()` 等待所有子代理结束后才返回。
+6. 并发：Main Agent 同一轮响应中连续的多个 `spawn_subagent` 由 `src/core/subagent/dispatch.py` 并行执行（上限 `[Main] SUB_CONCURRENCY`，默认 4），其他工具作为屏障按原顺序串行执行，每个 tool_use 恰好得到一个结果。子代理内部的工具调用（含嵌套派生）保持串行。并行子代理共享工作区，不提供文件级隔离，需由 Main Agent 为其分配不同文件；Ctrl+C 时子代理在下一轮边界停止，`step()` 等待所有子代理结束后才返回。
 
 `pool.py` 创建了一个 agent 池（`SubAgentPool`，`MyAgent` 持有的单例）来管理 subagents。工具集注册表 `registry.py` 预定义了五类（`minimal`/`filesystem`/`code_analysis`/`data_processing`/`full`），LLM 通过名称引用。通常来说，subagent 的调用方式为：
 
@@ -440,7 +453,7 @@ Main Agent (Root)
 
 ## 七、工具类
 
-`src/tool` 下的工具类都由 `base_tool.py`（`BaseTool`）派生而来，通过 `get_name()/get_description()/get_schema()/execute()` 四个接口向 Agent 暴露，注册于 `MyAgent._init_tools()`。
+`src/core/tool` 下的工具类都由 `base_tool.py`（`BaseTool`）派生而来，通过 `get_name()/get_description()/get_schema()/execute()` 四个接口向 Agent 暴露，注册于 `MyAgent._init_tools()`。
 
 安全模型（沙箱保护）是工具层最重要的横切关注点：
 

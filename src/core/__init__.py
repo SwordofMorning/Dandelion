@@ -1,18 +1,39 @@
 ##
  # @file src/core/__init__.py
  # @date 2026/08/06
- # 
- # @brief Core Package.
- # Provides agent (LLM request), memory, skill and prompt builder.
+ #
+ # @brief Shared agent execution package.
+ # Exposes the core agent, prompt builder, memory, compaction and pruning helpers.
  #
 
-from .memory import MemoryManager
-from .skill import SkillManager
-from .sysprompt import PromptBuilder
-from .compress import (
+from .agent import (
+    MyAgent,
+    MemoryManager,
+    SkillManager,
+    BasePromptBuilder,
+    PromptBuilder,
     ContextCompressor,
     CompressCondition,
     is_context_overflow_error,
     extract_usage_tokens,
+    ContextPruner,
+    validate_history_protocol,
+    run_agent_loop,
 )
-from .agent import MyAgent
+from .runtime import Runtime
+
+__all__ = [
+    "MyAgent",
+    "Runtime",
+    "MemoryManager",
+    "SkillManager",
+    "BasePromptBuilder",
+    "PromptBuilder",
+    "ContextCompressor",
+    "CompressCondition",
+    "is_context_overflow_error",
+    "extract_usage_tokens",
+    "ContextPruner",
+    "validate_history_protocol",
+    "run_agent_loop",
+]

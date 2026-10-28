@@ -3,6 +3,10 @@
  # @date 2026/08/07
  # 
  # @brief Makefile-style build entry for Dandelion (Nuitka standalone).
+ # Coordinates build metadata, standalone compilation, dependency copying,
+ # launcher generation and artifact cleanup through configuration-driven targets.
+ #
+ # @note CLI artifacts include src.cli and src.core; src.remote is excluded.
  #
  # @usage
  #   python mk/make.py            : full build (same as 'all')
@@ -73,7 +77,8 @@ def _load_config():
 def _load_pyproject():
     with open(os.path.join(ROOT_DIR, "pyproject.toml"), "rb") as f:
         return tomllib.load(f)
-# End-with
+    # End-with
+# End-def
 
 ##
  # @brief Get project name and version (single source of truth).
@@ -164,12 +169,16 @@ def _run_nuitka(cfg, name, version):
     # End-if
     extra_args = shlex.split(cfg.get("nuitka", "extra_args", fallback=""))
 
+    # ----- @par CLI / Core package boundary -----
+    # @note Explicit selection keeps src.remote out of CLI artifacts.
     cmd = [
         sys.executable, "-m", "nuitka",
         "--mode=standalone",
         "--output-dir=" + output_dir,
         "--output-filename=" + name,
-        "--include-package=src",
+        "--include-package=src.cli",
+        "--include-package=src.core",
+        "--nofollow-import-to=src.remote",
         "--include-module=mk.lib.paths",
         "--include-module=mk.lib.build_info",
         "--assume-yes-for-downloads",
@@ -605,18 +614,18 @@ def _postprocess(cfg, name, version):
     # End-for
     print("  [+] Created directories: .env, llm, .log")
 
-    # Pre-fill .env/api.cfg from the example template if present.
+    # Pre-fill cli.cfg from the example template if present.
     env_dir = os.path.join(target_dir, ".env")
-    example_cfg = os.path.join(ROOT_DIR, ".env", "api.cfg.example")
+    example_cfg = os.path.join(ROOT_DIR, ".env", "cli.cfg.example")
     if os.path.exists(example_cfg):
-        shutil.copy2(example_cfg, os.path.join(env_dir, "api.cfg"))
+        shutil.copy2(example_cfg, os.path.join(env_dir, "cli.cfg"))
         keep = os.path.join(env_dir, ".keep")
         if os.path.exists(keep):
             os.remove(keep)
         # End-if
-        print("  [+] Pre-filled: .env/api.cfg (from api.cfg.example)")
+        print("  [+] Pre-filled: cli.cfg")
     else:
-        print("  [-] Note: .env/api.cfg.example not found; .env kept as .keep")
+        print("  [-] Note: cli.cfg.example not found; config dir kept as .keep")
     # End-if
 
     # ----- @par 3. Create fake entry (shell script / cmd wrapper) -----

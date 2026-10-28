@@ -2,16 +2,19 @@
 
 # Dandelion
 
-A CLI-style Agent tool built with Nuitka, capable of cross-platform deployment through cross-compilation toolchains. The basic architecture is as follows:
+A CLI-style Agent tool built with Nuitka, capable of cross-platform deployment through cross-compilation toolchains. `src/` contains three main packages: `cli`, `core` and `remote`. Main Agent implementation lives under `core/agent`; shared tools, SubAgents and utilities live under `core/tool`, `core/subagent` and `core/utils`. The basic architecture is as follows:
 
-1. The "Interactive Loop" in `src/utils/cli/cli.py` functions as the Agent Loop;
-2. Each Agent Iterate (Tool Call) action is executed in the `step` function within `src/core/agent.py`.
+1. `src/cli/cli.py` provides the outer CLI Loop, while `src/remote/` provides Remote's outer Event Loop;
+2. Both use the shared Agent Loop in `src/core/agent/runner.py`;
+3. Each Agent Iterate (LLM request and tool calls) runs through `step` in `src/core/agent/agent.py`.
 
 ## 1. Features
 
 - CLI-based interaction, no GUI;
-- All Tools are implemented under `src/tool` and can be built together with the main program;
+- All Tools are implemented under `src/core/tool` and can be built together with the main program;
 - Comprehensive logging and session management.
+- Manual backup of raw session history and metadata to Remote;
+- Dandelion Remote reuses the synchronous Core for background jobs, Telegram and persistent reminders; see the [Remote guide](03_remote.en.md).
 
 ## 2. Using Source Code
 
@@ -116,6 +119,7 @@ Both scripts point to the `dandelion` binary file located in their subdirectorie
 
 1. Download and run TODO.
 2. [Architecture][02_arch.en.path]
+3. [Dandelion Remote: sync and server deployment](03_remote.en.md)
 
 [releases-url]: https://github.com/SwordofMorning/Dandelion/releases
 [02_arch.en.path]: 02_architecture.en.md
