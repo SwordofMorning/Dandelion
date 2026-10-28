@@ -296,6 +296,46 @@ class GoogleDriveTool(BaseTool):
     # End-def
 
     ##
+     # @brief List all non-trashed children under parent_id across all result pages.
+     #
+     # @param client _GoogleDriveClient instance.
+     # @param parent_id Parent Drive folder ID.
+     # @param folder_only True to match only folders, False for non-folders, None for any.
+     #
+     # @return Complete list of child file metadata dictionaries.
+     #
+    @staticmethod
+    def _list_children_all(client, parent_id, folder_only=None):
+        q = f"'{_escape_q(parent_id)}' in parents and trashed = false"
+        if folder_only is True:
+            q += f" and mimeType = '{FOLDER_MIME}'"
+        elif folder_only is False:
+            q += f" and mimeType != '{FOLDER_MIME}'"
+        # End-if
+        items = []
+        page_token = None
+        while True:
+            params = {
+                "q": q,
+                "fields": "nextPageToken,files(id,name,mimeType,size,modifiedTime,appProperties)",
+                "pageSize": 200,
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            # End-if
+            res = client.request("GET", DRIVE_API, params=params)
+            items.extend(res.get("files", []))
+            page_token = res.get("nextPageToken")
+            if not page_token:
+                break
+            # End-if
+        # End-while
+        return items
+    # End-def
+
+    ##
      # @brief Find a child item by exact name and optional mimeType under parent_id.
      #
      # @param client _GoogleDriveClient instance.
@@ -526,9 +566,11 @@ class GoogleDriveTool(BaseTool):
 
         # 1. Back up global memories (<workspace>/llm/memory/*.md -> Dandelion Remote/memory/)
         mem_dir = Path(self.workspace_dir) / "llm" / "memory"
+        active_memory_files = []
         if mem_dir.is_dir():
             for md_file in sorted(mem_dir.glob("*.md")):
                 if md_file.is_file():
+                    active_memory_files.append(md_file.name)
                     _, changed = self._upsert_file(
                         client,
                         folder_ids["memory"],
@@ -542,6 +584,15 @@ class GoogleDriveTool(BaseTool):
                 # End-if
             # End-for
         # End-if
+        # Persist the active memory manifest so forgotten memories are never restored.
+        manifest_bytes = json.dumps({"active_files": active_memory_files}, ensure_ascii=True, sort_keys=True).encode("utf-8")
+        self._upsert_file(
+            client,
+            folder_ids["memory"],
+            "_manifest.json",
+            manifest_bytes,
+            content_type="application/json; charset=UTF-8",
+        )
 
         # 2. Back up synced session summaries (<workspace>/assets/syncs/<session_id>/ -> Dandelion Remote/data/<session_id>/)
         syncs_dir = Path(self.workspace_dir) / "assets" / "syncs"
@@ -600,19 +651,38 @@ class GoogleDriveTool(BaseTool):
      #
     def _action_restore_memory(self, client):
         mem_folder_id = self._resolve_folder_path(client, ["memory"], create=False)
-        res = client.request("GET", DRIVE_API, params={
-            "q": f"'{_escape_q(mem_folder_id)}' in parents and mimeType != '{FOLDER_MIME}' and trashed = false",
-            "fields": "files(id,name,mimeType)",
-            "pageSize": 200,
-            "supportsAllDrives": "true",
-            "includeItemsFromAllDrives": "true",
-        })
+        files = self._list_children_all(client, mem_folder_id, folder_only=False)
+        by_name = {
+            str(item.get("name", "")).strip(): item
+            for item in files
+            if isinstance(item, dict) and str(item.get("name", "")).strip()
+        }
+
+        active_set = None
+        if "_manifest.json" in by_name:
+            try:
+                m_raw = self._download_item_bytes(
+                    client,
+                    by_name["_manifest.json"]["id"],
+                    by_name["_manifest.json"].get("mimeType", ""),
+                )
+                m_obj = json.loads(m_raw.decode("utf-8"))
+                if isinstance(m_obj, dict) and isinstance(m_obj.get("active_files"), list):
+                    active_set = {str(x) for x in m_obj["active_files"] if isinstance(x, str)}
+                # End-if
+            except Exception:
+                active_set = None
+            # End-try
+        # End-if
+
         local_mem_dir = Path(self.workspace_dir) / "llm" / "memory"
         local_mem_dir.mkdir(parents=True, exist_ok=True)
         restored = []
-        for item in res.get("files", []):
-            name = str(item.get("name", "")).strip()
+        for name, item in sorted(by_name.items()):
             if not name.endswith(".md") or "/" in name or "\\" in name or name in (".", ".."):
+                continue
+            # End-if
+            if active_set is not None and name not in active_set:
                 continue
             # End-if
             raw = self._download_item_bytes(client, item["id"], item.get("mimeType", ""))
@@ -622,6 +692,18 @@ class GoogleDriveTool(BaseTool):
             os.replace(tmp, dest)
             restored.append(name)
         # End-for
+
+        if active_set is not None:
+            for existing_md in local_mem_dir.glob("*.md"):
+                if existing_md.name not in active_set:
+                    try:
+                        existing_md.unlink()
+                    except OSError:
+                        pass
+                    # End-try
+                # End-if
+            # End-for
+        # End-if
         return {"restored_files": restored, "count": len(restored)}
     # End-def
 
@@ -642,13 +724,7 @@ class GoogleDriveTool(BaseTool):
             # End-for
         # End-if
         folder_id = self._resolve_folder_path(client, parts, create=False)
-        res = client.request("GET", DRIVE_API, params={
-            "q": f"'{_escape_q(folder_id)}' in parents and trashed = false",
-            "fields": "files(id,name,mimeType,size,modifiedTime)",
-            "pageSize": 100,
-            "supportsAllDrives": "true",
-            "includeItemsFromAllDrives": "true",
-        })
+        files = self._list_children_all(client, folder_id, folder_only=None)
         items = [
             {
                 "name": f.get("name"),
@@ -656,7 +732,7 @@ class GoogleDriveTool(BaseTool):
                 "size": f.get("size"),
                 "modifiedTime": f.get("modifiedTime"),
             }
-            for f in res.get("files", [])
+            for f in files
         ]
         return {"path": f"{ROOT_FOLDER_NAME}/{'/'.join(parts)}".rstrip("/"), "items": items}
     # End-def

@@ -282,13 +282,9 @@ class BackupStore:
         )
         changed = (new_hist_sha != prev_hist_sha)
         prev_queued = prev_meta.get("queued_snapshot_id", "") if not changed else ""
+        prev_digested = prev_meta.get("digested_snapshot_id", "") if not changed else ""
         summary_file = dest_dir / "summary.md"
-        hist_file = dest_dir / "history.log"
-        summary_fresh = (
-            summary_file.is_file()
-            and hist_file.is_file()
-            and summary_file.stat().st_mtime >= hist_file.stat().st_mtime
-        )
+        has_summary = summary_file.is_file()
 
         sync_meta = dict(
             manifest,
@@ -298,17 +294,23 @@ class BackupStore:
             turns=len(history),
             synced_at=time.time(),
             queued_snapshot_id=prev_queued,
+            digested_snapshot_id=prev_digested,
             path=str(dest_dir),
         )
         tmp_meta = prev_meta_file.with_suffix(".json.tmp")
         tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp_meta, prev_meta_file)
 
+        needs_digest = bool(
+            changed
+            or not has_summary
+            or (prev_digested != snapshot_id and prev_queued != snapshot_id)
+        )
         return {
             "accepted": snapshot_id,
             "session_id": session_id,
             "changed": changed,
-            "needs_digest": bool(changed or prev_queued != snapshot_id or not summary_fresh),
+            "needs_digest": needs_digest,
             "path": f"assets/syncs/{session_id}",
         }
     # End-def
@@ -330,7 +332,47 @@ class BackupStore:
             # End-if
             try:
                 sync_meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                sync_meta["queued_snapshot_id"] = str(snapshot_id)
+                if sync_meta.get("snapshot_id") == str(snapshot_id):
+                    sync_meta["queued_snapshot_id"] = str(snapshot_id)
+                    tmp_meta = meta_file.with_suffix(".json.tmp")
+                    tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                    os.replace(tmp_meta, meta_file)
+                # End-if
+            except (OSError, ValueError):
+                pass
+            # End-try
+        # End-with
+    # End-def
+
+    ##
+     # @brief Record that a snapshot's sync_received turn completed or failed.
+     #
+     # @param session_id Synced session directory identifier.
+     # @param snapshot_id Snapshot digest processed by the turn.
+     # @param success True when the digest turn succeeded; False on error/cancel.
+     #
+     # @return None.
+     #
+    def finalize_digest(self, session_id, snapshot_id, success):
+        with self.lock:
+            dest_dir = (self.syncs_dir / str(session_id)).resolve()
+            meta_file = dest_dir / "sync_meta.json"
+            if dest_dir.parent != self.syncs_dir or not meta_file.is_file():
+                return
+            # End-if
+            try:
+                sync_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                if sync_meta.get("snapshot_id") != str(snapshot_id):
+                    return
+                # End-if
+                has_summary = (dest_dir / "summary.md").is_file()
+                if success and has_summary:
+                    sync_meta["digested_snapshot_id"] = str(snapshot_id)
+                    sync_meta["queued_snapshot_id"] = str(snapshot_id)
+                else:
+                    sync_meta["queued_snapshot_id"] = ""
+                    sync_meta["digested_snapshot_id"] = ""
+                # End-if
                 tmp_meta = meta_file.with_suffix(".json.tmp")
                 tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
                 os.replace(tmp_meta, meta_file)

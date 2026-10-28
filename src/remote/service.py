@@ -117,7 +117,7 @@ def _serve(args, parser, config, store, data_dir, workspace):
     jobs = JobManager(store, JobExecutor(config, str(data_dir)), max_workers=workers)
     hub = ChannelHub(store)
     factory = make_agent_factory(config, str(data_dir), workspace, jobs, hub=hub, backups=backups)
-    loop = RemoteLoop(store, jobs, factory, hub.notify)
+    loop = RemoteLoop(store, jobs, factory, hub.notify, backups=backups)
     server = make_server(
         host, port, store, jobs, loop, hub, access_key, backups=backups,
     )

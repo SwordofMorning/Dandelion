@@ -108,13 +108,16 @@ class Telegram:
      # @return None.
      #
     def _flush_unsent(self):
-        for row in self.hub.unsent_replies(self.allowed):
+        rows = self.hub.unsent_replies(self.allowed)
+        for idx, row in enumerate(rows):
             chat = row["session_id"].split(":", 1)[1]
             try:
                 self.send_text(chat, row["text"])
                 self.hub.mark_sent(row["id"])
             except Exception:
-                self.hub.mark_retry(row["id"])
+                for remaining in rows[idx:]:
+                    self.hub.mark_retry(remaining["id"])
+                # End-for
                 break
             # End-try
         # End-for

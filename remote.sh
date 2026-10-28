@@ -153,6 +153,10 @@ cmd_stop() {
         fi
         sleep 1
     done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "[-] Dandelion Remote (PID: $pid) did not exit within 30s; keeping $PID_FILE."
+        return 1
+    fi
     rm -f "$PID_FILE"
     echo "[+] Dandelion Remote stopped."
 }

@@ -30,14 +30,16 @@ class RemoteLoop:
      # @param jobs Background job manager used by remote delegation tools.
      # @param agent_factory Callable creating a core agent for one conversation.
      # @param notify Callback persisting or emitting a conversation reply.
+     # @param backups Optional shared BackupStore for tracking sync digest completion.
      #
      # @return None.
      #
-    def __init__(self, store, jobs, agent_factory, notify):
+    def __init__(self, store, jobs, agent_factory, notify, backups=None):
         self.store = store
         self.jobs = jobs
         self.agent_factory = agent_factory
         self.notify = notify
+        self.backups = backups
         self._stop = threading.Event()
         self._agents = {}
         self._session_dates = {}
@@ -269,7 +271,13 @@ class RemoteLoop:
             return False, None
         # End-if
 
+        sync_sess = event["payload"].get("session_id", "") if event["kind"] == "sync_received" else ""
+        sync_snap = event["payload"].get("snapshot_id", "") if event["kind"] == "sync_received" else ""
+
         if error is not None:
+            if sync_sess and sync_snap and self.backups is not None:
+                self.backups.finalize_digest(sync_sess, sync_snap, success=False)
+            # End-if
             return True, "Agent failed: " + str(error)
         # End-if
 
@@ -278,7 +286,14 @@ class RemoteLoop:
                 backup.restore()
                 agent.reload_history()
             # End-if
+            if sync_sess and sync_snap and self.backups is not None:
+                self.backups.finalize_digest(sync_sess, sync_snap, success=False)
+            # End-if
             return True, "Turn cancelled and rolled back."
+        # End-if
+
+        if sync_sess and sync_snap and self.backups is not None:
+            self.backups.finalize_digest(sync_sess, sync_snap, success=True)
         # End-if
 
         # If the LLM explicitly used 'send_message' during this turn, do not double-send.
