@@ -487,8 +487,7 @@ class Store:
      #
     def fire_due_schedules(self, now=None, notify=None):
         now = time.time() if now is None else now
-        direct_reminders = []
-        with self.changed, self.conn:
+        with self.changed:
             rows = self.conn.execute("SELECT * FROM schedules WHERE active=1 AND due_at<=?", (now,)).fetchall()
             for row in rows:
                 payload = json.loads(row["payload"])
@@ -497,28 +496,26 @@ class Store:
                 # End-if
                 payload = dict(payload, schedule_id=row["id"], due_at=row["due_at"])
                 if row["kind"] == "reminder" and notify is not None:
-                    direct_reminders.append((row["session_id"], str(payload.get("text", ""))))
+                    # Persist the outgoing reply record before advancing the schedule.
+                    notify(row["session_id"], str(payload.get("text", "")))
                 else:
-                    self._event("analysis", row["session_id"], payload)
+                    with self.conn:
+                        self._event("analysis", row["session_id"], payload)
+                    # End-with
                 # End-if
-                if row["interval"]:
-                    next_due = row["due_at"] + (int((now - row["due_at"]) // row["interval"]) + 1) * row["interval"]
-                    self.conn.execute("UPDATE schedules SET due_at=? WHERE id=?", (next_due, row["id"]))
-                else:
-                    self.conn.execute("UPDATE schedules SET active=0 WHERE id=?", (row["id"],))
-                # End-if
+                with self.conn:
+                    if row["interval"]:
+                        next_due = row["due_at"] + (int((now - row["due_at"]) // row["interval"]) + 1) * row["interval"]
+                        self.conn.execute("UPDATE schedules SET due_at=? WHERE id=?", (next_due, row["id"]))
+                    else:
+                        self.conn.execute("UPDATE schedules SET active=0 WHERE id=?", (row["id"],))
+                    # End-if
+                # End-with
             # End-for
             if rows:
                 self.changed.notify_all()
             # End-if
         # End-with
-        for session_id, text in direct_reminders:
-            try:
-                notify(session_id, text)
-            except Exception:
-                pass
-            # End-try
-        # End-for
     # End-def
 
     ##

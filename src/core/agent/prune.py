@@ -4,8 +4,8 @@
  #
  # @brief SubAgent-assisted context pruning and daily session inheritance.
  # Inspects conversation history in indivisible tool-pair units, archives a
- # full pre-prune backup, applies LLM-selected folding or unit removal, and
- # enforces strict tool_use/tool_result pairing invariants before saving.
+ # full pre-prune backup with SDK block serialization, applies LLM-selected
+ # folding or unit removal, and enforces strict tool_use/tool_result pairing.
  #
 
 import copy
@@ -16,24 +16,64 @@ import re
 
 from src.core.runtime import Runtime
 
+MAX_UNIT_DIGEST_CHARS = 24000
+
 PRUNE_SYSTEM_PROMPT = """You are a Context Pruning SubAgent for Dandelion.
-Your job is to inspect numbered conversation history units and decide which older units can be folded or dropped to free context window space while preserving all active knowledge.
+Your job is to inspect numbered conversation history units and decide which older units can be folded or dropped to free context window space while preserving all active knowledge and constraints.
 
 Rules:
 1. Each unit is either a standalone message or an indivisible [assistant(tool_use) + user(tool_result)] pair.
 2. Choose one action per unit:
    - "keep": keep the unit unchanged (use for core user requirements, active constraints, and critical recent context).
-   - "fold": keep the tool call/result pair structure and IDs, but replace large tool outputs with a concise summary (best for large file reads, grep results, or command outputs whose conclusions were already extracted).
+   - "fold": keep the tool call/result pair structure and IDs, but replace large tool outputs with a concise, accurate summary of the actual facts/conclusions found in that unit's output. When choosing "fold", you MUST provide a non-empty, factual "summary" derived from the unit content.
    - "drop": completely remove obsolete conversational turns or superseded tool explorations that are no longer needed.
 3. Never drop the very first user unit (unit 0) unless it is purely a greeting; prefer "keep" or "fold" for unit 0.
 4. Respond ONLY with a valid JSON object matching this schema:
 {
   "decisions": [
     {"unit_id": 0, "action": "keep", "summary": ""},
-    {"unit_id": 1, "action": "fold", "summary": "Read config.py and confirmed [Remote] parser fields."}
+    {"unit_id": 1, "action": "fold", "summary": "Read config.py and confirmed [Remote] parser fields and key constraints."}
   ]
 }
 """
+
+
+##
+ # @brief Convert Pydantic/SDK blocks (like ThinkingBlock or ToolUseBlock) to dicts.
+ #
+ # @param obj Object to serialize for JSON output.
+ #
+ # @return JSON-serializable dict or string representation.
+ #
+def _default_serializer(obj):
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    # End-if
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    # End-if
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    # End-if
+    return str(obj)
+# End-def
+
+
+##
+ # @brief Format a serialized unit string with head and tail preservation if oversized.
+ #
+ # @param raw Full JSON string of the unit.
+ # @param max_chars Maximum characters to include in the SubAgent digest.
+ #
+ # @return Full string or head+tail bounded excerpt.
+ #
+def _bounded_excerpt(raw, max_chars=MAX_UNIT_DIGEST_CHARS):
+    if len(raw) <= max_chars:
+        return raw
+    # End-if
+    half = max_chars // 2
+    return raw[:half] + "\n...[middle omitted]...\n" + raw[-half:]
+# End-def
 
 
 ##
@@ -150,7 +190,7 @@ def group_atomic_units(messages):
 
         if msg.get("role") == "assistant" and has_tool_use and i + 1 < n:
             next_msg = messages[i + 1]
-            raw_pair = json.dumps([msg, next_msg], ensure_ascii=False, default=str)
+            raw_pair = json.dumps([msg, next_msg], ensure_ascii=False, default=_default_serializer)
             tool_names = [
                 str(_block_field(b, "name", "tool"))
                 for b in blocks if _block_field(b, "type") == "tool_use"
@@ -161,18 +201,18 @@ def group_atomic_units(messages):
                 "kind": "tool_pair",
                 "tools": tool_names,
                 "chars": len(raw_pair),
-                "preview": raw_pair[:400],
+                "preview": _bounded_excerpt(raw_pair),
             })
             i += 2
         else:
-            raw_single = json.dumps(msg, ensure_ascii=False, default=str)
+            raw_single = json.dumps(msg, ensure_ascii=False, default=_default_serializer)
             units.append({
                 "unit_id": len(units),
                 "indices": [i],
                 "kind": msg.get("role", "user"),
                 "tools": [],
                 "chars": len(raw_single),
-                "preview": raw_single[:400],
+                "preview": _bounded_excerpt(raw_single),
             })
             i += 1
         # End-if
@@ -220,8 +260,9 @@ class ContextPruner:
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         path = os.path.join(archive_dir, f"history_pre_{tag}_{stamp}_{len(history)}msgs.json")
         tmp_path = path + ".tmp"
+        serializer = getattr(self.session, "_default_serializer", _default_serializer)
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2, default=str)
+            json.dump(history, f, ensure_ascii=False, indent=2, default=serializer)
         # End-with
         os.replace(tmp_path, path)
         return path
@@ -231,7 +272,7 @@ class ContextPruner:
      # @brief Fold oversized tool_result bodies inside a tool_pair unit in place.
      #
      # @param user_msg User message holding tool_result blocks.
-     # @param summary Concise summary replacement text.
+     # @param summary Non-empty factual summary replacement text from the SubAgent.
      # @param min_chars Minimum block content length before folding applies.
      #
      # @return Modified deep copy of user_msg.
@@ -243,7 +284,10 @@ class ContextPruner:
         if not isinstance(content, list):
             return cloned
         # End-if
-        note = summary.strip() or "Verbose tool output folded after analysis."
+        note = summary.strip()
+        if not note:
+            return cloned
+        # End-if
         new_blocks = []
         for block in content:
             b_type = _block_field(block, "type")
@@ -299,19 +343,19 @@ class ContextPruner:
      # @param candidate_units List of atomic unit descriptors eligible for pruning.
      # @param focus_hint Optional caller hint describing what can be discarded.
      #
-     # @return Mapping of unit_id -> {"action": str, "summary": str}.
+     # @return Mapping of unit_id -> {"action": str, "summary": str}, or None on failure.
      #
     def _query_prune_subagent(self, candidate_units, focus_hint=""):
         digest_lines = []
         for u in candidate_units:
             tools_str = f" tools={u['tools']}" if u["tools"] else ""
             digest_lines.append(
-                f"Unit #{u['unit_id']} ({u['kind']}{tools_str}, {u['chars']} chars): {u['preview']}"
+                f"Unit #{u['unit_id']} ({u['kind']}{tools_str}, {u['chars']} chars):\n{u['preview']}"
             )
         # End-for
         user_prompt = (
             f"Caller Pruning Hint: {focus_hint or 'Fold large read/tool outputs and drop obsolete explorations.'}\n\n"
-            "Candidate History Units:\n" + "\n".join(digest_lines)
+            "Candidate History Units:\n" + "\n\n".join(digest_lines)
         )
         payload = {
             "model": self.client.model_id,
@@ -321,12 +365,12 @@ class ContextPruner:
         }
         resp, err = self.client.safe_request(payload, log_tag="CONTEXT PRUNE SUBAGENT")
         if err or resp is None:
-            return {}
+            return None
         # End-if
         raw = self.client.extract_text(resp.content).strip()
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
-            return {}
+            return None
         # End-if
         try:
             parsed = json.loads(match.group(0))
@@ -335,13 +379,13 @@ class ContextPruner:
                 if isinstance(item, dict) and isinstance(item.get("unit_id"), int):
                     decisions[item["unit_id"]] = {
                         "action": str(item.get("action", "keep")).lower(),
-                        "summary": str(item.get("summary", "")),
+                        "summary": str(item.get("summary", "")).strip(),
                     }
                 # End-if
             # End-for
-            return decisions
+            return decisions if decisions else None
         except (ValueError, TypeError):
-            return {}
+            return None
         # End-try
     # End-def
 
@@ -378,6 +422,13 @@ class ContextPruner:
         candidates = units[:-keep_recent_units]
         protected = units[-keep_recent_units:]
         decisions = self._query_prune_subagent(candidates, focus_hint=focus_hint)
+        if not decisions:
+            return history, {
+                "status": "llm_failed",
+                "reason": "Pruning SubAgent did not return valid decisions; original history preserved.",
+                "archive": archive_path,
+            }
+        # End-if
 
         rebuilt = []
         folded_count = 0
@@ -386,9 +437,8 @@ class ContextPruner:
             uid = u["unit_id"]
             decision = decisions.get(uid)
             if decision is None:
-                # Deterministic fallback when SubAgent omits a unit: fold large tool outputs.
-                action = "fold" if (u["kind"] == "tool_pair" and u["chars"] > 1200) else "keep"
-                summary = focus_hint or "Large tool output folded."
+                action = "keep"
+                summary = ""
             else:
                 action = decision["action"]
                 summary = decision["summary"]
@@ -401,7 +451,7 @@ class ContextPruner:
             if action == "drop":
                 dropped_count += 1
                 continue
-            elif action == "fold" and u["kind"] == "tool_pair":
+            elif action == "fold" and u["kind"] == "tool_pair" and summary:
                 idx_a, idx_u = u["indices"]
                 rebuilt.append(copy.deepcopy(closed[idx_a]))
                 rebuilt.append(self._fold_tool_results(closed[idx_u], summary))
@@ -427,8 +477,8 @@ class ContextPruner:
             return history, {"status": "validation_failed", "reason": reason, "archive": archive_path}
         # End-if
 
-        before_chars = len(json.dumps(history, ensure_ascii=False, default=str))
-        after_chars = len(json.dumps(final_history, ensure_ascii=False, default=str))
+        before_chars = len(json.dumps(history, ensure_ascii=False, default=_default_serializer))
+        after_chars = len(json.dumps(final_history, ensure_ascii=False, default=_default_serializer))
         return final_history, {
             "status": "ok",
             "folded_units": folded_count,

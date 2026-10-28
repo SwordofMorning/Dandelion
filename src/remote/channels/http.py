@@ -159,7 +159,7 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None, b
                     return
                 # End-if
                 result = backups.receive(data)
-                if data.get("commit") is True and result.get("changed"):
+                if data.get("commit") is True and (result.get("changed") or result.get("needs_digest")):
                     target_session = getattr(hub, "default_telegram_session", None) or "default"
                     loop.post("sync_received", target_session, {
                         "session_id": result.get("session_id", data.get("session_id", "")),
@@ -167,7 +167,7 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None, b
                         "project": data.get("project", ""),
                         "path": result.get("path", ""),
                         "snapshot_id": result.get("accepted", ""),
-                    }, event_id="sync_" + str(result.get("accepted", "")))
+                    })
                 # End-if
                 self._reply(200, result)
             elif self.command == "GET" and path == "/sessions":

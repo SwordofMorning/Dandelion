@@ -278,6 +278,7 @@ class BackupStore:
             if isinstance(prev_meta.get("files"), dict) else None
         )
         changed = (new_hist_sha != prev_hist_sha)
+        has_summary = (dest_dir / "summary.md").is_file()
 
         sync_meta = dict(
             manifest,
@@ -296,6 +297,7 @@ class BackupStore:
             "accepted": snapshot_id,
             "session_id": session_id,
             "changed": changed,
+            "needs_digest": bool(changed or not has_summary),
             "path": f"assets/syncs/{session_id}",
         }
     # End-def

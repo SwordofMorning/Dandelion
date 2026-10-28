@@ -123,8 +123,8 @@ class RemoteLoop:
         if last_day == today:
             return
         # End-if
-        self._session_dates[session_id] = today
         if not agent.history:
+            self._session_dates[session_id] = today
             return
         # End-if
 
@@ -132,18 +132,8 @@ class RemoteLoop:
         old_history = copy.deepcopy(agent.history)
         old_state_file = os.path.join(old_dir, "task_state.json") if old_dir else None
 
-        # Create today's new session branch; yesterday's folder stays intact on disk.
-        agent.session.create_session(name=f"dr_{today}")
-        new_dir = agent.session.current_session_dir
-
-        if old_state_file and os.path.exists(old_state_file) and new_dir:
-            try:
-                shutil.copy2(old_state_file, os.path.join(new_dir, "task_state.json"))
-            except OSError:
-                pass
-            # End-try
-        # End-if
-
+        # Prepare pruned history BEFORE creating today's session so an interrupted
+        # model call never leaves an empty new session behind.
         pruner = ContextPruner(
             safe_client=agent.client,
             session_manager=agent.session,
@@ -160,8 +150,20 @@ class RemoteLoop:
             in_flight_tail=False,
             tag="daily_rollover",
         )
+
+        # Create today's new session branch and immediately populate history + task_state.
+        agent.session.create_session(name=f"dr_{today}")
+        new_dir = agent.session.current_session_dir
+        if old_state_file and os.path.exists(old_state_file) and new_dir:
+            try:
+                shutil.copy2(old_state_file, os.path.join(new_dir, "task_state.json"))
+            except OSError:
+                pass
+            # End-try
+        # End-if
         agent.session.save_history(pruned_history)
         agent.reload_history()
+        self._session_dates[session_id] = today
     # End-def
 
     ##
@@ -328,7 +330,6 @@ class RemoteLoop:
                 break
             # End-if
 
-            self.store.complete_event(event["id"])
             if fallback_reply:
                 try:
                     self.notify(event["session_id"], fallback_reply)
@@ -336,6 +337,7 @@ class RemoteLoop:
                     pass
                 # End-try
             # End-if
+            self.store.complete_event(event["id"])
         # End-while
     # End-def
 

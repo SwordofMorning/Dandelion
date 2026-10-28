@@ -71,23 +71,27 @@ class ChannelHub:
             target = self.default_telegram_session
         # End-if
         body = str(text or "")
-        sent_flag = 0
+        # Persist the pending reply row first (sent=0) so an interrupted network
+        # call can be retried on restart without losing the message.
+        with self.store.lock, self.store.conn:
+            cur = self.store.conn.execute(
+                "INSERT INTO replies(session_id,text,sent) VALUES (?,?,0)",
+                (target, body),
+            )
+            reply_id = cur.lastrowid
+        # End-with
+
         if self.telegram is not None and target.startswith("telegram:"):
             chat_id = target.split(":", 1)[1]
             try:
                 self.telegram.send_text(chat_id, body)
-                sent_flag = 1
+                with self.store.lock, self.store.conn:
+                    self.store.conn.execute("UPDATE replies SET sent=1 WHERE id=?", (reply_id,))
+                # End-with
             except Exception:
                 logging.warning("Direct Telegram send failed; queued for retry")
-                sent_flag = 0
             # End-try
         # End-if
-        with self.store.lock, self.store.conn:
-            self.store.conn.execute(
-                "INSERT INTO replies(session_id,text,sent) VALUES (?,?,?)",
-                (target, body, sent_flag),
-            )
-        # End-with
         return target
     # End-def
 

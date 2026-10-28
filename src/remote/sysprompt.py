@@ -84,7 +84,8 @@ class RemotePromptBuilder(BasePromptBuilder):
                 "1. You have direct access to fast inspection, file, skill, memory, and context-pruning tools ('read_file', 'write_file', 'edit_file', 'list_directory', 'grep_search', 'markdown_editor', 'remember', 'forget', 'update_state', 'prune_context').\n"
                 "2. For heavy or long-running tasks (multi-file code changes, running test suites, git/PR workflows, shell builds, deep research), ALWAYS delegate via 'submit_task' instead of blocking the main loop.\n"
                 "3. 'submit_task' immediately returns a job_id so you can keep chatting with the user in real time while the background SubAgent works. When the SubAgent finishes, you will receive a [Interrupt: Background Job Finished] event.\n"
-                "4. Use 'task_control' to check status, cancel jobs, or schedule future wakeups/reminders (always use timezone-aware ISO8601 due_at)."
+                "4. Use 'task_control' to check status, cancel jobs, or schedule future wakeups/reminders (always use timezone-aware ISO8601 due_at).\n"
+                "5. Path Isolation for Concurrent Work: When background SubAgents are actively modifying files, assign disjoint target paths to each worker and avoid concurrently editing those same files from the main agent."
             ),
             (
                 "## Multi-Device Session Sync ('assets/syncs/<session_id>/')\n"
