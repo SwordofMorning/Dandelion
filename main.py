@@ -1,8 +1,10 @@
 ##
  # @file main.py
  # @date 2026/08/07
- # 
- # @brief Main function entrance.
+ #
+ # @brief Dandelion CLI application entry point.
+ # Loads model configuration and workspace sessions, composes Core with terminal
+ # runtime callbacks, and starts the interactive command loop.
  #
 
 import sys

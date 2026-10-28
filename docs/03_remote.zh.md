@@ -1,6 +1,18 @@
 # Dandelion Remote
 
-`src/` 仅包含 Core、CLI 和 Remote 三个主包：`src/core/` 是共享支柱，工具、SubAgent 与通用接口都归入其 `tool/`、`subagent/`、`utils/` 子包；`src/cli/` 提供终端交互，`src/remote/` 提供服务器事件循环。CLI 保留同步 `spawn_subagent`、Ctrl+C 回滚和现有依赖规模；Remote 不进入 CLI 的 Nuitka 发行版。
+`src/` 仅包含 Core、CLI 和 Remote 三个主包：`src/core/agent/` 收纳 Main Agent、执行循环和上下文模块，`src/core/runtime.py` 保留通用宿主回调；工具、SubAgent 与通用接口分别归入 Core 的 `tool/`、`subagent/`、`utils/` 子包。`src/cli/` 提供终端交互和手动备份客户端 `sync.py`。CLI 保留同步 `spawn_subagent`、Ctrl+C 回滚和现有依赖规模；Remote 不进入 CLI 的 Nuitka 发行版。
+
+Remote 按功能收纳，入口仍是 `python -m src.remote`：
+
+```text
+src/remote/
+├── execution/   # 主 Agent 绑定、事件循环、后台任务与委派工具
+├── storage/     # SQLite 生命周期、会话快照与待发送回复
+├── channels/    # HTTP 接口与 Telegram 传输
+├── exports/     # 显式 Google Drive 日报导出
+├── service.py   # 命令解析、服务装配与关闭
+└── __main__.py  # python -m src.remote 的薄入口
+```
 
 ## 手动备份会话
 

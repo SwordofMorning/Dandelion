@@ -1,6 +1,18 @@
 # Dandelion Remote
 
-`src/` has three main packages: `src/core/` is the shared foundation, containing the `tool/`, `subagent/` and `utils/` subpackages; `src/cli/` provides terminal interaction, and `src/remote/` provides the server event loop. The CLI keeps synchronous `spawn_subagent`, Ctrl+C rollback and its existing dependencies. Remote is excluded from CLI Nuitka releases.
+`src/` has three main packages. `src/core/agent/` groups the Main Agent, execution loop and context modules, while `src/core/runtime.py` keeps shared host callbacks; tools, SubAgents and common interfaces live under Core's `tool/`, `subagent/` and `utils/` subpackages. `src/cli/` provides terminal interaction and the manual backup client in `sync.py`. The CLI keeps synchronous `spawn_subagent`, Ctrl+C rollback and its existing dependencies. Remote is excluded from CLI Nuitka releases.
+
+Remote is grouped by function, with `python -m src.remote` remaining its entry point:
+
+```text
+src/remote/
+├── execution/   # Main Agent binding, event loop, background jobs and tools
+├── storage/     # SQLite lifecycles, session snapshots and queued replies
+├── channels/    # HTTP API and Telegram transport
+├── exports/     # Explicit Google Drive report export
+├── service.py   # Command parsing, service assembly and shutdown
+└── __main__.py  # Thin python -m src.remote entry point
+```
 
 ## Manually back up sessions
 

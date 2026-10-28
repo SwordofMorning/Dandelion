@@ -5,6 +5,10 @@ Set `DANDELION_DR_TOKEN` in the shell or a private Compose environment file;
 optionally set `DANDELION_DR_DEVICES`, `DANDELION_TELEGRAM_TOKEN` and
 `DANDELION_TELEGRAM_CHATS` as described in the [Remote guide](../docs/03_remote.en.md).
 
+The source layout separates `src/remote/execution`, `storage`, `channels` and
+`exports`; `src/remote/service.py` assembles them. The container entry point
+remains `python -m src.remote`.
+
 From this directory:
 
 ```sh

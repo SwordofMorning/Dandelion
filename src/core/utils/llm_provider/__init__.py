@@ -1,9 +1,10 @@
 ##
  # @file src/core/utils/llm_provider/__init__.py
  # @date 2026/08/05
- # 
- # @brief LLM Provider Package.
- # Exports the abstract base class and all concrete provider implementations.
+ #
+ # @brief LLM provider selection package.
+ # Exports the shared provider interface and concrete Anthropic/OpenAI adapters,
+ # and chooses the adapter matching the configured SDK type.
  #
 
 from .base import LLMProvider

@@ -1,9 +1,10 @@
 ##
  # @file src/core/tool/base_tool.py
  # @date 2026/08/13
- # 
- # @brief Tool Class.
- # Provides abstract/virtual base tool class.
+ #
+ # @brief Shared tool interface and workspace access helpers.
+ # Provides host output forwarding, workspace approval checks and resolved-path
+ # validation, together with guarded file-opening helpers for concrete tools.
  #
 
 import os

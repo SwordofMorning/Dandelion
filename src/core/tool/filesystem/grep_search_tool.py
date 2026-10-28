@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/filesystem/grep_search_tool.py
  # @date 2026/08/13
- # 
- # @brief Grep Search Tools.
+ #
+ # @brief Recursive text-pattern search tool.
+ # Searches text files with a regular expression and optional filename glob.
+ # Bounds matching results while skipping binary files and common noise directories.
  #
 
 import os

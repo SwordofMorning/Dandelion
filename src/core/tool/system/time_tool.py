@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/system/time_tool.py
  # @date 2026/08/19
- # 
- # @brief Get current system time for the Agent (LLM).
+ #
+ # @brief Current time and timezone reporting tool.
+ # Formats date, time, weekday, timezone and Unix epoch for Agent requests.
+ # Supports explicit fixed UTC offsets and IANA timezone overrides.
  #
  # @note Returns the current date/time in the system timezone (or an optional
  # override) plus the Unix epoch in seconds. Weekday names are fixed English,

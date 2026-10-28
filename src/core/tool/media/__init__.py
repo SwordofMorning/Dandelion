@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/media/__init__.py
  # @date 2026/09/30
- # 
- # @brief Media tool package: multimodal reading of images and PDFs.
+ #
+ # @brief Shared multimodal tool exports.
+ # Exports image and PDF tools, admission helpers, cost estimators and media-block
+ # hydration utilities used when constructing Agent requests.
  #
 
 from .media_estimate import (

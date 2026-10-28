@@ -2,11 +2,11 @@
 
 # Dandelion
 
-A CLI-style Agent tool built with Nuitka, capable of cross-platform deployment through cross-compilation toolchains. `src/` contains three main packages: `cli`, `core` and `remote`. Shared tools, SubAgents and utilities live under `core/tool`, `core/subagent` and `core/utils`. The basic architecture is as follows:
+A CLI-style Agent tool built with Nuitka, capable of cross-platform deployment through cross-compilation toolchains. `src/` contains three main packages: `cli`, `core` and `remote`. Main Agent implementation lives under `core/agent`; shared tools, SubAgents and utilities live under `core/tool`, `core/subagent` and `core/utils`. The basic architecture is as follows:
 
 1. `src/cli/cli.py` provides the outer CLI Loop, while `src/remote/` provides Remote's outer Event Loop;
-2. Both use the shared Agent Loop in `src/core/runner.py`;
-3. Each Agent Iterate (LLM request and tool calls) runs through `step` in `src/core/agent.py`.
+2. Both use the shared Agent Loop in `src/core/agent/runner.py`;
+3. Each Agent Iterate (LLM request and tool calls) runs through `step` in `src/core/agent/agent.py`.
 
 ## 1. Features
 

@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/__init__.py
  # @date 2026/08/13
- # 
- # @brief Tool Package.
+ #
+ # @brief Built-in tool catalog for Agent runtimes.
+ # Exports shell, filesystem, document, media and agent-operation tool classes.
+ # Provides the classes assembled by the Agent tool factory.
  #
 
 from .shell.bash_tool import BashTool

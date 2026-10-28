@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/filesystem/read_file_tool.py
  # @date 2026/08/13
- # 
- # @brief Read File Tool.
+ #
+ # @brief UTF-8 text-file reading tool.
+ # Reads complete files or selected one-based line ranges with optional numbering.
+ # Rejects binary inputs and oversized files before rendering their contents.
  #
 
 import os

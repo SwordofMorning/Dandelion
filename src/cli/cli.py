@@ -1,8 +1,10 @@
 ##
  # @file src/cli/cli.py
  # @date 2026/08/04
- # 
- # @brief Interactive CLI for Dandelion.
+ #
+ # @brief Interactive Dandelion terminal workspace.
+ # Handles session commands, staged prompt editing, manual Remote backups and
+ # turn recovery around the shared Core agent loop.
  #
  # @note Ctrl+C contract (turn interrupt + rollback):
  #   While a turn runs the SIGINT handler only records a stop request; the
@@ -427,7 +429,7 @@ class InteractiveCLI:
      # @return None.
      #
     def _cmd_sync(self, args):
-        from src.core.sync import SessionSync
+        from .sync import SessionSync
 
         if args and (len(args) != 2 or args[0] != "--session"):
             self.cli.error("Usage: sync [--session <id/name>]")
@@ -681,7 +683,7 @@ class InteractiveCLI:
      # @retval (False, err) an API error occurred (all bounded retries exhausted).
      #
     def _run_agent_loop(self):
-        from src.core.runner import run_agent_loop
+        from src.core.agent.runner import run_agent_loop
         return run_agent_loop(self.agent, should_stop=self._try_stop)
     # End-def
 

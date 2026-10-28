@@ -1,10 +1,11 @@
 ##
  # @file src/core/utils/llm_request/llm_request.py
  # @date 2026/08/05
- # 
- # @brief Thread-safe wrapper around LLM providers: message normalization,
- # logging, and sub-agent model routing with retry/fallback.
- # 
+ #
+ # @brief LLM request normalization and routed provider calls.
+ # Wraps provider requests with shared logging and runtime output callbacks,
+ # and routes SubAgent tasks through cached providers with retry and fallback.
+ #
  # @note Two LLM Request:
  # - Main Agent
  #      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM

@@ -1,5 +1,5 @@
 ##
- # @file src/core/sysprompt.py
+ # @file src/core/agent/sysprompt.py
  # @date 2026/08/05
  #
  # @brief System Prompt Builder.

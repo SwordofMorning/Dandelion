@@ -1,10 +1,13 @@
 ##
- # @file src/remote/store.py
+ # @file src/remote/storage/store.py
  # @date 2026/10/27
  #
- # @brief Durable lifecycle storage for the optional remote runtime.
+ # @brief SQLite remote lifecycle persistence.
+ # Stores jobs, events, schedules and independent activity records, coordinates
+ # thread-safe wakeups, and recovers pending work without replaying active jobs.
  #
-
+ # @note The database persists lifecycle state, not an in-flight subagent checkpoint.
+ #
 
 import datetime as dt
 import json

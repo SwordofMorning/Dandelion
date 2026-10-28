@@ -1,8 +1,10 @@
 ##
  # @file src/core/utils/llm_provider/anthropic.py
  # @date 2026/08/05
- # 
- # @brief Anthropic API Implement.
+ #
+ # @brief Anthropic Messages provider adapter.
+ # Builds synchronous and streamed Messages requests, applies endpoint-specific
+ # reasoning controls, and returns responses through the shared provider interface.
  #
 
 import inspect

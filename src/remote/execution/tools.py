@@ -1,10 +1,13 @@
 ##
- # @file src/remote/tools.py
+ # @file src/remote/execution/tools.py
  # @date 2026/10/27
  #
- # @brief Small remote-main tools for background work and stored session access.
+ # @brief Remote main-agent delegation and inspection tools.
+ # Exposes background submission, job and schedule control, and bounded reads
+ # of committed session backups to the remote conversation agent.
  #
-
+ # @note Submitting a task acknowledges acceptance; its result arrives in a later event.
+ #
 
 import json
 from src.core.tool.base_tool import BaseTool
@@ -136,7 +139,7 @@ class TaskControlTool(BaseTool):
             elif action == "cancel_schedule":
                 result = {"cancelled": self.jobs.store.cancel_schedule(schedule_id, self.session_id)}
             elif action in ("list_sessions", "read_session"):
-                from .backups import BackupStore
+                from ..storage.backups import BackupStore
                 backups = BackupStore(self.jobs.store)
                 if action == "list_sessions":
                     result = {"sessions": backups.list_sessions(device=device, project=project)}

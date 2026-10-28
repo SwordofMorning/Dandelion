@@ -1,7 +1,11 @@
 ##
  # @file src/core/utils/llm_provider/openai.py
  # @date 2026/08/05
- # 
+ #
+ # @brief OpenAI Chat Completions provider adapter.
+ # Converts common messages and tools into Chat Completions requests, applies
+ # supported reasoning controls, and normalizes complete or streamed responses.
+ #
  # @todo Need update to ResponseAPI.
  # Not impl now.
  #

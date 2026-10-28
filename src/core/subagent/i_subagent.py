@@ -1,11 +1,10 @@
 ##
  # @file src/core/subagent/i_subagent.py
  # @date 2026/08/07
- # 
- # @brief Subagent virtual base class.
- # subagent.py provided a generic subagent class derivative from virtual parent,
- # which seems unnecessary;
- # but if you need to implement a specified subagent class, this virtual might be useful.
+ #
+ # @brief Shared SubAgent interface and execution state.
+ # Stores the model client, logger, configuration and mounted tool schemas, and
+ # defines the run contract implemented by concrete delegated workers.
  #
 
 ##

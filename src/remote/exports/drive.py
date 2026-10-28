@@ -1,6 +1,12 @@
 ##
- # @file src/remote/drive.py
- # @brief Explicit Google Docs export for independent activity records.
+ # @file src/remote/exports/drive.py
+ # @date 2026/10/27
+ #
+ # @brief Explicit Google Docs activity export.
+ # Builds UTC daily reports from independent activity records, refreshes OAuth
+ # credentials when configured, and creates or updates stable Drive documents.
+ #
+ # @note CLI session backups do not automatically generate or upload these reports.
  #
 
 import datetime as dt

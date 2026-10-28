@@ -1,8 +1,13 @@
 ##
- # @file src/core/sync.py
+ # @file src/cli/sync.py
  # @date 2026/10/27
  #
- # @brief Manual, byte-preserving session backups to a configured Remote.
+ # @brief Manual session snapshot upload client.
+ # Reads fixed history.log and meta.log bytes from selected local sessions,
+ # uploads bounded chunks, and verifies the Remote's final snapshot receipt.
+ #
+ # @note Only explicit CLI sync commands initiate transfers. The client neither
+ # changes local session files nor retries automatically in the background.
  #
 
 import base64

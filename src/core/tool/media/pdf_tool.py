@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/media/pdf_tool.py
  # @date 2026/09/30
- # 
- # @brief Read PDF Tool (multimodal).
+ #
+ # @brief Whole-document PDF reading tool.
+ # Validates PDFs against model file, byte, page and request limits.
+ # Returns the document block together with a persistent session asset pointer.
  #
  # @note This tool sends the WHOLE PDF as an Anthropic "document" block. Page
  # ranges are deliberately NOT supported: the Anthropic protocol has no page

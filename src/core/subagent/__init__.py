@@ -1,10 +1,10 @@
 ##
  # @file src/core/subagent/__init__.py
  # @date 2026/08/07
- # 
- # @brief Subagent Package.
- # Provides the sub-agent pool (orchestrator), virtual/derived agent classes,
- # toolset registry and result types.
+ #
+ # @brief Synchronous SubAgent package exports.
+ # Exposes the worker interface, concrete implementation, pool, named toolset
+ # catalog and structured result type used by the parent agent.
  #
 
 from .registry import TOOLSET_REGISTRY, resolve_toolset

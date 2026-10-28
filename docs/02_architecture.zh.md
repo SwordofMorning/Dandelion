@@ -140,7 +140,7 @@ windows_jobs = 2
 3. 通过 `nofollow_imports` 明确 Nuitka 不应该追踪哪些大文件（`--nofollow-import-to`）；
 4. 通过 `include_std_modules` 引入哪些标准库必须包含，避免后期 C 编译时的错误；
 5. Windows 下追加 PE 版本资源（`--product-name/--product-version/--file-version`，版本号必须为纯数字，故使用 pyproject 静态版本而非 CI tag）与图标参数；
-6. 最后通过 `subprocess.run` 调用 Nuitka（`--mode=standalone`、`--include-package=src`、`--include-module=mk.lib.*`），生成构建产物。
+6. 最后通过 `subprocess.run` 调用 Nuitka（`--mode=standalone`、`--include-package=src.cli`、`--include-package=src.core`、`--nofollow-import-to=src.remote`、`--include-module=mk.lib.*`），生成构建产物。
 
 #### 2.3.3 后处理
 
@@ -181,8 +181,8 @@ windows_jobs = 2
 
 `src/` 下仅有三个主包：
 
-1. `core`，公共支柱：共享 Agent Loop、运行时接口、工具装配、上下文压缩、记忆管理和手动会话备份客户端；`core/subagent` 管理子代理，`core/tool` 实现工具，`core/utils` 提供配置、日志、模型路由与 API 请求；
-2. `cli`，终端交互、命令处理与 Ctrl+C 回滚；
+1. `core`，公共支柱：`core/agent` 收纳 Main Agent、同步 Agent Loop、工具装配、上下文压缩、记忆与提示词；`core/runtime.py` 定义两种宿主共用的回调接口，`core/subagent` 管理子代理，`core/tool` 实现工具，`core/utils` 提供配置、日志、模型路由与 API 请求；
+2. `cli`，终端交互、命令处理、Ctrl+C 回滚，以及 `cli/sync.py` 中的手动会话备份客户端；
 3. `remote`，服务器事件循环、后台任务、会话备份接收、Telegram 和调度。
 
 CLI 和 Remote 分别依赖 Core，Core 不导入它们。Nuitka 仅显式包含 `src.cli` 和 `src.core`（连同其子包），并排除 `src.remote`。Remote 的用法见[部署说明](03_remote.zh.md)。
@@ -312,11 +312,21 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 ## 五、Agent 核心设计
 
-`src/core` 是 CLI 与 Remote 的公共支柱：`runner.py` 提供同步 Agent Loop，`runtime.py` 定义输出、审批和取消接口，`tools.py` 按运行模式装配 Main 与 Worker 工具，`sync.py` 提供手动原始会话备份。其余模块负责 Main Agent 的记忆管理、上下文压缩、Skill 加载。下面从 `sysprompt` 入手介绍，再阅读 SubAgent 的设计。
+`src/core/agent/` 集中保存 Main Agent 的实现：`agent.py` 执行单轮请求与工具迭代，`runner.py` 提供同步 Agent Loop，`tools.py` 装配 Main 与 Worker 工具，其余模块负责提示词、记忆、上下文压缩与 Skill。跨宿主的输出、审批和取消接口仍独立放在 `src/core/runtime.py`；手动备份客户端归入 `src/cli/sync.py`。下面从 `sysprompt` 入手介绍，再阅读 SubAgent 的设计。
+
+```text
+src/core/
+├── agent/       # Main Agent、循环、上下文与工具装配
+├── subagent/    # 同步委派、路由结果与并发分发
+├── tool/        # 具体工具及工具基类
+├── utils/       # 配置、日志、LLM 请求与模型路由
+├── runtime.py   # 宿主提供的输出、审批、取消回调
+└── __init__.py  # 按需导出的公共入口
+```
 
 ### 5.1 sysprompt
 
-Dandelion 的 sysprompt 被以常量的方式定义在 `src/core/sysprompt.py`（`PromptBuilder`）中，而不是采用文件加载的方式来实现。对于 sysprompt，其中的拼接方式是：
+Dandelion 的 sysprompt 被以常量的方式定义在 `src/core/agent/sysprompt.py`（`PromptBuilder`）中，而不是采用文件加载的方式来实现。对于 sysprompt，其中的拼接方式是：
 
 1. 首先，定义 `[Dandelion]` 身份与环境信息，以便于 LLM 使用正确的 shell 命令；
 2. 其次，如果启用了 SubAgent，那么添加相应的 SubAgent 调用规则；
@@ -340,7 +350,7 @@ Dandelion 的 sysprompt 被以常量的方式定义在 `src/core/sysprompt.py`�
 
 ### 5.2 skill
 
-`src/core/skill.py`（`SkillManager`）负责将 `llm/skill` 下的各 skill 文件扫描注册为"名称 -> 描述/内容"的目录，`get_catalog()` 将 `- name: description` 列表插入到 sysprompt 中。如果 LLM 需要读取 skill 全文，则通过 `load_skill` 工具（`LoadSkillTool`）按名称获取。
+`src/core/agent/skill.py`（`SkillManager`）负责将 `llm/skill` 下的各 skill 文件扫描注册为"名称 -> 描述/内容"的目录，`get_catalog()` 将 `- name: description` 列表插入到 sysprompt 中。如果 LLM 需要读取 skill 全文，则通过 `load_skill` 工具（`LoadSkillTool`）按名称获取。
 
 ### 5.3 memory
 
@@ -357,11 +367,11 @@ Dandelion 的记忆管理可以简要地分为：
 
 记忆写入的目录（层级）由 LLM 通过 `remember` 工具的 `scope` 参数（`global`/`session`）指定；session 层未配置时写入 session 层会明确报错，而不是落盘在 global 中。
 
-值得注意的是，为了方便 LLM 进行索引（提取），记忆中的内容均采用英文（ASCII）撰写（语言策略）。在 `src/core/memory.py` 中，以 `class MemoryManager` 的形式将记忆的读、写进行了封装；工具层（`remember`/`update_state`）会拒绝非 ASCII 输入并提示翻译，`test/ascii_check.py` 则保证源码/记忆文件本身不混入非 ASCII。详细的函数调用链可以在 `@file` 部分注释中查看。
+值得注意的是，为了方便 LLM 进行索引（提取），记忆中的内容均采用英文（ASCII）撰写（语言策略）。在 `src/core/agent/memory.py` 中，以 `class MemoryManager` 的形式将记忆的读、写进行了封装；工具层（`remember`/`update_state`）会拒绝非 ASCII 输入并提示翻译，`test/ascii_check.py` 则保证源码/记忆文件本身不混入非 ASCII。详细的函数调用链可以在 `@file` 部分注释中查看。
 
 ### 5.4 agent
 
-`src/core/agent.py` 中定义了 Main Agent（`MyAgent`）所需要的全部功能。在前述的[CLI 小节](#46-cli)中我们可以看到，agent 中的 `step()` 并不是传统意义上的 Agent Loop，而是每一次 Agent Loop 中的、针对 Tools 的 Loop/Iterate。因此，让我们直接从 `step()` 开始阅读。
+`src/core/agent/agent.py` 中定义了 Main Agent（`MyAgent`）所需要的全部功能。在前述的[CLI 小节](#46-cli)中我们可以看到，agent 中的 `step()` 并不是传统意义上的 Agent Loop，而是每一次 Agent Loop 中的、针对 Tools 的 Loop/Iterate。因此，让我们直接从 `step()` 开始阅读。
 
 #### 5.4.1 step()
 

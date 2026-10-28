@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/filesystem/edit_file_tool.py
  # @date 2026/08/13
- # 
- # @brief Edit File Tools.
+ #
+ # @brief Exact-text file editing tool.
+ # Replaces all matches of a supplied text block in an existing UTF-8 file.
+ # Checks workspace access and reports missing files or unmatched source text.
  #
 
 import os

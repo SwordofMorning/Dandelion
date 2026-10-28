@@ -1,8 +1,10 @@
 ##
  # @file src/core/utils/logging/backup.py
  # @date 2026/09/15
- # 
- # @brief Turn-scoped session backup used by the Ctrl+C rollback.
+ #
+ # @brief Turn-scoped session backup and rollback.
+ # Copies session state before a user commit and restores that snapshot after
+ # a cooperative stop while leaving external workspace actions outside rollback.
  #
  # @note Plain file copies only (no symlinks, no hardlinks), so the behaviour is
  #       identical on Linux / macOS / Windows.

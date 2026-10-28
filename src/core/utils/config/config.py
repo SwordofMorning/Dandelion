@@ -1,8 +1,10 @@
 ##
  # @file src/core/utils/config/config.py
  # @date 2026/08/05
- # 
- # @brief Load global config.
+ #
+ # @brief Configuration parsing and validation.
+ # Loads model providers, reasoning and media capabilities, delegation limits,
+ # explicit Remote sync settings and optional remote-device definitions.
  #
  # @note Model metadata (json) like:
  # {

@@ -1,6 +1,12 @@
 ##
- # @file src/remote/jobs.py
- # @brief Execute durable background jobs with isolated agent sessions.
+ # @file src/remote/execution/jobs.py
+ # @date 2026/10/27
+ #
+ # @brief Durable background job execution.
+ # Adapts synchronous Core subagents to bounded background workers, binds each
+ # submission to its own runtime, and serializes jobs sharing one workspace.
+ #
+ # @note Cancellation is cooperative; queued jobs remain recoverable during shutdown.
  #
 
 import os

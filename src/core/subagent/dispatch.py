@@ -3,6 +3,8 @@
  # @date 2026/10/21
  #
  # @brief Ordered tool dispatch with parallel SubAgent segments.
+ # Runs consecutive spawn calls in bounded parallel segments and executes other
+ # tools as barriers, returning one outcome per call in the original order.
  #
  # @note Contract (used by MyAgent.step and SubAgent.run):
  #   - Every tool_use block gets exactly one outcome, at its own ordinal slot,

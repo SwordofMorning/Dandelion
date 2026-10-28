@@ -1,10 +1,10 @@
 ##
  # @file src/core/subagent/pool.py
  # @date 2026/08/07
- # 
- # @brief Control all subagent.py
- # Held by MyAgent; creates SubAgents, assigns IDs, mounts toolsets and turns
- # every failure into a structured SubAgentResult.
+ #
+ # @brief Synchronous SubAgent construction and execution pool.
+ # Assigns worker IDs, enforces delegation depth, resolves named toolsets and
+ # converts construction or execution failures into structured results.
  #
  # @note The pool is the last, non-bypassable depth gate: whatever a tool or a
  #       model asks for, depth must satisfy 1 <= depth <= max_depth.

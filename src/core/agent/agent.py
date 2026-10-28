@@ -1,17 +1,23 @@
 ##
- # @file src/core/agent.py
+ # @file src/core/agent/agent.py
  # @date 2026/08/06
  # 
- # @brief Agent-Loop and others helper functions.
+ # @brief Main-agent request and tool-step execution.
+ # Coordinates persisted history, model requests, ordered tool dispatch, media
+ # attachments and usage accounting for both terminal and remote callers.
  #
  # @note Agent runtime call chain:
- #   CLI interactive loop
- #     -> MyAgent.step()                 # LLM Round-Trip Step (tools iterator)
- #     -> _compact_context()             # token budget check + LLM summary
- #     -> _get_memories()                # memory injection (cached)
+ #   CLI or Remote turn runner
+ #     -> MyAgent.step()                 # one LLM round trip and tool dispatch
+ #     -> PromptBuilder.build()          # static system instructions
+ #     -> _inject_dynamic_context()      # memories and session task state
  #     -> SafeLLMClient.safe_stream_request()
- #     -> tool handlers (memory/state/fs/...)
+ #     -> ContextCompressor.compress()   # when context overflow requires it
+ #     -> dispatch_tool_calls()          # memory/state/filesystem/delegation
  #     -> history append (tool_result)   # loop continues until stop_reason != tool_use
+ #
+ # @note The outer runner owns turn completion and cancellation checkpoints;
+ # step() keeps each tool call paired with its result before returning.
  #
 
 import os
@@ -21,10 +27,10 @@ import time
 
 from src.core.utils import SafeLLMClient
 from src.core.runtime import Runtime
-from src.core.memory import MemoryManager
-from src.core.skill import SkillManager
-from src.core.sysprompt import PromptBuilder
-from src.core.tools import build_tools
+from src.core.agent.memory import MemoryManager
+from src.core.agent.skill import SkillManager
+from src.core.agent.sysprompt import PromptBuilder
+from src.core.agent.tools import build_tools
 from src.core.subagent.dispatch import dispatch_tool_calls
 
 from src.core.tool.media import (

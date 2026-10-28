@@ -1,8 +1,10 @@
 ##
  # @file src/core/utils/llm_provider/base.py
  # @date 2026/08/05
- # 
- # @brief Abstract base class for LLM Providers.
+ #
+ # @brief Common LLM provider interface.
+ # Defines provider construction, synchronous and streamed request methods,
+ # and response-text extraction used by the shared request client.
  #
 
 from abc import ABC, abstractmethod

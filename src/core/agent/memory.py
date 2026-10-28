@@ -1,5 +1,5 @@
 ##
- # @file src/core/memory.py
+ # @file src/core/agent/memory.py
  # @date 2026/08/05
  # 
  # @brief Agent's Memory Management.

@@ -1,9 +1,10 @@
 ##
  # @file src/cli/printer.py
  # @date 2026/08/04
- # 
- # @brief CLI printing and formatting utility.
- # A wrapper function, string -> printer -> string(colorful) -> terminal
+ #
+ # @brief Colored terminal output and formatting.
+ # Formats severity prefixes, agent messages, dividers and key-value displays
+ # through a consistent terminal printer without changing agent execution.
  #
 
 import builtins

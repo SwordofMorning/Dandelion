@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/filesystem/list_directory_tool.py
  # @date 2026/08/13
- # 
- # @brief List Directory.
+ #
+ # @brief Filtered directory listing and tree tool.
+ # Lists entries or builds a bounded-depth directory tree with filename filtering.
+ # Omits hidden entries and common generated directories from the rendered result.
  #
 
 import os

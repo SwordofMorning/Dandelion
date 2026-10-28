@@ -1,9 +1,10 @@
 ##
  # @file src/core/utils/logging/__init__.py
  # @date 2026/08/05
- # 
- # @brief Logging Package.
- # Provides logging utilities for the Dandelion agent.
+ #
+ # @brief Request logging and session persistence package.
+ # Exports the append-only request logger and session manager for persisted
+ # histories, metadata, staged drafts and session-local state.
  #
 
 from .logger import AgentLogger

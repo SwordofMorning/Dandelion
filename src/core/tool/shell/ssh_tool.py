@@ -1,9 +1,10 @@
 ##
  # @file src/core/tool/shell/ssh_tool.py
  # @date 2026/08/14
- # 
- # @brief SSH Tool.
- # Executes shell commands on remote devices (Ubuntu host / embedded board) via SSH.
+ #
+ # @brief Configured-device SSH execution tool.
+ # Resolves device aliases, applies command-policy checks and runs remote commands.
+ # Reuses locked client connections and bounds captured output for each stream.
  #
  # @note Security model: malicious-command semantic analysis instead of
  # blanket path blocking (embedded high-frequency dirs like /etc/init.d stay

@@ -140,7 +140,7 @@ The core function of `_run_nuitka()` is to convert Python code into binary artif
 3. Explicitly specifies which large files Nuitka should not trace (`--nofollow-import-to`) via `nofollow_imports`.
 4. Enforces inclusion of required standard libraries via `include_std_modules` to prevent runtime errors after C compilation.
 5. On Windows, appends PE version resources (`--product-name/--product-version/--file-version`; since versions must be purely numeric, it uses static pyproject versions instead of CI tags) and icon parameters.
-6. Finally, invokes Nuitka via `subprocess.run` (`--mode=standalone`, `--include-package=src`, `--include-module=mk.lib.*`) to generate the artifact.
+6. Finally, invokes Nuitka via `subprocess.run` (`--mode=standalone`, `--include-package=src.cli`, `--include-package=src.core`, `--nofollow-import-to=src.remote`, `--include-module=mk.lib.*`) to generate the artifact.
 
 #### 2.3.3 Post-Processing
 
@@ -181,8 +181,8 @@ Because we manually excluded certain libraries in the previous section to save c
 
 `src/` contains three main packages:
 
-1. `core`: The common foundation: Agent Loop, runtime callbacks, tool assembly, context compression, memory and the manual session-backup client. `core/subagent` manages SubAgents, `core/tool` implements tools, and `core/utils` provides configuration, logging, model routing and API requests.
-2. `cli`: Terminal interaction, commands and Ctrl+C rollback.
+1. `core`: The common foundation. `core/agent` contains the Main Agent, synchronous Agent Loop, tool assembly, context compression, memory and prompts. `core/runtime.py` defines shared host callbacks; `core/subagent` manages SubAgents, `core/tool` implements tools, and `core/utils` provides configuration, logging, model routing and API requests.
+2. `cli`: Terminal interaction, commands, Ctrl+C rollback and the manual session-backup client in `cli/sync.py`.
 3. `remote`: Server events, background jobs, session-backup ingestion, Telegram and scheduling.
 
 CLI and Remote each depend on Core; Core imports neither host. Nuitka explicitly includes only `src.cli` and `src.core` with their subpackages, and excludes `src.remote`. See the [Remote guide](03_remote.en.md) for deployment.
@@ -312,11 +312,21 @@ Details:
 
 ## 5. Agent Core Design
 
-`src/core` is shared by CLI and Remote: `runner.py` provides the synchronous Agent Loop, `runtime.py` defines output, approval and cancellation callbacks, `tools.py` selects Main and Worker tools, and `sync.py` implements manual raw-session backups. Other modules handle Main Agent memory, context compression and skills. We start with `sysprompt`, then cover SubAgent design in the next chapter.
+`src/core/agent/` groups the Main Agent implementation: `agent.py` executes one request/tool iteration, `runner.py` provides the synchronous Agent Loop, `tools.py` selects Main and Worker tools, and the other modules handle prompts, memory, context compression and skills. Cross-host output, approval and cancellation callbacks remain in `src/core/runtime.py`; the manual backup client belongs to `src/cli/sync.py`. We start with `sysprompt`, then cover SubAgent design in the next chapter.
+
+```text
+src/core/
+├── agent/       # Main Agent, loop, context and tool assembly
+├── subagent/    # Synchronous delegation, results and parallel dispatch
+├── tool/        # Concrete tools and the common tool base
+├── utils/       # Config, logging, LLM requests and routing
+├── runtime.py   # Host output, approval and cancellation callbacks
+└── __init__.py  # Lazily loaded public entry points
+```
 
 ### 5.1 sysprompt
 
-Dandelion's system prompt is defined as constants in `src/core/sysprompt.py` (`PromptBuilder`) rather than loading from files. The sysprompt assembly process:
+Dandelion's system prompt is defined as constants in `src/core/agent/sysprompt.py` (`PromptBuilder`) rather than loading from files. The sysprompt assembly process:
 
 1. First, define the `[Dandelion]` identity and environment info, enabling the LLM to use correct shell commands.
 2. Second, append SubAgent usage rules if SubAgents are enabled.
@@ -340,7 +350,7 @@ Crucially: To maximize Prompt Caching hit rates, **dynamic content** (memory ind
 
 ### 5.2 skill
 
-`src/core/skill.py` (`SkillManager`) is responsible for scanning files under `llm/skill/` and registering them into a `name -> description/content` catalog. `get_catalog()` inserts this `- name: description` list into the sysprompt. When the LLM needs to read the full text of a skill, it fetches it by name via the `load_skill` tool (`LoadSkillTool`).
+`src/core/agent/skill.py` (`SkillManager`) is responsible for scanning files under `llm/skill/` and registering them into a `name -> description/content` catalog. `get_catalog()` inserts this `- name: description` list into the sysprompt. When the LLM needs to read the full text of a skill, it fetches it by name via the `load_skill` tool (`LoadSkillTool`).
 
 ### 5.3 memory
 
@@ -357,11 +367,11 @@ Memories are split into two layers:
 
 The write directory (layer) is specified by the LLM via the `scope` parameter (`global`/`session`) in the `remember` tool. If the session layer isn't configured, attempting to write there explicitly raises an error rather than silently saving to global.
 
-Note that to facilitate easier LLM indexing (extraction), all memory contents must be written in English (ASCII language policy). `src/core/memory.py` encapsulates memory read/writes within `class MemoryManager`. The tool layer (`remember`/`update_state`) rejects non-ASCII inputs, prompting translations, while `test/ascii_check.py` ensures the source code and memory files themselves contain no non-ASCII characters. Check the `@file` docstrings for detailed call chains.
+Note that to facilitate easier LLM indexing (extraction), all memory contents must be written in English (ASCII language policy). `src/core/agent/memory.py` encapsulates memory read/writes within `class MemoryManager`. The tool layer (`remember`/`update_state`) rejects non-ASCII inputs, prompting translations, while `test/ascii_check.py` ensures the source code and memory files themselves contain no non-ASCII characters. Check the `@file` docstrings for detailed call chains.
 
 ### 5.4 agent
 
-`src/core/agent.py` defines all required functionalities of the Main Agent (`MyAgent`). As noted in the [CLI Section](#46-cli), the `step()` in the agent is not a traditional Agent Loop, but a specific Tools Loop/Iterate for a single turn. Therefore, let's look directly at `step()`.
+`src/core/agent/agent.py` defines all required functionalities of the Main Agent (`MyAgent`). As noted in the [CLI Section](#46-cli), the `step()` in the agent is not a traditional Agent Loop, but a specific Tools Loop/Iterate for a single turn. Therefore, let's look directly at `step()`.
 
 #### 5.4.1 `step()`
 

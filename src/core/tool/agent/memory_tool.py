@@ -1,9 +1,11 @@
 ##
  # @file src/core/tool/agent/memory_tool.py
  # @date 2026/08/13
- # 
- # @brief Memory **Save** Tool For Agent.
- # 
+ #
+ # @brief Persistent memory-writing tool.
+ # Validates model-facing memory fields and forwards writes to the global or
+ # active-session memory tier through MemoryManager.
+ #
  # @note Only allowed to write ASCII characters due to key words match.
  #
  # @note write memory: LLM -> MemoryTool
@@ -21,7 +23,7 @@ class MemoryTool(BaseTool):
      #
      # @param memory_manager Memory Manager Class.
      #
-     # @see src/core/memory.py
+     # @see src/core/agent/memory.py
      #
     def __init__(self, memory_manager):
         super().__init__()

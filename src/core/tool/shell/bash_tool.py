@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/shell/bash_tool.py
  # @date 2026/08/13
- # 
- # @brief Direct Shell Call.
+ #
+ # @brief Workspace-bound local shell command tool.
+ # Checks command text and recognized path arguments before starting a shell
+ # subprocess, then bounds execution time and captures its output for the Agent.
  #
  # @note Shell selection: Bash is preferred when available (also on Windows,
  # e.g. Git Bash); PowerShell is used only as the fallback. The shell

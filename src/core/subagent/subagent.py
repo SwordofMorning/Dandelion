@@ -1,10 +1,10 @@
 ##
  # @file src/core/subagent/subagent.py
  # @date 2026/08/07
- # 
- # @brief Inherits from the original ISubAgent with recursive deep.
- # A SubAgent which could do some jobs, like a thread.
- # When call run(), a new LLM Context were created which also will be written into logs.
+ #
+ # @brief Synchronous delegated-agent execution with bounded recursion.
+ # Runs a private conversation through model routing and serial tool dispatch,
+ # collecting media payloads, file artifacts and structured completion results.
  #
  # @note Depth model (1-based): root agent = 0, direct SubAgent = 1,
  #       SubSubAgent = 2. max_depth comes from [Main] SUB_DEPTH. A SubAgent

@@ -1,9 +1,10 @@
 ##
  # @file src/core/subagent/result.py
  # @date 2026/08/07
- # 
- # @brief Define the structured results to be returned to the parent Agent.
- # Messages struct between Agents.
+ #
+ # @brief Structured execution results returned to parent agents.
+ # Records worker status, artifacts, timing, model selection and nested results,
+ # and renders bounded context summaries for tool-result messages.
  #
 
 from dataclasses import dataclass, field

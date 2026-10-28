@@ -1,9 +1,10 @@
 ##
  # @file src/core/tool/editor/markdown_tool.py
  # @date 2026/08/13
- # 
- # @brief Markdown Tool.
- # Same as Write file, but need to load markdown write skill firstly.
+ #
+ # @brief Workspace-bound Markdown file tool.
+ # Reads, writes and appends Markdown files using paths relative to the workspace.
+ # Applies shared path approval and guarded file-opening checks before access.
  #
  # @todo need to add some 'edit/modify' function.
  #

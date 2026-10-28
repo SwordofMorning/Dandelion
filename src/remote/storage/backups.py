@@ -1,6 +1,12 @@
 ##
- # @file src/remote/backups.py
- # @brief Receive byte-preserving session snapshots and publish complete backups.
+ # @file src/remote/storage/backups.py
+ # @date 2026/10/28
+ #
+ # @brief Manual session snapshot storage.
+ # Validates chunk offsets, file sizes and SHA-256 manifests, publishes complete
+ # history/meta snapshots, and provides latest-copy lookup and paginated reads.
+ #
+ # @note Only history.log and meta.log are accepted; uploads never become live sessions.
  #
 
 import base64

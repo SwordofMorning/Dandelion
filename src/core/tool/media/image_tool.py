@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/media/image_tool.py
  # @date 2026/09/30
- # 
- # @brief Read Image Tool (multimodal).
+ #
+ # @brief Image-reading tool for multimodal requests.
+ # Validates image paths and configured admission limits, estimates vision input
+ # cost and returns a media block with a persistent session asset pointer.
  #
  # @note The image is sent as an Anthropic "image" block (base64). Admission is
  # size based only, per design: the token cost is still estimated for budget

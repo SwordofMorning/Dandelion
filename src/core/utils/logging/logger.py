@@ -1,9 +1,10 @@
 ##
  # @file src/core/utils/logging/logger.py
  # @date 2026/08/05
- # 
- # @brief Agent Logger Component.
- # Provides logging utilities for the agent.
+ #
+ # @brief Daily agent request logger.
+ # Appends timestamped request and response records to daily log files,
+ # serializing SDK response objects as readable JSON payloads.
  #
 
 import os

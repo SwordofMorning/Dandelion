@@ -1,8 +1,10 @@
 ##
  # @file src/core/subagent/registry.py
  # @date 2026/08/07
- # 
- # @brief The set of pre-defined tools that the management sub-agent can acquire.
+ #
+ # @brief Named toolset catalog for delegated workers.
+ # Resolves predefined tool names against mounted tool instances and optionally
+ # restricts the selection to capabilities available to the parent worker.
  #
 
 TOOLSET_REGISTRY = {

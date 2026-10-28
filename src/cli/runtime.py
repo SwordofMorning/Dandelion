@@ -1,6 +1,10 @@
 ##
  # @file src/cli/runtime.py
- # @brief Adapt the terminal to the host-independent core runtime callbacks.
+ # @date 2026/10/27
+ #
+ # @brief Terminal adapters for shared runtime callbacks.
+ # Connects Core output, cancellation checks and workspace approvals to the
+ # terminal, including serialized approval prompts and Ctrl+C-style cancellation.
  #
 
 from src.core.runtime import Runtime

@@ -1,9 +1,10 @@
 ##
  # @file src/core/tool/editor/excel_tool.py
  # @date 2026/08/13
- # 
- # @brief Excel Tool, with 2 class.
- # A general excel (xlsx) read/write tool powered by openpyxl and tabulate.
+ #
+ # @brief XLSX worksheet reading and writing tools.
+ # Reads worksheets as Markdown tables and writes Markdown tables into workbooks.
+ # Loads the spreadsheet and table-formatting libraries only when needed.
  #
 
 import importlib

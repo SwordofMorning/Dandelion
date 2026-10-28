@@ -1,9 +1,10 @@
 ##
  # @file src/cli/__init__.py
  # @date 2026/08/04
- # 
- # @brief CLI Package.
- # Provides interactive command-line interface and colored printing utilities.
+ #
+ # @brief Terminal frontend package exports.
+ # Provides colored printing utilities and lazily exposes the interactive shell
+ # without creating a prompt session merely by importing the package.
  #
 
 from .printer import CLIPrinter

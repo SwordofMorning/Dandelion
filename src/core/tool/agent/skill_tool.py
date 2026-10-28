@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/agent/skill_tool.py
  # @date 2026/08/13
- # 
- # @brief Load Skill.
+ #
+ # @brief On-demand skill-loading tool.
+ # Resolves a named skill through SkillManager and returns its full Markdown
+ # instructions to the calling Agent.
  #
 
 from ..base_tool import BaseTool
@@ -16,7 +18,7 @@ class LoadSkillTool(BaseTool):
      #
      # @param skill_manager Skill manager class.
      #
-     # @see src/core/skill.py
+     # @see src/core/agent/skill.py
      #
     def __init__(self, skill_manager):
         self.skill_manager = skill_manager

@@ -1,10 +1,13 @@
 ##
- # @file src/remote/loop.py
+ # @file src/remote/execution/loop.py
  # @date 2026/10/27
  #
- # @brief Blocking event loop with independent persistent notification delivery.
+ # @brief Remote event dispatch and scheduled delivery.
+ # Consumes persisted conversation and job events on the agent-owning thread,
+ # while a separate scheduler delivers reminders and durable reply notifications.
  #
-
+ # @note Notification retries do not rerun model calls or external tool actions.
+ #
 
 import datetime as dt
 import json
@@ -101,7 +104,7 @@ class RemoteLoop:
      # @brief Process one event and produce a reply without retrying tool side effects.
      #
     def _handle(self, event):
-        from src.core.runner import run_agent_loop
+        from src.core.agent.runner import run_agent_loop
 
         if event["kind"] == "job_done" and event["payload"].get("status") in ("cancelled", "interrupted"):
             payload = event["payload"]
@@ -111,7 +114,7 @@ class RemoteLoop:
         agent = self._agent(event["session_id"])
         # Also cover a host-requested reload or a previous in-process dispatch
         # failure before accepting another user event.
-        from .runtime import repair_interrupted_tools
+        from .agent import repair_interrupted_tools
         repair_interrupted_tools(agent)
         cancel = getattr(agent, "_remote_cancel_event", None)
         if cancel is not None:

@@ -1,6 +1,13 @@
 ##
- # @file src/core/runner.py
- # @brief Run the shared agent tool loop at safe cancellation boundaries.
+ # @file src/core/agent/runner.py
+ # @date 2026/10/27
+ #
+ # @brief Shared main-agent turn runner.
+ # Repeats complete agent steps until a response finishes, an API error occurs,
+ # or the caller requests cancellation at a boundary before or after a step.
+ #
+ # @note Host callbacks own any rollback policy. The runner only returns the
+ # completion/error tuple and does not modify history or session files itself.
  #
 
 

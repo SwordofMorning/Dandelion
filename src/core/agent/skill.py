@@ -1,9 +1,10 @@
 ##
- # @file src/core/skill.py
+ # @file src/core/agent/skill.py
  # @date 2026/08/05
  # 
- # @brief Skill Package.
- # Provides agent (LLM request), memory, skill and prompt builder.
+ # @brief Markdown skill discovery and content registry.
+ # Scans skill files, reads their name and description frontmatter, and exposes
+ # a short prompt catalog plus complete skill bodies for explicit tool loads.
  #
  # @note Skill call chain:
  #   load_skill tool / PromptBuilder.build()

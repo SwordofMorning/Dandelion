@@ -1,5 +1,5 @@
 ##
- # @file src/core/compress.py
+ # @file src/core/agent/compress.py
  # @date 2026/10/12
  #
  # @brief Reactive context compaction module.

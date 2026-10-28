@@ -1,8 +1,10 @@
 ##
  # @file src/cli/interrupt.py
  # @date 2026/09/15
- # 
- # @brief Process-wide stop flag for the Ctrl+C turn interrupt.
+ #
+ # @brief Cooperative terminal turn-interrupt state.
+ # Records stop requests from Ctrl+C and tool approvals for consumption at safe
+ # turn checkpoints, allowing the CLI to restore its pre-commit session backup.
  #
  # @note Two producers, one consumer:
  #   - the CLI SIGINT handler (Ctrl+C while a turn is running),

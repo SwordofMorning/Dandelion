@@ -1,9 +1,11 @@
 ##
  # @file src/core/tool/agent/plan_tool.py
  # @date 2026/08/13
- # 
- # @brief  Use LLM to split the task.
- # 
+ #
+ # @brief Model-assisted task planning tool.
+ # Defines planning inputs and parses structured TaskPlan JSON containing
+ # subtasks, dependencies and toolsets for subsequent delegation.
+ #
  # @note This tool does not perform any specific actions.
  # It calls a separate LLM (without polluting the main thread's memory)
  # to translate complex natural language tasks into a structured JSON

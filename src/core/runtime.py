@@ -1,6 +1,13 @@
 ##
  # @file src/core/runtime.py
- # @brief Provide host callbacks shared by terminal and headless agent runtimes.
+ # @date 2026/10/27
+ #
+ # @brief Host interaction callbacks shared by Core execution components.
+ # Defines output, cancellation, workspace approval and stream-echo settings
+ # used by main agents, subagents and tools without coupling them to a frontend.
+ #
+ # @note Unattended defaults deny workspace escape and disable stream echo;
+ # each CLI or Remote host supplies the callbacks appropriate to its lifetime.
  #
 
 from dataclasses import dataclass

@@ -2,11 +2,11 @@
 
 # Dandelion
 
-一个CLI式的Agent工具，采用Nuitka构建，可以配合交叉编译工具链实现跨平台。`src/` 仅分为 `cli`、`core`、`remote` 三个主包；工具、SubAgent 和通用接口分别位于 `core/tool`、`core/subagent`、`core/utils`。基础结构如下：
+一个CLI式的Agent工具，采用Nuitka构建，可以配合交叉编译工具链实现跨平台。`src/` 仅分为 `cli`、`core`、`remote` 三个主包；Main Agent 实现集中放在 `core/agent`，工具、SubAgent 和通用接口分别位于 `core/tool`、`core/subagent`、`core/utils`。基础结构如下：
 
 1. `src/cli/cli.py` 提供外层 CLI Loop，`src/remote/` 提供 Remote 的外层 Event Loop；
-2. 两者共用 `src/core/runner.py` 中的 Agent Loop；
-3. 每一次 Agent Iterate（LLM 与 Tool Call）由 `src/core/agent.py` 中的 `step` 执行。
+2. 两者共用 `src/core/agent/runner.py` 中的 Agent Loop；
+3. 每一次 Agent Iterate（LLM 与 Tool Call）由 `src/core/agent/agent.py` 中的 `step` 执行。
 
 
 ## 一、功能特性

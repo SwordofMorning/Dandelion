@@ -2,22 +2,25 @@
  # @file src/core/__init__.py
  # @date 2026/08/06
  # 
- # @brief Core Package.
- # Provides agent (LLM request), memory, skill and prompt builder.
+ # @brief Shared agent execution package.
+ # Exposes the agent, prompt, memory and compaction helpers through lazy exports.
+ # Keeps execution code, subagents, tools and utilities independent of frontends.
+ #
+ # @note Importing Core does not initialize the CLI or Remote service.
  #
 
 from importlib import import_module
 
 _EXPORTS = {
-    "MemoryManager": ".memory",
-    "SkillManager": ".skill",
-    "PromptBuilder": ".sysprompt",
-    "ContextCompressor": ".compress",
-    "CompressCondition": ".compress",
-    "is_context_overflow_error": ".compress",
-    "extract_usage_tokens": ".compress",
+    "MemoryManager": ".agent.memory",
+    "SkillManager": ".agent.skill",
+    "PromptBuilder": ".agent.sysprompt",
+    "ContextCompressor": ".agent.compress",
+    "CompressCondition": ".agent.compress",
+    "is_context_overflow_error": ".agent.compress",
+    "extract_usage_tokens": ".agent.compress",
     "MyAgent": ".agent",
-    "run_agent_loop": ".runner",
+    "run_agent_loop": ".agent.runner",
 }
 
 __all__ = list(_EXPORTS)

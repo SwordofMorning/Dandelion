@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/filesystem/write_file_tool.py
  # @date 2026/08/13
- # 
- # @brief Write File Tool.
+ #
+ # @brief UTF-8 file creation and replacement tool.
+ # Creates or overwrites files and creates missing parent directories.
+ # Uses shared workspace checks and guarded file opening before writing content.
  #
 
 import os

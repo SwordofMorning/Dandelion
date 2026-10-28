@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/agent/state_tool.py
  # @date 2026/08/13
- # 
- # @brief Update Task State (Agent's Target).
+ #
+ # @brief Session-scoped task-state update tool.
+ # Merges the current target, pending todos and completed items into task_state.json.
+ # Enforces ASCII state fields and atomically persists each updated state.
  #
 
 import os

@@ -1,8 +1,10 @@
 ##
  # @file src/core/utils/routing/model_registry.py
  # @date 2026/08/05
- # 
- # @brief Wrapped model into a class obj.
+ #
+ # @brief Configured model registry and normalized specifications.
+ # Normalizes provider profiles into typed model specifications and preserves
+ # ordered SUB_LIST aliases for model lookup and task-routing decisions.
  #
 
 from dataclasses import dataclass, field

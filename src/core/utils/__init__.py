@@ -1,8 +1,10 @@
 ##
  # @file src/core/utils/__init__.py
  # @date 2026/08/04
- # 
- # @brief Provides utilities for the Dandelion agent.
+ #
+ # @brief Shared Core utility exports.
+ # Exposes configuration, provider, logging and routing helpers through lazy imports,
+ # so callers can use shared services without initializing either frontend.
  #
 
 from importlib import import_module

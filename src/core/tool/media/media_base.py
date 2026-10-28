@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/media/media_base.py
  # @date 2026/09/30
- # 
- # @brief Shared base class for multimodal media tools (PDF and image).
+ #
+ # @brief Shared media admission and result-building helpers.
+ # Centralizes file admission checks, content-addressed session assets and
+ # structured media results used by the image and PDF readers.
  #
  # @note Responsibilities shared by ReadPdfTool and ReadImageTool:
  # 1. workspace sandbox approval via BaseTool._prepare_path();

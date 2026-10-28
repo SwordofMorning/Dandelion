@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/media/media_estimate.py
  # @date 2026/09/30
- # 
- # @brief Media cost estimation helpers (images and PDFs).
+ #
+ # @brief Media input-cost and message hydration helpers.
+ # Reads image dimensions and PDF page counts to estimate media input cost.
+ # Attaches pending media blocks to outgoing message payloads for the provider.
  #
  # @note The estimates are deliberately CONSERVATIVE: every formula rounds up
  # and applies a safety factor, so the local budget never under-counts what the
@@ -52,7 +54,7 @@ MEDIA_COST_FALLBACK = 2000
 COST_MARKER_TEMPLATE = "cost={cost} tokens"
 
 # Matches a whole media pointer, e.g. "[Multimodal asset: a.png (...)]".
-# Imported by src/core/agent.py so the accounting has a single definition.
+# Imported by src/core/agent/agent.py so the accounting has a single definition.
 ASSET_POINTER_RE = r"\[Multimodal asset:[^\]]*\]"
 
 ##

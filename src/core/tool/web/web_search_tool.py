@@ -1,8 +1,10 @@
 ##
  # @file src/core/tool/web/web_search_tool.py
  # @date 2026/08/13
- # 
- # @brief Web Search Tool for Dandelion Agent using Tavily API.
+ #
+ # @brief Tavily-backed web search tool.
+ # Validates search options and calls the configured Tavily search endpoint.
+ # Formats bounded results with titles, URLs and textual content for the Agent.
  #
 
 import json

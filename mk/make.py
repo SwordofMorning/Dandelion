@@ -3,6 +3,10 @@
  # @date 2026/08/07
  # 
  # @brief Makefile-style build entry for Dandelion (Nuitka standalone).
+ # Coordinates build metadata, standalone compilation, dependency copying,
+ # launcher generation and artifact cleanup through configuration-driven targets.
+ #
+ # @note CLI artifacts include src.cli and src.core; src.remote is excluded.
  #
  # @usage
  #   python mk/make.py            : full build (same as 'all')

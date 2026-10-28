@@ -1,8 +1,10 @@
 ##
  # @file src/core/utils/routing/routing_policy.py
  # @date 2026/08/05
- # 
- # @brief Subagent spawn (call/generate) policy.
+ #
+ # @brief Task-based SubAgent model selection.
+ # Infers routing categories from the task and requested toolset, then selects
+ # configured SubAgent models according to category priority and alias order.
  #
  # @note Four routing categories (breaking change, no legacy labels):
  #   media   - images / PDF / charts / waveforms (multimodal models)

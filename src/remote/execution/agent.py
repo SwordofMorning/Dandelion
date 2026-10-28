@@ -1,6 +1,12 @@
 ##
- # @file src/remote/runtime.py
- # @brief Bind each remote conversation to a private and stable core session.
+ # @file src/remote/execution/agent.py
+ # @date 2026/10/27
+ #
+ # @brief Remote conversation agent assembly.
+ # Builds a private Core session and a small delegation toolset for each remote
+ # conversation, snapshots worker context, and repairs interrupted tool results.
+ #
+ # @note Recovery closes protocol gaps without replaying unknown external actions.
  #
 
 import hashlib
@@ -115,7 +121,7 @@ def make_agent_factory(config, data_dir, workspace, jobs):
      #
     def create(session_id):
         from src.core.agent import MyAgent
-        from src.core.tools import build_tools
+        from src.core.agent.tools import build_tools
         from src.core.runtime import Runtime
         from src.core.utils.logging.session import SessionManager
 

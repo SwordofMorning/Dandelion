@@ -1,6 +1,13 @@
 ##
- # @file src/core/tools.py
- # @brief Build fresh tool instances and delegation catalogs for one agent runtime.
+ # @file src/core/agent/tools.py
+ # @date 2026/10/27
+ #
+ # @brief Agent tool construction and delegation catalog assembly.
+ # Creates filesystem, shell, memory, skill and media tools for one agent, then
+ # mounts independently selected main-agent and synchronous worker toolsets.
+ #
+ # @note Every construction binds fresh tool and pool instances to the caller's
+ # runtime and session. Background jobs must construct their own agent objects.
  #
 
 from src.core.subagent import SubAgentPool

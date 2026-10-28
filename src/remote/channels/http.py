@@ -1,6 +1,12 @@
 ##
- # @file src/remote/server.py
- # @brief Serve authenticated messages, session backups and lifecycle requests.
+ # @file src/remote/channels/http.py
+ # @date 2026/10/27
+ #
+ # @brief Authenticated remote HTTP interface.
+ # Dispatches conversation, job, schedule and session-backup requests, enforces
+ # device/admin credential scopes, and bounds uploaded JSON request bodies.
+ #
+ # @note Public HTTPS termination belongs to the deployment reverse proxy.
  #
 
 import hmac
@@ -9,8 +15,8 @@ import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from .store import timestamp
-from .backups import BackupStore
+from ..storage.store import timestamp
+from ..storage.backups import BackupStore
 
 
 MAX_BODY = 1024 * 1024

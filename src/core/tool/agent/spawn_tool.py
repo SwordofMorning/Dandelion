@@ -1,11 +1,13 @@
 ##
  # @file src/core/tool/agent/spawn_tool.py
  # @date 2026/08/13
- # 
- # @brief fork() a new subagent like threads.
+ #
+ # @brief Synchronous SubAgent delegation tools.
+ # Defines root and recursive delegation calls that select worker toolsets,
+ # enforce nesting limits and return structured results to the parent.
  #
  # @note Spawn call chain (1-based depth, max_depth = [Main] SUB_DEPTH):
- #   Root agent (src/core/agent.py, registered only when SUB_DEPTH > 0)
+ #   Root agent (src/core/agent/agent.py, registered only when SUB_DEPTH > 0)
  #     -> SpawnSubagentTool(pool)               # creates depth=1, no parent
  #       -> pool.create_and_run(role_prompt, toolset_name, task_description, depth=1)
  #         -> depth gate: 1 <= depth <= max_depth, else a "failed" result
@@ -125,7 +127,7 @@ class SpawnSubagentTool(BaseTool):
  # @brief Restricted Fork Class (for recursive subagents).
  #
  # @note Two spawn classes exist by design:
- # - SpawnSubagentTool: installed in the ROOT agent (src/core/agent.py),
+ # - SpawnSubagentTool: installed in the ROOT agent (src/core/agent/agent.py),
  #   spawns depth-1 subagents without parent restrictions.
  # - RestrictedSpawnTool: installed in SUBAGENTS only when
  #   depth < max_depth (src/core/subagent/subagent.py), so recursive delegation

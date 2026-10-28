@@ -2,8 +2,9 @@
  # @file src/core/utils/llm_provider/effort.py
  # @date 2026/10/05
  #
- # @brief Single source of truth for the abstract reasoning-effort level and its
- #        translation into every provider family's own knob.
+ # @brief Reasoning-effort vocabulary and provider translation.
+ # Defines the shared effort levels and translates each model family into its
+ # native reasoning controls instead of duplicating mappings in request paths.
  #
  # @note Dandelion carries ONE abstract level per model ("low"/"medium"/"high"/
  # "max", validated by config.py and routing/model_registry.py). Each family then
