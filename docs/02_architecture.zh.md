@@ -151,7 +151,7 @@ windows_jobs = 2
     > ```sh
     > build/Dandelion/
     > ├── bin/                  # 实际二进制 + 拷贝的依赖
-    > ├── .env/                 # api.cfg（由 api.cfg.example 预填）
+    > ├── .env/                 # cli.cfg（由 cli.cfg.example 预填）
     > ├── llm/                  # memory/、skill/（空目录以 .keep 占位）
     > ├── .log/
     > ├── dandelion.sh/.cmd     # 启动脚本

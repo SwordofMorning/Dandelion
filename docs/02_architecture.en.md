@@ -151,7 +151,7 @@ Because we manually excluded certain libraries in the previous section to save c
     > ```sh
     > build/Dandelion/
     > ├── bin/                  # Actual binary + copied dependencies
-    > ├── .env/                 # api.cfg (pre-filled by api.cfg.example)
+    > ├── .env/                 # cli.cfg (pre-filled by cli.cfg.example)
     > ├── llm/                  # memory/, skill/ (empty directories with .keep placeholders)
     > ├── .log/
     > ├── dandelion.sh/.cmd     # Wrapper scripts for launching

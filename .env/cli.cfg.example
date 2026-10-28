@@ -1,8 +1,8 @@
 ; ============================================================
-; Part 1: Main Agent Configuration
+; Part 1: Main Agent Configuration (Dandelion CLI)
 ; ============================================================
 [Main]
-; Specify the actual model_id to be used by the main agent
+; Specify the model alias (from MODEL_LIST below) used by the main agent
 MAIN_AGENT=opus
 SUB_LIST=[
     "opus",
@@ -15,7 +15,7 @@ TAVILY_API_KEY=tvly-
 
 ; ============================================================
 ; Part 2: Provider Profiles & Model Registries
-; 
+;
 ; @ SDK_TYPE:
 ;   "Message" (Anthropic) or "Chat Completions" (OpenAI).
 ;   do not support "Responses" (OpenAI New), "Interactions" (Gemini New) or "Generate Content"(Gemini)
@@ -139,13 +139,11 @@ MODEL_LIST = [
 ; ============================================================
 ; Part 3: Optional Dandelion Remote Sync
 ; ============================================================
-; Sync reads this explicit section only; no URL is inherited from environment.
-; Copy and uncomment the example to enable a destination.
-; HTTPS is required except for a local loopback development server.
-; TOKEN accepts a literal value or one complete $VAR / ${VAR} placeholder.
-; Never include credentials, a query string or a fragment in URL.
+; Configure this section to enable manual 'sync' and 'remote -v' in CLI.
+; ACCESS_KEY must match [Server] ACCESS_KEY on your Dandelion Remote server
+; (the client hashes ACCESS_KEY with MD5 before sending over HTTP/HTTPS).
 ; [Remote]
 ; NAME=origin
-; URL=https://dr.example.com
-; TOKEN=${DANDELION_DR_TOKEN}
+; URL=https://sub2api.swordofmorning.com/dandelion-sync
+; ACCESS_KEY=dr-your-shared-secret-key
 ; DEVICE_ID=work-laptop

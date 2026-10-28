@@ -1,0 +1,104 @@
+; ============================================================
+; Part 1: Main Agent Configuration (Dandelion Remote Server)
+; ============================================================
+[Main]
+; Specify the model alias (from MODEL_LIST below) used by the remote main agent
+MAIN_AGENT=gemini
+SUB_LIST=[
+    "opus",
+    "gemini"
+    ]
+SUB_DEPTH=1
+SUB_CONCURRENCY=4
+; Search Tool
+TAVILY_API_KEY=tvly-
+
+; ============================================================
+; Part 2: Provider Profiles & Model Registries
+; ============================================================
+
+[Sub2API_Antigravity]
+SDK_TYPE="Message"
+BASE_URL=
+API_KEY=sk-
+MODEL_LIST = [
+    {
+        "provider": {
+            "model_id": "gemini-3.8-flash-tiered",
+            "compat": "gemini"
+        },
+        "basic": {
+            "name": "gemini",
+            "conditions": ["media", "simple"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "high"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    },
+    {
+        "provider": {
+            "model_id": "claude-opus-5-5-high",
+            "compat": "anthropic"
+        },
+        "basic": {
+            "name": "opus",
+            "conditions": ["complex", "review"],
+            "max_token": 128000,
+            "max_context_tokens": 819200
+        },
+        "reasoning": {
+            "thinking": "enabled",
+            "effort": "max"
+        },
+        "media": {
+            "file": [".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+            "max_image_bytes": "15MB",
+            "max_pdf_bytes": "15MB",
+            "max_pdf_pages": 100,
+            "max_media_per_request": 8
+        }
+    }
+    ]
+
+; ============================================================
+; Part 3: Dandelion Remote Server Settings
+; ============================================================
+[Server]
+HOST=0.0.0.0
+PORT=8765
+WORKSPACE=./workspace
+DATA_DIR=./.remote
+WORKERS=4
+; Shared secret key verified via MD5 digest against CLI [Remote] ACCESS_KEY
+ACCESS_KEY=dr-replace-with-your-shared-secret-key
+
+; ============================================================
+; Part 4: Telegram Bot Channel (Optional)
+; ============================================================
+[Telegram]
+BOT_TOKEN=
+; Comma-separated authorized private Telegram chat IDs
+ALLOWED_CHATS=
+
+; ============================================================
+; Part 5: Google Drive Self-Backup & File Exchange (Optional)
+; ============================================================
+; Dandelion automatically creates and confines itself to 'Dandelion Remote/'
+; on your Google Drive (with reports/, memory/, data/, files/ subfolders).
+; Leave FOLDER_ID empty for automatic detection/creation.
+[Drive]
+ACCESS_TOKEN=
+CLIENT_ID=
+CLIENT_SECRET=
+REFRESH_TOKEN=
+FOLDER_ID=
