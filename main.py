@@ -13,7 +13,7 @@ from mk.lib.paths import base_dir, config_path, log_dir
 
 from src.core.utils.config import load_api_config
 from src.core.utils.logging import SessionManager
-from src.cli import InteractiveCLI
+from src.cli import InteractiveCLI, CLIPromptBuilder
 from src.core.agent import MyAgent
 from src.cli.runtime import cli_runtime
 
@@ -49,6 +49,7 @@ def main():
         session_manager=session_mgr,
         workspace_dir=base_dir(),
         runtime=cli_runtime(),
+        prompt_builder_cls=CLIPromptBuilder,
     )
 
     print(f"[+] Agent Initialization Successful. Model: {config.get('NAME', config['MODEL_ID'])}")

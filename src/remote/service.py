@@ -3,10 +3,8 @@
  # @date 2026/10/28
  #
  # @brief Remote service assembly and command dispatch.
- # Parses serve, activity import/export and Drive export commands, loads the
- # configured model runtime, and coordinates HTTP, workers and optional Telegram.
- #
- # @note The existing data directory and command names are independent of this layout.
+ # Parses serve and drive-export commands, initializes the unrestricted Remote
+ # runtime and pure-filesystem SyncStore, and coordinates HTTP, workers and Telegram.
  #
 
 import argparse
@@ -19,12 +17,13 @@ import threading
 
 from .channels.telegram import Telegram
 from .storage.replies import ChannelHub
-from .channels.http import make_server, validate_activity
+from .storage.backups import BackupStore
+from .channels.http import make_server
 from .storage.store import Store
 
 
 ##
- # @brief Dispatch service and activity transfer commands.
+ # @brief Dispatch Dandelion Remote service and Drive export commands.
  #
  # @param argv Optional command arguments; None reads the process arguments.
  #
@@ -32,7 +31,8 @@ from .storage.store import Store
  #
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Run the optional Dandelion Remote service or transfer activity JSONL.")
+        description="Run the Dandelion Remote service or export daily synced session reports to Google Drive."
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--host", default="127.0.0.1")
@@ -41,11 +41,9 @@ def main(argv=None):
     serve.add_argument("--config", default=".env/api.cfg")
     serve.add_argument("--workers", type=int, default=4)
     drive = commands.add_parser("drive-export")
-    for command in (serve, commands.add_parser("import"), commands.add_parser("export"), drive):
+    drive.add_argument("--workspace", default=".")
+    for command in (serve, drive):
         command.add_argument("--data-dir", default=".remote")
-        if command not in (serve, drive):
-            command.add_argument("path")
-        # End-if
     # End-for
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -53,24 +51,10 @@ def main(argv=None):
     data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(str(data_dir / "remote.sqlite3"))
     try:
-        if args.command == "import":
-            # Validate the entire file before accepting records.
-            with open(args.path, encoding="utf-8") as source:
-                records = [validate_activity(json.loads(line)) for line in source if line.strip()]
-            # End-with
-            count = sum(bool(store.ingest_activity(record)) for record in records)
-            print(f"Imported {count} new activities ({len(records)} records checked).")
-        elif args.command == "export":
-            records = store.list_activities(limit=None)
-            with open(args.path, "w", encoding="utf-8") as target:
-                for record in reversed(records):
-                    target.write(json.dumps(record, ensure_ascii=False) + "\n")
-                # End-for
-            # End-with
-            print(f"Exported {len(records)} activities.")
-        elif args.command == "drive-export":
+        if args.command == "drive-export":
             from .exports.drive import export_drive
-            result = export_drive(store)
+            workspace = str(Path(args.workspace).resolve())
+            result = export_drive(store, workspace_dir=workspace)
             print(f"Exported {result['exported']} daily documents to Google Drive.")
         else:
             _serve(args, parser, store, data_dir)
@@ -92,7 +76,6 @@ def main(argv=None):
  # @return None.
  #
 def _serve(args, parser, store, data_dir):
-    # Import the Agent only when serving; transfer commands need no LLM setup.
     from src.core.utils.config import load_api_config
     from .execution.jobs import JobManager
     from .execution.loop import RemoteLoop
@@ -119,11 +102,15 @@ def _serve(args, parser, store, data_dir):
     # End-if
     workspace = str(Path(args.workspace).resolve())
     Path(workspace).mkdir(parents=True, exist_ok=True)
+    backups = BackupStore(store, workspace_dir=workspace)
     jobs = JobManager(store, JobExecutor(config, str(data_dir)), max_workers=args.workers)
     hub = ChannelHub(store)
-    factory = make_agent_factory(config, str(data_dir), workspace, jobs)
+    factory = make_agent_factory(config, str(data_dir), workspace, jobs, hub=hub, backups=backups)
     loop = RemoteLoop(store, jobs, factory, hub.notify)
-    server = make_server(args.host, args.port, store, jobs, loop, hub, token, device_tokens)
+    server = make_server(
+        args.host, args.port, store, jobs, loop, hub, token,
+        device_tokens=device_tokens, backups=backups,
+    )
     telegram = Telegram(telegram_token, chats, loop, hub) if telegram_token else None
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
 
@@ -141,7 +128,7 @@ def _serve(args, parser, store, data_dir):
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
-        jobs.start()
+        jobs.start(notify=hub.notify)
         server_thread.start()
         if telegram:
             telegram.start()

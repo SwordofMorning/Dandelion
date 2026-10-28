@@ -417,7 +417,9 @@ class InteractiveCLI:
         # End-if
         self.cli.info(f"Remote: {remote.get('name', 'origin')}")
         if args:
-            self.cli.info(f"URL: {remote['url']}")
+            self.cli.info(f"URL   : {remote['url']}")
+            self.cli.info(f"Device: {remote.get('device_id') or '(unset)'}")
+            self.cli.info(f"Token : {'(configured)' if remote.get('token') else '(missing)'}")
         # End-if
     # End-def
 
@@ -435,7 +437,10 @@ class InteractiveCLI:
             self.cli.error("Usage: sync [--session <id/name>]")
             return
         # End-if
-        sessions = self.session.list_sessions()
+        sessions = [
+            entry for entry in self.session.list_sessions()
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        ]
         selected = [entry["id"] for entry in sessions]
         if args:
             target = args[1]
@@ -454,7 +459,10 @@ class InteractiveCLI:
         # End-if
         remote = self.agent.config.get("REMOTE") or {}
         result = SessionSync(self.session.log_dir, self.agent.workspace_dir, remote).sync(selected)
-        self.cli.info(f"Sync: {result['sessions']} session(s), {result['files']} file(s) backed up.")
+        self.cli.info(f"Sync: {result['sessions']} session(s), {result['files']} file(s) synced.")
+        for skipped_msg in result.get("skipped", []):
+            self.cli.info(f"Skipped {skipped_msg}")
+        # End-for
         if result["error"]:
             self.cli.error(result["error"])
         # End-if

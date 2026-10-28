@@ -82,6 +82,11 @@ class BaseTool:
      # @return True if allowed (or inside workspace), False if denied by user.
      #
     def check_workspace_permission(self, target_path, action_desc="File Access"):
+        runtime = getattr(self, "runtime", None)
+        if runtime is not None and not getattr(runtime, "sandbox", True):
+            return True
+        # End-if
+
         # Relative path.
         if not self.workspace_dir:
             return True
@@ -94,48 +99,12 @@ class BaseTool:
             return True
         # End-if
 
-        runtime = getattr(self, "runtime", None)
         if runtime is not None:
             return bool(runtime.approve(action_desc, abs_target, abs_workspace))
         # End-if
 
-        with _APPROVAL_LOCK:
-            return self._ask_approval(abs_target, abs_workspace, action_desc)
+        return False
     # End-def check_workspace_permission
-
-    ##
-     # @brief Interactive y/N/C prompt (caller holds _APPROVAL_LOCK).
-     #
-    def _ask_approval(self, abs_target, abs_workspace, action_desc):
-        # Trigger Security Prompt (Outside Workspace).
-        print(f"\n\033[33m[!] SECURITY ALERT: Tool '{self.get_name()}' is attempting to escape workspace.\033[0m")
-        print(f"    Action   : {action_desc}")
-        print(f"    Target   : {abs_target}")
-        print(f"    Workspace: {abs_workspace}")
-
-        # User input.
-        while True:
-            ans = input("    Allow this operation? [y/N/C]: ").strip().lower()
-            if ans in ['y', 'yes']:
-                print("    [+] User approved outside access.")
-                return True
-            elif ans in ['c', 'cancel']:
-                # [C] is the Ctrl+C equivalent for this prompt: ask the CLI to
-                # stop and roll back the turn, and deny this tool call. The stop
-                # itself is executed by the CLI checkpoints, never here.
-                # Deferred import keeps the tool layer free of import-order
-                # coupling with src.core.utils (this module only needs os otherwise).
-                from src.cli.interrupt import request as request_stop
-                request_stop("tool_cancel")
-                print("    [!] Canceled: this call is denied and the turn will stop and roll back.")
-                return False
-            elif ans in ['n', 'no', '']:
-                print("    [-] User denied access.")
-                return False
-            else:
-                print("    Please enter y, n or c.")
-        # End-while
-    # End-def
 
     ##
      # @brief Resolve symlinks and test workspace containment (no prompt).
@@ -153,6 +122,7 @@ class BaseTool:
     def _resolved_within_workspace(self, target_path):
         if not self.workspace_dir:
             return os.path.realpath(target_path), True
+        # End-if
         abs_workspace = os.path.realpath(self.workspace_dir)
         abs_target = os.path.realpath(target_path)
         try:
@@ -161,6 +131,7 @@ class BaseTool:
         except ValueError:
             # In Windows, ValueError is raised if paths are on different drives.
             return abs_target, False
+        # End-try
     # End-def
 
     ##
@@ -169,25 +140,28 @@ class BaseTool:
      # @param file_path File path from the tool schema.
      # @param action_desc Human-readable action description for the prompt.
      #
-     # @note Runs the interactive containment check first; on approval,
-     # re-verifies the RESOLVED path without a second prompt. If the path
-     # changed between check and resolution (TOCTOU), it fails safe.
+     # @note When runtime.sandbox is False (e.g. dedicated Remote server), all
+     # paths resolve directly without workspace confinement. When sandbox is
+     # True, outside-workspace paths require explicit runtime.approve() consent.
      #
      # @return (resolved_path, None) on success, or (None, error_message).
      #
     def _prepare_path(self, file_path, action_desc):
-        if not self.check_workspace_permission(file_path, action_desc=action_desc):
+        runtime = getattr(self, "runtime", None)
+        if runtime is not None and not getattr(runtime, "sandbox", True):
+            return os.path.realpath(file_path), None
+        # End-if
+
+        resolved, inside = self._resolved_within_workspace(file_path)
+        if inside:
+            return resolved, None
+        # End-if
+
+        if not self.check_workspace_permission(resolved, action_desc=action_desc):
             return None, (
                 f"CRITICAL SECURITY BLOCK: The human user explicitly DENIED permission "
                 f"to access '{file_path}'. STOP IMMEDIATELY. "
                 f"Do not attempt any workarounds. Acknowledge this restriction to the user."
-            )
-        # End-if
-        resolved, inside = self._resolved_within_workspace(file_path)
-        if not inside:
-            return None, (
-                f"CRITICAL SECURITY BLOCK: resolved path of '{file_path}' escapes "
-                f"the workspace. Acknowledge this restriction to the user."
             )
         # End-if
         return resolved, None

@@ -3,8 +3,8 @@
  # @date 2026/10/27
  #
  # @brief Authenticated remote HTTP interface.
- # Dispatches conversation, job, schedule and session-backup requests, enforces
- # device/admin credential scopes, and bounds uploaded JSON request bodies.
+ # Dispatches conversation, job, schedule and session-sync requests, enforces
+ # device/admin credential scopes, and triggers sync_received interrupts.
  #
  # @note Public HTTPS termination belongs to the deployment reverse proxy.
  #
@@ -15,39 +15,9 @@ import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from ..storage.store import timestamp
 from ..storage.backups import BackupStore
 
-
 MAX_BODY = 1024 * 1024
-
-
-##
- # @brief Validate one legacy activity record before explicit import.
- #
- # @param record Activity record to validate for explicit legacy imports.
- #
- # @return Validated activity record.
- #
-def validate_activity(record):
-    if not isinstance(record, dict):
-        raise ValueError("Each activity must be an object")
-    # End-if
-    for field in ("event_id", "device", "project", "session_id", "occurred_at", "summary"):
-        value = record.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError("Missing activity field: " + field)
-        # End-if
-        if len(value) > (20000 if field == "summary" else 1000):
-            raise ValueError("Activity field too long: " + field)
-        # End-if
-    # End-for
-    timestamp(record["occurred_at"])
-    if not isinstance(record.get("sources"), list):
-        raise ValueError("Activity sources must be an array")
-    # End-if
-    return record
-# End-def
 
 
 ##
@@ -61,10 +31,11 @@ def validate_activity(record):
  # @param hub Persistent reply and channel-state hub.
  # @param token Administrative API credential.
  # @param device_tokens Device IDs mapped to sync-only credentials.
+ # @param backups Optional shared BackupStore instance.
  #
  # @return Configured threaded HTTP server.
  #
-def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None):
+def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None, backups=None):
     if not token:
         raise ValueError("Set DANDELION_DR_TOKEN before starting the server")
     # End-if
@@ -77,13 +48,12 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None):
         raise ValueError("Device credentials must have unique nonempty names/tokens, separate from the admin token")
     # End-if
 
-    backups = BackupStore(store)
+    backups = backups if backups is not None else BackupStore(store)
 
     ##
      # @brief Handle JSON requests and authenticated backup downloads.
      #
     class Handler(BaseHTTPRequestHandler):
-        # Keep a slow client from holding a request worker forever.
         ##
          # @brief Set a timeout for each client connection.
          #
@@ -188,7 +158,18 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None):
                     self._reply(403, {"error": "Backup device does not match credential"})
                     return
                 # End-if
-                self._reply(200, backups.receive(data))
+                result = backups.receive(data)
+                if data.get("commit") is True and result.get("changed"):
+                    target_session = getattr(hub, "default_telegram_session", None) or "default"
+                    loop.post("sync_received", target_session, {
+                        "session_id": result.get("session_id", data.get("session_id", "")),
+                        "device": data.get("device", ""),
+                        "project": data.get("project", ""),
+                        "path": result.get("path", ""),
+                        "snapshot_id": result.get("accepted", ""),
+                    }, event_id="sync_" + str(result.get("accepted", "")))
+                # End-if
+                self._reply(200, result)
             elif self.command == "GET" and path == "/sessions":
                 self._reply(200, {"sessions": backups.list_sessions(
                     device=query.get("device", [None])[0], project=query.get("project", [None])[0])})
@@ -203,16 +184,17 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None):
                         self.end_headers()
                         self.wfile.write(body)
                     elif len(parts) == 3:
-                        self._reply(200, backups.read_session(parts[2],
-                            offset=int(query.get("offset", [0])[0]), limit=int(query.get("limit", [100])[0])))
+                        self._reply(200, backups.read_session(
+                            parts[2],
+                            offset=int(query.get("offset", [0])[0]),
+                            limit=int(query.get("limit", [100])[0]),
+                        ))
                     else:
                         self._reply(404, {"error": "Session backup was not found"})
                     # End-if
                 except KeyError:
                     self._reply(404, {"error": "Session backup was not found"})
                 # End-try
-            elif self.command == "GET" and path == "/activities":
-                self._reply(200, {"records": store.list_activities(limit=100)})
             elif self.command == "GET" and path == "/replies":
                 if not session:
                     raise ValueError("session_id is required")
@@ -227,8 +209,8 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None):
                 event = loop.post("message", session, {"text": text})
                 self._reply(202, {"event_id": event, "session_id": session})
             elif self.command == "POST" and path == "/cancel":
-                loop.cancel(self._session(data))
-                self._reply(202, {"accepted": True})
+                accepted = loop.cancel(self._session(data))
+                self._reply(202, {"accepted": accepted})
             elif self.command == "GET" and path == "/jobs":
                 self._reply(200, {"jobs": store.list_jobs(session_id=session or None)})
             elif self.command == "GET" and path.startswith("/jobs/"):
@@ -241,8 +223,11 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None):
                 self._reply(200, {"schedules": store.list_schedules(session_id=session or None)})
             elif self.command == "POST" and path == "/schedules":
                 schedule = store.create_schedule(
-                    self._session(data), data["due_at"], {"text": data["text"]},
-                    interval=data.get("interval"), kind=data.get("kind", "reminder"),
+                    self._session(data),
+                    data["due_at"],
+                    {"text": data["text"]},
+                    interval=data.get("interval"),
+                    kind=data.get("kind", "reminder"),
                 )
                 self._reply(201, schedule)
             elif self.command == "DELETE" and path.startswith("/schedules/"):
@@ -256,7 +241,7 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None):
         ##
          # @brief Validate a remote conversation identifier.
          #
-         # @param data JSON response payload.
+         # @param data JSON request payload.
          #
          # @return Validated conversation identifier.
          #

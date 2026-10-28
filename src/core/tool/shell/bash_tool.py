@@ -78,6 +78,11 @@ class BashTool(BaseTool):
      # @return (True, "") | (False, "Why refuse this command").
      #
     def _is_safe_command(self, cmd):
+        runtime = getattr(self, "runtime", None)
+        if runtime is not None and not getattr(runtime, "sandbox", True):
+            return True, ""
+        # End-if
+
         cmd_lower = cmd.lower()
 
         # 1. Fast Blacklist Check

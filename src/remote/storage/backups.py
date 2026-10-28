@@ -2,11 +2,10 @@
  # @file src/remote/storage/backups.py
  # @date 2026/10/28
  #
- # @brief Manual session snapshot storage.
- # Validates chunk offsets, file sizes and SHA-256 manifests, publishes complete
- # history/meta snapshots, and provides latest-copy lookup and paginated reads.
- #
- # @note Only history.log and meta.log are accepted; uploads never become live sessions.
+ # @brief Pure-filesystem session sync storage under assets/syncs/<session_id>/.
+ # Validates chunk offsets, file sizes and SHA-256 manifests, atomically writes
+ # synced session files (history.log, meta.log, task_state.json) into readable
+ # session directories, and provides summary digests for DR context and Drive export.
  #
 
 import base64
@@ -16,42 +15,42 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import time
 
-SESSION_FILES = ("history.log", "meta.log")
+REQUIRED_FILES = ("history.log", "meta.log")
+OPTIONAL_FILES = ("task_state.json",)
+ALLOWED_FILES = REQUIRED_FILES + OPTIONAL_FILES
 CHUNK_SIZE = 256 * 1024
 
+
 ##
- # @brief Keep uploaded session files separate from live Remote conversations.
+ # @brief Store synced CLI sessions directly on disk under assets/syncs/<session_id>/.
  #
 class BackupStore:
     ##
-     # @brief Initialize snapshot directories and the durable publication index.
-     # @param store Shared Remote Store, including data_dir and backup_lock.
+     # @brief Initialize staging and assets/syncs directories.
+     #
+     # @param store Shared Remote Store owning data_dir and backup_lock.
+     # @param workspace_dir Optional workspace root where assets/syncs/ is placed.
+     #
      # @return None.
      #
-    def __init__(self, store):
+    def __init__(self, store, workspace_dir=None):
         self.store = store
-        self.root = Path(store.data_dir) / "backups"
-        self.staging = self.root / "staging"
-        self.snapshots = self.root / "snapshots"
-        self.staging.mkdir(parents=True, exist_ok=True)
-        self.snapshots.mkdir(parents=True, exist_ok=True)
-        with store.lock, store.conn:
-            store.conn.execute("""
-                CREATE TABLE IF NOT EXISTS session_backups (
-                    snapshot_id TEXT PRIMARY KEY, device TEXT NOT NULL,
-                    project TEXT NOT NULL, session_id TEXT NOT NULL,
-                    manifest TEXT NOT NULL, synced_at REAL NOT NULL
-                )
-            """)
-        # End-with
+        base = Path(workspace_dir).resolve() if workspace_dir else Path(store.data_dir).resolve()
+        self.syncs_dir = base / "assets" / "syncs"
+        self.staging_dir = Path(store.data_dir).resolve() / "staging_syncs"
+        self.syncs_dir.mkdir(parents=True, exist_ok=True)
+        self.staging_dir.mkdir(parents=True, exist_ok=True)
     # End-def
 
     ##
-     # @brief Validate file identities and recompute the immutable snapshot ID.
-     # @param payload A chunk or final commit request.
-     # @return Canonical manifest with its verified snapshot_id.
+     # @brief Validate file identities and recompute the snapshot digest.
+     #
+     # @param payload A chunk or final commit request dictionary.
+     #
+     # @return Canonical manifest dictionary with verified snapshot_id.
      #
     @staticmethod
     def _manifest(payload):
@@ -59,17 +58,26 @@ class BackupStore:
         for name in ("device", "project", "session_id"):
             value = payload.get(name)
             if (not isinstance(value, str) or not value.strip() or len(value) > 200
-                    or any(ord(character) < 32 or ord(character) == 127 for character in value)):
+                    or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
                 raise ValueError("Invalid backup identity: " + name)
             # End-if
             manifest[name] = value
         # End-for
-        files = payload.get("files")
-        if not isinstance(files, dict) or set(files) != set(SESSION_FILES):
-            raise ValueError("Backups must contain exactly history.log and meta.log")
+        session_id = manifest["session_id"]
+        if (Path(session_id).name != session_id or session_id in (".", "..")
+                or "/" in session_id or "\\" in session_id):
+            raise ValueError("Invalid session_id path component")
         # End-if
+
+        files = payload.get("files")
+        if (not isinstance(files, dict)
+                or not set(REQUIRED_FILES).issubset(files.keys())
+                or not set(files.keys()).issubset(ALLOWED_FILES)):
+            raise ValueError("Backups must contain history.log and meta.log (and optional task_state.json)")
+        # End-if
+
         checked = {}
-        for name in SESSION_FILES:
+        for name in sorted(files.keys()):
             entry = files[name]
             if not isinstance(entry, dict) or set(entry) != {"size", "sha256"}:
                 raise ValueError("Invalid backup file manifest")
@@ -92,35 +100,57 @@ class BackupStore:
     # End-def
 
     ##
-     # @brief Look up a committed snapshot without exposing staging uploads.
-     # @param snapshot_id Snapshot identifier.
-     # @return The durable snapshot row, or None.
+     # @brief Resolve the target directory for a session_id or snapshot_id.
      #
-    def _row(self, snapshot_id):
-        with self.store.lock:
-            return self.store.conn.execute(
-                "SELECT * FROM session_backups WHERE snapshot_id=?", (snapshot_id,)
-            ).fetchone()
-        # End-with
+     # @param identifier Session ID (e.g. sess_...) or snapshot_id SHA-256.
+     #
+     # @return Path to the session directory in assets/syncs/, or None.
+     #
+    def _find_session_dir(self, identifier):
+        if not isinstance(identifier, str) or not identifier.strip():
+            return None
+        # End-if
+        identifier = identifier.strip()
+        if (Path(identifier).name == identifier
+                and identifier not in (".", "..")
+                and "/" not in identifier and "\\" not in identifier):
+            direct = (self.syncs_dir / identifier).resolve()
+            if direct.parent == self.syncs_dir and (direct / "meta.log").is_file():
+                return direct
+            # End-if
+        # End-if
+        for sync_meta_path in self.syncs_dir.glob("*/sync_meta.json"):
+            try:
+                meta = json.loads(sync_meta_path.read_text(encoding="utf-8"))
+                if meta.get("snapshot_id") == identifier or meta.get("session_id") == identifier:
+                    return sync_meta_path.parent
+                # End-if
+            except (OSError, ValueError):
+                continue
+            # End-try
+        # End-for
+        return None
     # End-def
 
     ##
-     # @brief Receive an idempotent chunk or commit both validated session files.
-     # @param payload JSON request with a manifest and chunk or commit fields.
-     # @return Received byte offset, or the committed snapshot ID.
+     # @brief Receive an idempotent chunk or commit validated files to assets/syncs/<session_id>/.
+     #
+     # @param payload JSON request with manifest and chunk or commit fields.
+     #
+     # @return Received byte offset, or committed snapshot metadata dictionary.
      #
     def receive(self, payload):
         manifest = self._manifest(payload)
         snapshot_id = manifest["snapshot_id"]
+        session_id = manifest["session_id"]
         with self.store.backup_lock:
             if payload.get("commit") is True:
-                self._commit(manifest)
-                return {"accepted": snapshot_id}
+                return self._commit(manifest)
             # End-if
             name = payload.get("file")
             offset = payload.get("offset")
             encoded = payload.get("data")
-            if name not in SESSION_FILES or type(offset) is not int or offset < 0:
+            if name not in manifest["files"] or type(offset) is not int or offset < 0:
                 raise ValueError("Invalid backup filename or offset")
             # End-if
             if not isinstance(encoded, str) or len(encoded) > ((CHUNK_SIZE + 2) // 3) * 4:
@@ -136,24 +166,38 @@ class BackupStore:
             if len(chunk) > CHUNK_SIZE or end > expected or (not chunk and expected != 0):
                 raise ValueError("Backup chunk exceeds the declared file size")
             # End-if
-            published = self._row(snapshot_id) is not None or (self.snapshots / snapshot_id).is_dir()
-            directory = (self.snapshots if published else self.staging) / snapshot_id
-            directory.mkdir(exist_ok=True)
-            target = directory / name
+
+            existing_dir = self._find_session_dir(snapshot_id)
+            if existing_dir is not None:
+                target = existing_dir / name
+                if target.is_file() and target.stat().st_size == expected:
+                    with target.open("rb") as stream:
+                        stream.seek(offset)
+                        if stream.read(len(chunk)) != chunk:
+                            raise ValueError("Backup retry differs from stored file bytes")
+                        # End-if
+                    # End-with
+                    return {"received": end}
+                # End-if
+            # End-if
+
+            stage_dir = self.staging_dir / snapshot_id
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            target = stage_dir / name
             current = target.stat().st_size if target.exists() else 0
             if offset > current:
                 raise ValueError("Backup chunk leaves a gap in the file")
             # End-if
             overlap = min(len(chunk), current - offset)
-            if overlap or published:
+            if overlap:
                 with target.open("rb") as stream:
                     stream.seek(offset)
-                    if stream.read(overlap) != chunk[:overlap] or (published and end > current):
-                        raise ValueError("Backup retry differs from stored file bytes")
+                    if stream.read(overlap) != chunk[:overlap]:
+                        raise ValueError("Backup retry differs from staged file bytes")
                     # End-if
                 # End-with
             # End-if
-            if not published and (end > current or not target.exists()):
+            if end > current or not target.exists():
                 with target.open("ab") as stream:
                     stream.write(chunk[overlap:])
                     stream.flush()
@@ -165,26 +209,35 @@ class BackupStore:
     # End-def
 
     ##
-     # @brief Validate both files and atomically publish the snapshot directory.
+     # @brief Validate staged files and atomically publish into assets/syncs/<session_id>/.
+     #
      # @param manifest Verified identity and file digests.
-     # @return None.
+     #
+     # @return Dictionary with accepted snapshot_id, session_id, path, and changed flag.
      #
     def _commit(self, manifest):
         snapshot_id = manifest["snapshot_id"]
-        if self._row(snapshot_id) is not None:
-            # A user may intentionally sync an older local revision again.
-            # Its bytes stay immutable, but it becomes the latest accepted copy.
-            with self.store.lock, self.store.conn:
-                self.store.conn.execute("UPDATE session_backups SET synced_at=? WHERE snapshot_id=?",
-                                        (time.time(), snapshot_id))
-            # End-with
-            return
+        session_id = manifest["session_id"]
+        dest_dir = (self.syncs_dir / session_id).resolve()
+        if dest_dir.parent != self.syncs_dir:
+            raise ValueError("Invalid session destination directory")
         # End-if
-        published = self.snapshots / snapshot_id
-        directory = published if published.is_dir() else self.staging / snapshot_id
-        for name in SESSION_FILES:
-            target = directory / name
-            if not target.is_file() or target.stat().st_size != manifest["files"][name]["size"]:
+
+        prev_meta_file = dest_dir / "sync_meta.json"
+        prev_meta = {}
+        if prev_meta_file.is_file():
+            try:
+                prev_meta = json.loads(prev_meta_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                prev_meta = {}
+            # End-try
+        # End-if
+
+        stage_dir = self.staging_dir / snapshot_id
+        source_dir = stage_dir if stage_dir.is_dir() else dest_dir
+        for name, spec in manifest["files"].items():
+            target = source_dir / name
+            if not target.is_file() or target.stat().st_size != spec["size"]:
                 raise ValueError("Backup is incomplete: " + name)
             # End-if
             digest = hashlib.sha256()
@@ -193,105 +246,214 @@ class BackupStore:
                     digest.update(chunk)
                 # End-for
             # End-with
-            if digest.hexdigest() != manifest["files"][name]["sha256"]:
+            if digest.hexdigest() != spec["sha256"]:
                 raise ValueError("Backup file digest mismatch: " + name)
             # End-if
         # End-for
-        with (directory / "history.log").open(encoding="utf-8") as stream:
+
+        with (source_dir / "history.log").open(encoding="utf-8") as stream:
             history = json.load(stream)
         # End-with
-        with (directory / "meta.log").open(encoding="utf-8") as stream:
+        with (source_dir / "meta.log").open(encoding="utf-8") as stream:
             metadata = json.load(stream)
         # End-with
-        if not isinstance(history, list) or not isinstance(metadata, dict) or metadata.get("id") != manifest["session_id"]:
+        if not isinstance(history, list) or not isinstance(metadata, dict) or metadata.get("id") != session_id:
             raise ValueError("Backup history or metadata does not match the session")
         # End-if
-        if directory != published:
-            os.replace(directory, published)
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if source_dir != dest_dir:
+            for name in manifest["files"]:
+                src_file = source_dir / name
+                tmp_file = dest_dir / (name + ".tmp")
+                shutil.copyfile(src_file, tmp_file)
+                os.replace(tmp_file, dest_dir / name)
+            # End-for
+            shutil.rmtree(stage_dir, ignore_errors=True)
         # End-if
-        # The directory is complete before its index becomes visible. A crash
-        # between rename and INSERT can safely finish on an explicit retry.
-        with self.store.lock, self.store.conn:
-            self.store.conn.execute("INSERT INTO session_backups VALUES(?,?,?,?,?,?)", (
-                snapshot_id, manifest["device"], manifest["project"], manifest["session_id"],
-                json.dumps(manifest, ensure_ascii=False), time.time(),
-            ))
-        # End-with
+
+        new_hist_sha = manifest["files"]["history.log"]["sha256"]
+        prev_hist_sha = (
+            prev_meta.get("files", {}).get("history.log", {}).get("sha256")
+            if isinstance(prev_meta.get("files"), dict) else None
+        )
+        changed = (new_hist_sha != prev_hist_sha)
+
+        sync_meta = dict(
+            manifest,
+            name=metadata.get("name", session_id),
+            created_at=metadata.get("created_at", ""),
+            last_used_at=metadata.get("last_used_at", ""),
+            turns=len(history),
+            synced_at=time.time(),
+            path=str(dest_dir),
+        )
+        tmp_meta = prev_meta_file.with_suffix(".json.tmp")
+        tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_meta, prev_meta_file)
+
+        return {
+            "accepted": snapshot_id,
+            "session_id": session_id,
+            "changed": changed,
+            "path": f"assets/syncs/{session_id}",
+        }
     # End-def
 
     ##
-     # @brief Describe a committed snapshot without returning raw history.
-     # @param row Committed snapshot index row.
-     # @return Identity, file digests, session name and publication timestamp.
+     # @brief Load metadata for one synced session directory.
      #
-    def _metadata(self, row):
-        manifest = json.loads(row["manifest"])
-        with (self.snapshots / row["snapshot_id"] / "meta.log").open(encoding="utf-8") as stream:
-            metadata = json.load(stream)
-        # End-with
-        return dict(manifest, name=metadata.get("name", row["session_id"]), synced_at=row["synced_at"])
+     # @param session_dir Path to a session folder under assets/syncs/.
+     #
+     # @return Session metadata dictionary, or None when invalid.
+     #
+    @staticmethod
+    def _load_dir_meta(session_dir):
+        meta_log = session_dir / "meta.log"
+        sync_meta_file = session_dir / "sync_meta.json"
+        if not meta_log.is_file():
+            return None
+        # End-if
+        try:
+            metadata = json.loads(meta_log.read_text(encoding="utf-8"))
+            sync_meta = (
+                json.loads(sync_meta_file.read_text(encoding="utf-8"))
+                if sync_meta_file.is_file() else {}
+            )
+            summary_file = session_dir / "summary.md"
+            summary = summary_file.read_text(encoding="utf-8").strip() if summary_file.is_file() else ""
+            task_state_file = session_dir / "task_state.json"
+            task_state = (
+                json.loads(task_state_file.read_text(encoding="utf-8"))
+                if task_state_file.is_file() else {}
+            )
+            session_id = metadata.get("id", session_dir.name)
+            return {
+                "snapshot_id": sync_meta.get("snapshot_id", session_id),
+                "session_id": session_id,
+                "name": metadata.get("name", session_id),
+                "device": sync_meta.get("device", "local"),
+                "project": sync_meta.get("project", "default"),
+                "synced_at": float(sync_meta.get("synced_at") or meta_log.stat().st_mtime),
+                "last_used_at": metadata.get("last_used_at") or metadata.get("created_at") or "",
+                "files": sync_meta.get("files", {}),
+                "path": f"assets/syncs/{session_id}",
+                "summary": summary,
+                "task_state": task_state if isinstance(task_state, dict) else {},
+            }
+        except (OSError, ValueError):
+            return None
+        # End-try
     # End-def
 
     ##
-     # @brief List the most recently committed backup for each source session.
+     # @brief List synced sessions under assets/syncs/, newest first.
+     #
      # @param device Optional exact device filter.
      # @param project Optional exact project filter.
-     # @return Snapshot metadata in publication order, newest first.
+     #
+     # @return List of synced session metadata dictionaries.
      #
     def list_sessions(self, device=None, project=None):
-        query, args = "SELECT * FROM session_backups WHERE 1=1", []
-        for key, value in (("device", device), ("project", project)):
-            if value is not None:
-                query += " AND " + key + "=?"
-                args.append(value)
-            # End-if
-        # End-for
-        with self.store.backup_lock, self.store.lock:
-            rows = self.store.conn.execute(query + " ORDER BY synced_at DESC,rowid DESC", args).fetchall()
-            seen, result = set(), []
-            for row in rows:
-                identity = (row["device"], row["project"], row["session_id"])
-                if identity not in seen:
-                    result.append(self._metadata(row))
-                    seen.add(identity)
+        with self.store.backup_lock:
+            items = []
+            for entry in self.syncs_dir.iterdir():
+                if not entry.is_dir():
+                    continue
                 # End-if
+                info = self._load_dir_meta(entry)
+                if info is None:
+                    continue
+                # End-if
+                if device is not None and info["device"] != device:
+                    continue
+                # End-if
+                if project is not None and info["project"] != project:
+                    continue
+                # End-if
+                items.append(info)
             # End-for
-            return result
+            items.sort(key=lambda x: x["synced_at"], reverse=True)
+            return items
         # End-with
     # End-def
 
     ##
-     # @brief Read original file bytes from an explicitly committed snapshot.
-     # @param snapshot_id Published snapshot identifier.
-     # @param name One allowed session filename.
-     # @return Original file bytes; unknown identifiers raise KeyError.
+     # @brief Read raw bytes of an allowed file from a synced session directory.
      #
-    def read_file(self, snapshot_id, name):
-        if name not in SESSION_FILES or self._row(snapshot_id) is None:
+     # @param identifier Session ID or snapshot_id.
+     # @param name Filename ("history.log", "meta.log", "task_state.json", or "summary.md").
+     #
+     # @return Raw file bytes; raises KeyError when not found.
+     #
+    def read_file(self, identifier, name):
+        if name not in ALLOWED_FILES + ("summary.md",):
+            raise KeyError("Session backup file was not found")
+        # End-if
+        session_dir = self._find_session_dir(identifier)
+        if session_dir is None or not (session_dir / name).is_file():
             raise KeyError("Session backup was not found")
         # End-if
-        return (self.snapshots / snapshot_id / name).read_bytes()
+        return (session_dir / name).read_bytes()
     # End-def
 
     ##
-     # @brief Read a bounded message page and the original metadata object.
-     # @param snapshot_id Published snapshot identifier.
-     # @param offset First history message index.
-     # @param limit Maximum messages to include, from one to one hundred.
-     # @return Snapshot metadata, parsed files and history paging information.
+     # @brief Read a bounded message page and metadata from a synced session.
      #
-    def read_session(self, snapshot_id, offset=0, limit=100):
+     # @param identifier Session ID or snapshot_id.
+     # @param offset First history message index.
+     # @param limit Maximum messages to include (1..100).
+     #
+     # @return Dictionary with session metadata, paged history, meta.log and task_state.
+     #
+    def read_session(self, identifier, offset=0, limit=100):
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("History offset must be nonnegative and limit must be 1..100")
         # End-if
-        row = self._row(snapshot_id)
-        if row is None:
+        session_dir = self._find_session_dir(identifier)
+        if session_dir is None:
             raise KeyError("Session backup was not found")
         # End-if
-        history = json.loads(self.read_file(snapshot_id, "history.log"))
-        metadata = json.loads(self.read_file(snapshot_id, "meta.log"))
-        return {"snapshot": self._metadata(row),
-                "files": {"history.log": history[offset:offset + limit], "meta.log": metadata},
-                "history": {"offset": offset, "limit": limit, "total": len(history)}}
+        info = self._load_dir_meta(session_dir)
+        if info is None:
+            raise KeyError("Session backup was not found")
+        # End-if
+        history = json.loads((session_dir / "history.log").read_text(encoding="utf-8"))
+        metadata = json.loads((session_dir / "meta.log").read_text(encoding="utf-8"))
+        return {
+            "snapshot": info,
+            "files": {
+                "history.log": history[offset:offset + limit],
+                "meta.log": metadata,
+                "task_state.json": info.get("task_state", {}),
+                "summary.md": info.get("summary", ""),
+            },
+            "history": {"offset": offset, "limit": limit, "total": len(history)},
+        }
+    # End-def
+
+    ##
+     # @brief Render a compact overview of recently synced sessions for [Dandelion Context].
+     #
+     # @param limit Maximum number of recent sessions to include.
+     #
+     # @return Formatted Markdown overview string, or empty string.
+     #
+    def render_sync_digest(self, limit=10):
+        sessions = self.list_sessions()[:max(1, int(limit))]
+        if not sessions:
+            return ""
+        # End-if
+        lines = ["## Recently Synced CLI Sessions (assets/syncs/)"]
+        for s in sessions:
+            target = s.get("task_state", {}).get("target") or "No target set"
+            summary_line = (s.get("summary") or "").splitlines()[0] if s.get("summary") else ""
+            detail = summary_line or f"Target: {target}"
+            lines.append(
+                f"- [{s['session_id']}] name='{s['name']}' | device={s['device']} | "
+                f"project={s['project']} | path={s['path']} | {detail[:180]}"
+            )
+        # End-for
+        return "\n".join(lines)
     # End-def
 # End-class

@@ -542,8 +542,9 @@ def _parse_remote_config(config):
 
     name = read("NAME", "origin") or "origin"
     device_id = read("DEVICE_ID")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or any(
-            ord(character) < 32 or ord(character) == 127 for character in device_id):
+    if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+            or len(device_id) > 200
+            or any(ord(character) < 32 or ord(character) == 127 for character in device_id)):
         print("[!] [Remote] NAME or DEVICE_ID is invalid. Sync is disabled.")
         return {}
     # End-if
@@ -556,8 +557,8 @@ def _parse_remote_config(config):
             print("[!] [Remote] TOKEN environment placeholder is unset. Upload requires a token.")
         # End-if
     # End-if
-    if any(ord(character) < 32 or ord(character) == 127 for character in token):
-        print("[!] [Remote] TOKEN contains invalid characters. Sync is disabled.")
+    if any(character.isspace() or ord(character) <= 32 or ord(character) >= 127 for character in token):
+        print("[!] [Remote] TOKEN contains invalid or non-ASCII characters. Sync is disabled.")
         return {}
     # End-if
 

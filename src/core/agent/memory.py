@@ -34,6 +34,8 @@
 import os
 from src.core.runtime import Runtime
 
+MAX_INDEX_LINES = 500
+
 ##
  # @brief Memory Management Class.
  #
@@ -505,6 +507,82 @@ class MemoryManager:
     # End-def
 
     ##
+     # @brief Delete a memory entry and remove it from the tier's MEMORY.md index.
+     #
+     # @param name Memory topic name to delete.
+     # @param scope "global" or "session".
+     #
+     # @return True when the memory existed and was deleted; False when not found.
+     #
+    def delete_memory(self, name, scope="global"):
+        target_dir = self._dir_for_scope(scope)
+        if not os.path.exists(target_dir):
+            return False
+        # End-if
+
+        safe_name = self._sanitize_filename(name)
+        if not safe_name or len(safe_name) > 100 or safe_name.lower() == "memory":
+            raise ValueError(f"Error: invalid memory name '{name}'.")
+        # End-if
+
+        filename = f"{safe_name}.md"
+        filepath = os.path.join(target_dir, filename)
+        if not os.path.exists(filepath):
+            return False
+        # End-if
+
+        clean_name = self._frontmatter_clean(name).strip().strip('"').strip("'")
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                raw = f.read()
+            # End-with
+            meta, _ = self._parse_frontmatter(raw)
+            existing_name = meta.get("name", "").strip()
+        except (OSError, UnicodeDecodeError):
+            existing_name = ""
+        # End-try
+
+        if existing_name and existing_name != clean_name and existing_name != safe_name:
+            raise ValueError(
+                f"Error: memory name '{name}' maps to '{filename}' which belongs to '{existing_name}'."
+            )
+        # End-if
+
+        os.remove(filepath)
+        self._remove_from_index(target_dir, existing_name or clean_name, safe_name)
+        return True
+    # End-def
+
+    ##
+     # @brief Remove a deleted memory entry from MEMORY.md atomically.
+     #
+     # @param tier_dir Tier directory holding MEMORY.md.
+     # @param name Canonical memory name from frontmatter.
+     # @param safe_name Sanitized filename stem fallback.
+     #
+     # @return None.
+     #
+    def _remove_from_index(self, tier_dir, name, safe_name=""):
+        index_file = self._index_file(tier_dir)
+        if not os.path.exists(index_file):
+            return
+        # End-if
+        with open(index_file, "r", encoding="utf-8") as f:
+            index_lines = f.readlines()
+        # End-with
+        prefixes = {f"- [{name}]"}
+        if safe_name:
+            prefixes.add(f"- [{safe_name}]")
+        # End-if
+        filtered = [l for l in index_lines if not any(l.startswith(p) for p in prefixes)]
+        tmp_path = index_file + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.writelines(filtered)
+        # End-with
+        os.replace(tmp_path, index_file)
+    # End-def
+
+    ##
      # @brief Update MEMORY.md file.
      #
      # @param tier_dir Tier directory holding MEMORY.md.
@@ -527,9 +605,10 @@ class MemoryManager:
         # Add new entry
         index_lines.append(f"- [{name}] {description} (tags: {tags}) [updated: {updated_at}]\n")
 
-        # Keep under 200 lines to prevent MEMORY.md from blowing up System Prompt
-        if len(index_lines) > 200:
-            index_lines = index_lines[-200:]
+        # Keep under MAX_INDEX_LINES (500) to bound System Prompt memory index size.
+        if len(index_lines) > MAX_INDEX_LINES:
+            index_lines = index_lines[-MAX_INDEX_LINES:]
+        # End-if
 
         # Atomic write (see write_memory).
         tmp_path = index_file + ".tmp"

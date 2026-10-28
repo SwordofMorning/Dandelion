@@ -3,8 +3,8 @@
  # @date 2026/10/27
  #
  # @brief Manual session snapshot upload client.
- # Reads fixed history.log and meta.log bytes from selected local sessions,
- # uploads bounded chunks, and verifies the Remote's final snapshot receipt.
+ # Reads history.log, meta.log and optional task_state.json from local sessions,
+ # uploads bounded chunks to Dandelion Remote, and verifies commit receipt.
  #
  # @note Only explicit CLI sync commands initiate transfers. The client neither
  # changes local session files nor retries automatically in the background.
@@ -21,17 +21,20 @@ import requests
 
 CHUNK_SIZE = 256 * 1024
 MAX_REQUEST_SIZE = 1024 * 1024
-SESSION_FILES = ("history.log", "meta.log")
+REQUIRED_SESSION_FILES = ("history.log", "meta.log")
+OPTIONAL_SESSION_FILES = ("task_state.json",)
+ALL_SESSION_FILES = REQUIRED_SESSION_FILES + OPTIONAL_SESSION_FILES
+
 
 ##
- # @brief Upload fixed session snapshots without changing local session state.
+ # @brief Upload session snapshots to Dandelion Remote without changing local state.
  #
 class SessionSync:
     ##
      # @brief Store the backup source and explicit Remote configuration.
      #
      # @param log_dir SessionManager log directory.
-     # @param workspace_dir Project workspace, used only to identify the project.
+     # @param workspace_dir Project workspace, used to identify the project.
      # @param remote Configured name, url, token and device_id mapping.
      #
      # @return None.
@@ -40,7 +43,7 @@ class SessionSync:
         self.log_dir = Path(log_dir).resolve()
         workspace = Path(workspace_dir).resolve()
         suffix = hashlib.sha256(str(workspace).encode("utf-8")).hexdigest()[:12]
-        self.project = workspace.name + "-" + suffix
+        self.project = workspace.name[:160] + "-" + suffix
         self.remote = remote if isinstance(remote, dict) else {}
     # End-def
 
@@ -53,46 +56,34 @@ class SessionSync:
         url = self.remote.get("url", "")
         token = self.remote.get("token", "")
         device = self.remote.get("device_id", "")
-        if not all(isinstance(value, str) and value.strip() for value in (url, token, device)):
-            raise ValueError("Remote is not configured; set URL, TOKEN and DEVICE_ID in [Remote].")
+        missing = [
+            label for label, val in (("URL", url), ("TOKEN", token), ("DEVICE_ID", device))
+            if not isinstance(val, str) or not val.strip()
+        ]
+        if missing:
+            raise ValueError(
+                f"Remote configuration incomplete (missing {', '.join(missing)} in [Remote])."
+            )
         # End-if
         parsed = urlsplit(url)
-        local = parsed.hostname == "localhost"
+        host = (parsed.hostname or "").lower().rstrip(".")
+        local = host == "localhost"
         try:
-            local = local or ipaddress.ip_address(parsed.hostname or "").is_loopback
+            local = local or ipaddress.ip_address(host).is_loopback
         except ValueError:
             pass
         # End-try
         if (parsed.scheme != "https" and not (parsed.scheme == "http" and local)) or (
-                not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment):
+                not host or parsed.username is not None or parsed.password is not None
+                or "?" in url or "#" in url):
             raise ValueError("Remote URL must use HTTPS, or HTTP on loopback, without embedded credentials.")
         # End-if
         parsed.port
-        return url.rstrip("/"), device
+        return url.rstrip("/"), device.strip()
     # End-def
 
     ##
-     # @brief Find valid session metadata without opening or switching a session.
-     #
-     # @return Session IDs corresponding to readable SessionManager metadata.
-     #
-    def _session_ids(self):
-        result = []
-        for path in sorted(self.log_dir.glob("*/meta.log")):
-            try:
-                metadata = json.loads(path.read_bytes())
-                if isinstance(metadata, dict) and metadata.get("id") == path.parent.name:
-                    result.append(metadata["id"])
-                # End-if
-            except (OSError, ValueError):
-                continue
-            # End-try
-        # End-for
-        return result
-    # End-def
-
-    ##
-     # @brief Read both allowed files once and derive a stable snapshot identity.
+     # @brief Read session files and derive a deterministic snapshot manifest.
      #
      # @param session_id Exact session directory ID, never a path.
      # @param device Configured device identity.
@@ -103,22 +94,44 @@ class SessionSync:
         if (not isinstance(session_id, str) or not session_id or
                 Path(session_id).name != session_id or session_id in (".", "..") or
                 "/" in session_id or "\\" in session_id):
-            raise ValueError("Invalid session ID.")
+            raise ValueError(f"Invalid session ID: {session_id!r}")
         # End-if
         directory = (self.log_dir / session_id).resolve()
-        if directory.parent != self.log_dir:
-            raise ValueError("Session directory is outside the log directory.")
+        if directory.parent != self.log_dir or not directory.is_dir():
+            raise ValueError(f"Session directory '{session_id}' does not exist.")
         # End-if
+
         content = {}
         files = {}
-        for name in SESSION_FILES:
+        for name in REQUIRED_SESSION_FILES:
             path = directory / name
-            if path.resolve().parent != directory:
-                raise ValueError("Session file is outside its session directory.")
+            if not path.is_file() or path.resolve().parent != directory:
+                raise ValueError(f"Session '{session_id}' is missing required file '{name}'.")
             # End-if
-            content[name] = path.read_bytes()
-            files[name] = {"size": len(content[name]), "sha256": hashlib.sha256(content[name]).hexdigest()}
+            raw = path.read_bytes()
+            content[name] = raw
+            files[name] = {"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
         # End-for
+
+        for name in OPTIONAL_SESSION_FILES:
+            path = directory / name
+            if path.is_file() and path.resolve().parent == directory:
+                raw = path.read_bytes()
+                content[name] = raw
+                files[name] = {"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+            # End-if
+        # End-for
+
+        try:
+            history_obj = json.loads(content["history.log"].decode("utf-8"))
+            meta_obj = json.loads(content["meta.log"].decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ValueError(f"Session '{session_id}' contains malformed JSON: {exc}") from None
+        # End-try
+        if not isinstance(history_obj, list) or not isinstance(meta_obj, dict) or meta_obj.get("id") != session_id:
+            raise ValueError(f"Session '{session_id}' history.log or meta.log failed structure validation.")
+        # End-if
+
         manifest = {"device": device, "project": self.project, "session_id": session_id, "files": files}
         canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         manifest["snapshot_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -136,54 +149,64 @@ class SessionSync:
     def _post(self, url, payload):
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) >= MAX_REQUEST_SIZE:
-            raise ValueError("Session identity is too large for a backup request.")
+            raise ValueError("Session backup request exceeds maximum payload size.")
         # End-if
         response = requests.post(
-            url + "/sync", data=body,
+            url + "/sync",
+            data=body,
             headers={"Authorization": "Bearer " + self.remote["token"], "Content-Type": "application/json"},
-            timeout=(5, 30), allow_redirects=False,
+            timeout=(5, 30),
+            allow_redirects=False,
         )
         if response.status_code != 200:
             raise ValueError(f"Remote sync returned HTTP {response.status_code}; local session files are unchanged.")
         # End-if
         reply = response.json()
         if not isinstance(reply, dict):
-            raise ValueError("Remote returned an invalid backup acknowledgement.")
+            raise ValueError("Remote returned an invalid sync acknowledgement.")
         # End-if
         return reply
     # End-def
 
     ##
-     # @brief Manually upload all listed sessions or an explicit set of IDs.
+     # @brief Manually upload the selected session IDs to Dandelion Remote.
      #
-     # @param session_ids Exact IDs, or None for every valid session directory.
+     # @param session_ids List of exact session directory IDs to upload.
      #
-     # @return Counts of committed sessions/files and a safe error, if any.
+     # @return Counts of committed sessions/files, skipped warnings, and any error.
      #
-    def sync(self, session_ids=None):
-        result = {"sessions": 0, "files": 0, "error": None}
+    def sync(self, session_ids):
+        result = {"sessions": 0, "files": 0, "skipped": [], "error": None}
         try:
             url, device = self._connection()
-            selected = self._session_ids() if session_ids is None else session_ids
-            if not isinstance(selected, (list, tuple)):
+            if not isinstance(session_ids, (list, tuple)):
                 raise ValueError("Session IDs must be a list.")
             # End-if
             seen = set()
-            for session_id in selected:
-                if not isinstance(session_id, str):
-                    raise ValueError("Invalid session ID.")
-                # End-if
-                if session_id in seen:
+            for session_id in session_ids:
+                if not isinstance(session_id, str) or session_id in seen:
                     continue
                 # End-if
                 seen.add(session_id)
-                manifest, content = self._snapshot(session_id, device)
-                for name in SESSION_FILES:
-                    raw = content[name]
+                try:
+                    manifest, content = self._snapshot(session_id, device)
+                except (OSError, ValueError) as snap_err:
+                    if len(session_ids) == 1:
+                        raise
+                    # End-if
+                    result["skipped"].append(f"{session_id}: {snap_err}")
+                    continue
+                # End-try
+
+                for name, raw in content.items():
                     for offset in range(0, max(1, len(raw)), CHUNK_SIZE):
                         chunk = raw[offset:offset + CHUNK_SIZE]
-                        payload = dict(manifest, file=name, offset=offset,
-                                       data=base64.b64encode(chunk).decode("ascii"))
+                        payload = dict(
+                            manifest,
+                            file=name,
+                            offset=offset,
+                            data=base64.b64encode(chunk).decode("ascii"),
+                        )
                         reply = self._post(url, payload)
                         received = reply.get("received")
                         if type(received) is not int or received != offset + len(chunk):
@@ -196,7 +219,7 @@ class SessionSync:
                     raise ValueError("Remote did not commit the session snapshot.")
                 # End-if
                 result["sessions"] += 1
-                result["files"] += len(SESSION_FILES)
+                result["files"] += len(content)
             # End-for
         except requests.RequestException:
             result["error"] = "Remote sync failed; local session files are unchanged. Run sync again to retry."

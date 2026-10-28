@@ -107,12 +107,12 @@ class MyAgent:
      # @param workspace_dir current pwd, used to avoid agent(llm) escape.
      # @param runtime Optional Runtime callbacks for output, cancellation and approval.
      # @param tool_factory Optional callable constructing the main-agent tool mapping.
-     # @param delegation_prompt Optional override for delegation instructions.
+     # @param prompt_builder_cls Optional BasePromptBuilder subclass or factory.
      #
      # @return None.
      #
     def __init__(self, config, session_manager, workspace_dir, runtime=None,
-                 tool_factory=None, delegation_prompt=None):
+                 tool_factory=None, prompt_builder_cls=None):
         # ----- @par 1. Init members -----
 
         # Alignment members.
@@ -166,9 +166,11 @@ class MyAgent:
             skill_dir=os.path.join(self.workspace_dir, "llm", "skill"),
             runtime=self.runtime,
         )
-        self.prompt_builder = PromptBuilder(self.memory, self.skill, self.config, self.workspace_dir,
-                                            session_manager=self.session,
-                                            delegation_prompt=delegation_prompt)
+        builder_cls = prompt_builder_cls or PromptBuilder
+        self.prompt_builder = builder_cls(
+            self.memory, self.skill, self.config, self.workspace_dir,
+            session_manager=self.session,
+        )
 
         # Memories cache: refresh only when the last plain-text user message changes,
         # so the tail of system_prompt stays stable during tool loops (cache-friendly).
@@ -328,6 +330,13 @@ class MyAgent:
         memories_content = self._get_memories()
         if memories_content:
             sections.append(memories_content)
+        # End-if
+
+        # 2.5 Optional frontend-specific dynamic context (e.g. Remote synced sessions digest).
+        extra_context = self.prompt_builder.render_extra_dynamic_context()
+        if extra_context:
+            sections.append(extra_context)
+        # End-if
 
         # 3. Task State (Attention Anchor), session-scoped. Kept LAST so the
         #    anchor sits closest to the model's next output position.
@@ -593,7 +602,7 @@ class MyAgent:
             # load for the next tool-loop iteration; drop the cache so the
             # system prompt tail reflects the newly persisted memory.
             # Failed executions keep the previous cache untouched.
-            if success and block.name == "remember":
+            if success and block.name in ("remember", "forget"):
                 self._invalidate_memories_cache()
             # End-if
 

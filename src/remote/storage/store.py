@@ -3,10 +3,8 @@
  # @date 2026/10/27
  #
  # @brief SQLite remote lifecycle persistence.
- # Stores jobs, events, schedules and independent activity records, coordinates
- # thread-safe wakeups, and recovers pending work without replaying active jobs.
- #
- # @note The database persists lifecycle state, not an in-flight subagent checkpoint.
+ # Stores background jobs, interrupt events and schedules, coordinates
+ # single-loop condition wakeups, and recovers interrupted work on restart.
  #
 
 import datetime as dt
@@ -43,7 +41,7 @@ def timestamp(value):
 
 
 ##
- # @brief Persist remote jobs, events, activities and schedules in SQLite.
+ # @brief Persist remote jobs, interrupt events and schedules in SQLite.
  #
 class Store:
     ##
@@ -78,10 +76,6 @@ class Store:
                     status TEXT NOT NULL DEFAULT 'pending', created_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS events_pending ON events(status,created_at);
-                CREATE TABLE IF NOT EXISTS activities (
-                    id TEXT PRIMARY KEY, record TEXT NOT NULL,
-                    occurred_at TEXT NOT NULL, received_at REAL NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS schedules (
                     id TEXT PRIMARY KEY, session_id TEXT NOT NULL, due_at REAL NOT NULL,
                     payload TEXT NOT NULL, interval REAL, kind TEXT NOT NULL,
@@ -128,7 +122,7 @@ class Store:
     # End-def
 
     ##
-     # @brief Persist an event and notify blocked consumers.
+     # @brief Persist an interrupt event and notify the blocked event loop.
      #
      # @param kind Event category string.
      # @param session_id Conversation identifier used to scope persisted records.
@@ -146,32 +140,14 @@ class Store:
     # End-def
 
     ##
-     # @brief Return unclaimed events in creation order.
-     #
-     # @return Ordered list of pending event dictionaries.
-     #
-    def pending_events(self):
-        with self.lock:
-            rows = self.conn.execute(
-                "SELECT * FROM events WHERE status='pending' ORDER BY created_at,rowid"
-            ).fetchall()
-            return [dict(row, payload=json.loads(row["payload"])) for row in rows]
-        # End-with
-    # End-def
-
-    ##
-     # @brief Claim one main or notification event atomically.
-     #
-     # @param notifications True to claim notification events; False for conversation events.
+     # @brief Claim the next pending interrupt event atomically.
      #
      # @return Claimed event dictionary, or None when none are pending.
      #
-    def claim_event(self, notifications=False):
+    def claim_event(self):
         with self.lock, self.conn:
-            clause = "kind='notification'" if notifications else "kind!='notification'"
             row = self.conn.execute(
-                "SELECT * FROM events WHERE status='pending' AND " + clause +
-                " ORDER BY created_at,rowid LIMIT 1"
+                "SELECT * FROM events WHERE status='pending' ORDER BY created_at,rowid LIMIT 1"
             ).fetchone()
             if row is None:
                 return None
@@ -182,76 +158,74 @@ class Store:
     # End-def
 
     ##
-     # @brief Mark a successfully delivered event complete.
+     # @brief Mark a processed event complete.
      #
-     # @param event_id Identifier of the delivered event.
+     # @param event_id Completed event identifier.
      #
      # @return None.
      #
-    def ack_event(self, event_id):
+    def complete_event(self, event_id):
         with self.lock, self.conn:
             self.conn.execute("UPDATE events SET status='done' WHERE id=?", (event_id,))
         # End-with
     # End-def
 
     ##
-     # @brief Atomically acknowledge a turn and save its reply notification.
+     # @brief Cancel all unclaimed pending events for a conversation session.
      #
-     # @param event_id Completed conversation event identifier.
-     # @param session_id Conversation identifier receiving the reply.
-     # @param reply Reply text to queue for delivery.
+     # @param session_id Conversation identifier whose queued events should be dropped.
      #
-     # @return None.
+     # @return Number of pending events cancelled.
      #
-    def complete_event(self, event_id, session_id, reply):
+    def cancel_pending_events(self, session_id):
         with self.changed, self.conn:
-            self.conn.execute("UPDATE events SET status='done' WHERE id=?", (event_id,))
-            self._event("notification", session_id, {"text": reply}, "reply_" + event_id)
+            cur = self.conn.execute(
+                "UPDATE events SET status='cancelled' WHERE session_id=? AND status='pending'",
+                (str(session_id),),
+            )
             self.changed.notify_all()
+            return int(cur.rowcount)
         # End-with
     # End-def
 
     ##
-     # @brief Make a notification available for another delivery attempt.
+     # @brief Recover interrupted events and jobs after a server restart.
      #
-     # @param event_id Notification event identifier to return to pending state.
-     #
-     # @return None.
-     #
-    def retry_event(self, event_id):
-        with self.changed, self.conn:
-            self.conn.execute("UPDATE events SET status='pending' WHERE id=?", (event_id,))
-            self.changed.notify_all()
-        # End-with
-    # End-def
-
-    ##
-     # @brief Report interrupted execution and replay pending notifications.
+     # @param notify Optional callback(session_id, text) for interrupted turn notices.
      #
      # @return None.
      #
-    def recover(self):
+    def recover(self, notify=None):
+        interrupted_notices = []
         with self.changed, self.conn:
-            self.conn.execute("UPDATE events SET status='pending' WHERE status='processing' AND kind='notification'")
             events = self.conn.execute("SELECT * FROM events WHERE status='processing'").fetchall()
             for event in events:
                 self.conn.execute("UPDATE events SET status='interrupted' WHERE id=?", (event["id"],))
-                self._event("notification", event["session_id"], {
-                    "text": "Server stopped during a conversation turn. The turn was not replayed; "
-                            "inspect task status and resubmit explicitly if needed.",
-                    "interrupted_event_id": event["id"],
-                }, "interrupted_" + event["id"])
+                interrupted_notices.append((
+                    event["session_id"],
+                    "Server restarted during an active turn. The interrupted turn was not replayed.",
+                ))
             # End-for
             rows = self.conn.execute(
                 "SELECT * FROM jobs WHERE status IN ('running','cancel_requested')"
             ).fetchall()
             for row in rows:
                 self._finish(row, "interrupted", {
-                    "status": "interrupted", "error_message": "Server stopped during execution; resubmit explicitly."
+                    "status": "interrupted",
+                    "error_message": "Server stopped during execution; resubmit explicitly.",
                 })
             # End-for
             self.changed.notify_all()
         # End-with
+        if notify is not None:
+            for session_id, text in interrupted_notices:
+                try:
+                    notify(session_id, text)
+                except Exception:
+                    pass
+                # End-try
+            # End-for
+        # End-if
     # End-def
 
     ##
@@ -325,7 +299,7 @@ class Store:
     # End-def
 
     ##
-     # @brief Save a terminal job result and completion event in one transaction.
+     # @brief Save a terminal job result and completion interrupt in one transaction.
      #
      # @param row Persisted job row.
      # @param status Terminal job status string.
@@ -339,8 +313,10 @@ class Store:
             (status, json.dumps(result, ensure_ascii=False), time.time(), row["id"]),
         )
         self._event("job_done", row["session_id"], {
-            "job_id": row["id"], "status": status,
-            "task_description": row["task_description"], "result": result,
+            "job_id": row["id"],
+            "status": status,
+            "task_description": row["task_description"],
+            "result": result,
         }, "done_" + row["id"])
     # End-def
 
@@ -384,7 +360,10 @@ class Store:
             if row["status"] == "queued":
                 self._finish(row, "cancelled", {"status": "cancelled", "summary": "Cancelled before execution."})
             elif row["status"] == "running":
-                self.conn.execute("UPDATE jobs SET status='cancel_requested',updated_at=? WHERE id=?", (time.time(), job_id))
+                self.conn.execute(
+                    "UPDATE jobs SET status='cancel_requested',updated_at=? WHERE id=?",
+                    (time.time(), job_id),
+                )
             else:
                 return row["status"] == "cancel_requested"
             # End-if
@@ -394,61 +373,7 @@ class Store:
     # End-def
 
     ##
-     # @brief Import a legacy activity record with immutable event identity.
-     #
-     # @param record Validated activity record dictionary.
-     #
-     # @return True when a new activity was inserted; False on idempotent duplicate.
-     #
-    def ingest_activity(self, record):
-        required = ("event_id", "device", "project", "session_id", "occurred_at", "summary", "sources")
-        if not isinstance(record, dict) or any(key not in record for key in required):
-            raise ValueError("Activity requires: " + ", ".join(required))
-        # End-if
-        if not all(isinstance(record[key], str) and record[key].strip() for key in required[:-1]):
-            raise ValueError("Activity identity, time and summary must be non-empty strings")
-        # End-if
-        if not isinstance(record["sources"], list):
-            raise ValueError("Activity sources must be a list")
-        # End-if
-        timestamp(record["occurred_at"])
-        encoded = json.dumps(record, ensure_ascii=False)
-        with self.lock, self.conn:
-            existing = self.conn.execute("SELECT record FROM activities WHERE id=?", (record["event_id"],)).fetchone()
-            if existing is not None:
-                if json.loads(existing["record"]) != record:
-                    raise ValueError("event_id already exists with different content")
-                # End-if
-                return False
-            # End-if
-            self.conn.execute("INSERT INTO activities VALUES(?,?,?,?)", (
-                record["event_id"], encoded, record["occurred_at"], time.time(),
-            ))
-            return True
-        # End-with
-    # End-def
-
-    ##
-     # @brief Read legacy activities, optionally without a result limit.
-     #
-     # @param limit Maximum number of activity records to return, or None for all.
-     #
-     # @return List of activity dictionaries ordered newest first.
-     #
-    def list_activities(self, limit=100):
-        with self.lock:
-            query = "SELECT record FROM activities ORDER BY received_at DESC"
-            args = ()
-            if limit is not None:
-                query += " LIMIT ?"
-                args = (max(0, int(limit)),)
-            # End-if
-            return [json.loads(row["record"]) for row in self.conn.execute(query, args)]
-        # End-with
-    # End-def
-
-    ##
-     # @brief Persist a reminder or analysis schedule.
+     # @brief Persist a reminder or analysis schedule and wake the event loop.
      #
      # @param session_id Conversation identifier used to scope persisted records.
      # @param due_at Timezone-aware ISO8601 timestamp or Unix timestamp.
@@ -467,11 +392,19 @@ class Store:
         if not isinstance(payload, (dict, str)):
             raise ValueError("Schedule payload must be text or an object")
         # End-if
-        record = dict(id="schedule_" + uuid.uuid4().hex, session_id=str(session_id),
-                      due_at=due, payload=payload, interval=interval, kind=kind, active=True)
+        record = dict(
+            id="schedule_" + uuid.uuid4().hex,
+            session_id=str(session_id),
+            due_at=due,
+            payload=payload,
+            interval=interval,
+            kind=kind,
+            active=True,
+        )
         with self.changed, self.conn:
             self.conn.execute("INSERT INTO schedules VALUES(?,?,?,?,?,?,1)", (
-                record["id"], record["session_id"], due, json.dumps(payload, ensure_ascii=False), interval, kind,
+                record["id"], record["session_id"], due,
+                json.dumps(payload, ensure_ascii=False), interval, kind,
             ))
             self.changed.notify_all()
         # End-with
@@ -496,7 +429,10 @@ class Store:
             query += " AND active=1"
         # End-if
         with self.lock:
-            return [dict(row, payload=json.loads(row["payload"])) for row in self.conn.execute(query + " ORDER BY due_at", args)]
+            return [
+                dict(row, payload=json.loads(row["payload"]))
+                for row in self.conn.execute(query + " ORDER BY due_at", args)
+            ]
         # End-with
     # End-def
 
@@ -522,14 +458,36 @@ class Store:
     # End-def
 
     ##
-     # @brief Convert due schedules into durable events and advance repeats.
+     # @brief Compute the seconds until the next active schedule is due.
+     #
+     # @param max_wait Upper bound on wait timeout in seconds.
+     #
+     # @return Timeout in seconds (0.0 .. max_wait) for Condition.wait().
+     #
+    def next_schedule_delay(self, max_wait=1.0):
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT MIN(due_at) AS next_due FROM schedules WHERE active=1"
+            ).fetchone()
+            if row is None or row["next_due"] is None:
+                return max_wait
+            # End-if
+            delta = float(row["next_due"]) - time.time()
+            return max(0.0, min(delta, max_wait))
+        # End-with
+    # End-def
+
+    ##
+     # @brief Fire due schedules: deliver reminders directly or enqueue analysis interrupts.
      #
      # @param now Optional evaluation timestamp in Unix seconds.
+     # @param notify Optional callback(session_id, text) for direct reminders.
      #
      # @return None.
      #
-    def fire_due_schedules(self, now=None):
+    def fire_due_schedules(self, now=None, notify=None):
         now = time.time() if now is None else now
+        direct_reminders = []
         with self.changed, self.conn:
             rows = self.conn.execute("SELECT * FROM schedules WHERE active=1 AND due_at<=?", (now,)).fetchall()
             for row in rows:
@@ -538,10 +496,12 @@ class Store:
                     payload = {"text": payload}
                 # End-if
                 payload = dict(payload, schedule_id=row["id"], due_at=row["due_at"])
-                kind = "notification" if row["kind"] == "reminder" else "analysis"
-                self._event(kind, row["session_id"], payload)
+                if row["kind"] == "reminder" and notify is not None:
+                    direct_reminders.append((row["session_id"], str(payload.get("text", ""))))
+                else:
+                    self._event("analysis", row["session_id"], payload)
+                # End-if
                 if row["interval"]:
-                    # Missed repeats coalesce into one delivery after downtime.
                     next_due = row["due_at"] + (int((now - row["due_at"]) // row["interval"]) + 1) * row["interval"]
                     self.conn.execute("UPDATE schedules SET due_at=? WHERE id=?", (next_due, row["id"]))
                 else:
@@ -552,6 +512,13 @@ class Store:
                 self.changed.notify_all()
             # End-if
         # End-with
+        for session_id, text in direct_reminders:
+            try:
+                notify(session_id, text)
+            except Exception:
+                pass
+            # End-try
+        # End-for
     # End-def
 
     ##

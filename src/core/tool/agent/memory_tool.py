@@ -130,6 +130,104 @@ class MemoryTool(BaseTool):
                 f"({len(content)} chars). It will appear in the dynamic "
                 f"context on the next user turn."
             )
+        # End-if
         return False, "Failed to save memory."
+    # End-def
+# End-class
+
+
+##
+ # @brief Persistent memory-removal tool.
+ # Allows the Agent to forget obsolete, redundant, or merged memories from
+ # the global or active-session tier.
+ #
+class ForgetMemoryTool(BaseTool):
+    ##
+     # @brief Constructor.
+     #
+     # @param memory_manager MemoryManager instance.
+     #
+     # @return None.
+     #
+    def __init__(self, memory_manager):
+        super().__init__()
+        self.memory = memory_manager
+    # End-def
+
+    ##
+     # @brief Return tool's name.
+     #
+     # @return Tool identifier string.
+     #
+    def get_name(self):
+        return "forget"
+    # End-def
+
+    ##
+     # @brief Return tool's description.
+     #
+     # @return Human-readable tool description.
+     #
+    def get_description(self):
+        return (
+            "Remove an obsolete, superseded, or merged memory topic from storage. "
+            "Use scope='global' (default) for global project memories or scope='session' "
+            "for current session memories. Use this to keep memory clean and self-organized."
+        )
+    # End-def
+
+    ##
+     # @brief Return tool's schema.
+     #
+     # @return JSON input schema dictionary.
+     #
+    def get_schema(self):
+        return {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Exact name of the memory topic to remove (as shown in [name] in the memory index)."
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["global", "session"],
+                    "description": "Storage scope: 'global' (default) or 'session'."
+                }
+            },
+            "required": ["name"]
+        }
+    # End-def
+
+    ##
+     # @brief Delete a memory entry from the specified scope.
+     #
+     # @param kwargs Schema properties: name, scope.
+     #
+     # @return (success_bool, result_string) tuple.
+     #
+    def execute(self, **kwargs):
+        name = str(kwargs.get("name") or "").strip()
+        scope = str(kwargs.get("scope") or "global").strip().lower()
+
+        if not name:
+            return False, "Error: 'name' is required."
+        # End-if
+        if scope not in ("global", "session"):
+            return False, f"Error: scope must be 'global' or 'session', got '{scope}'."
+        # End-if
+
+        try:
+            removed = self.memory.delete_memory(name, scope=scope)
+        except ValueError as e:
+            return False, str(e)
+        except OSError as e:
+            return False, f"Error: failed to remove memory file: {e}"
+        # End-try
+
+        if removed:
+            return True, f"Successfully forgot {scope} memory topic '{name}'."
+        # End-if
+        return False, f"Memory topic '{name}' was not found in {scope} scope."
     # End-def
 # End-class

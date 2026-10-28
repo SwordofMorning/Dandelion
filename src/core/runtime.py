@@ -45,6 +45,7 @@ def _deny_approval(action_desc, abs_target, abs_workspace):
  # @param cancelled Callback checking for a stop request.
  # @param approve Callback granting or denying a workspace escape.
  # @param echo Whether provider streams echo to the terminal.
+ # @param sandbox Whether workspace path and shell command restrictions apply.
  #
 @dataclass
 class Runtime:
@@ -53,6 +54,7 @@ class Runtime:
     cancelled: Callable[[], bool] = _not_cancelled
     approve: Callable[[str, str, str], bool] = _deny_approval
     echo: bool = False
+    sandbox: bool = True
 
     ##
      # @brief Send a complete text message to the configured output callback.

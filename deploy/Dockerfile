@@ -4,9 +4,12 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY mk ./mk
-RUN pip install --no-cache-dir . \
-    && mkdir -p /data /workspace \
-    && chown -R 1000:1000 /data /workspace
+COPY llm ./llm
+RUN useradd -m -u 1000 dandelion \
+    && pip install --no-cache-dir . \
+    && mkdir -p /data /workspace/llm \
+    && cp -r /app/llm/skill /workspace/llm/skill \
+    && chown -R 1000:1000 /data /workspace /app
 
 USER 1000:1000
 EXPOSE 8765

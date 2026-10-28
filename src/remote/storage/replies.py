@@ -2,15 +2,16 @@
  # @file src/remote/storage/replies.py
  # @date 2026/10/28
  #
- # @brief Durable conversation replies and transport cursors.
- # Persists outgoing messages, reads replies after a caller-owned identifier,
- # and records transport offsets using the shared lifecycle database lock.
- #
- # @note Transport delivery and acknowledgement are managed by their channel adapters.
+ # @brief Outgoing message router and transport cursor store.
+ # Routes SendMessageTool and reminder messages directly to Telegram when
+ # configured, and records durable replies for HTTP clients.
  #
 
+import logging
+
+
 ##
- # @brief Persist outgoing conversation replies and channel delivery cursors.
+ # @brief Route outgoing messages to Telegram and persist HTTP reply history.
  #
 class ChannelHub:
     ##
@@ -22,6 +23,8 @@ class ChannelHub:
      #
     def __init__(self, store):
         self.store = store
+        self.telegram = None
+        self.default_telegram_session = None
         with store.lock, store.conn:
             store.conn.executescript("""
                 CREATE TABLE IF NOT EXISTS replies (
@@ -37,20 +40,55 @@ class ChannelHub:
     # End-def
 
     ##
-     # @brief Queue a durable reply for one conversation.
+     # @brief Attach an active Telegram transport for direct message delivery.
      #
-     # @param session_id Conversation identifier used to scope persisted records.
-     # @param text Text to persist or emit.
+     # @param telegram Telegram channel instance.
+     # @param allowed_chats Optional iterable of authorized Telegram chat IDs.
      #
      # @return None.
      #
+    def bind_telegram(self, telegram, allowed_chats=None):
+        self.telegram = telegram
+        if allowed_chats:
+            first = next(iter(allowed_chats), None)
+            if first:
+                self.default_telegram_session = "telegram:" + str(first)
+            # End-if
+        # End-if
+    # End-def
+
+    ##
+     # @brief Persist and deliver an outgoing message for one conversation.
+     #
+     # @param session_id Target conversation identifier (or "default").
+     # @param text Message text to deliver.
+     #
+     # @return Resolved session_id to which the message was delivered.
+     #
     def notify(self, session_id, text):
+        target = str(session_id or "").strip()
+        if (not target or target in ("default", "system", "sync")) and self.default_telegram_session:
+            target = self.default_telegram_session
+        # End-if
+        body = str(text or "")
+        sent_flag = 0
+        if self.telegram is not None and target.startswith("telegram:"):
+            chat_id = target.split(":", 1)[1]
+            try:
+                self.telegram.send_text(chat_id, body)
+                sent_flag = 1
+            except Exception:
+                logging.warning("Direct Telegram send failed; queued for retry")
+                sent_flag = 0
+            # End-try
+        # End-if
         with self.store.lock, self.store.conn:
             self.store.conn.execute(
-                "INSERT INTO replies(session_id,text) VALUES (?,?)",
-                (session_id, str(text)),
+                "INSERT INTO replies(session_id,text,sent) VALUES (?,?,?)",
+                (target, body, sent_flag),
             )
         # End-with
+        return target
     # End-def
 
     ##

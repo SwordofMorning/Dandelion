@@ -3,13 +3,36 @@
  # @date 2026/10/27
  #
  # @brief Terminal adapters for shared runtime callbacks.
- # Connects Core output, cancellation checks and workspace approvals to the
- # terminal, including serialized approval prompts and Ctrl+C-style cancellation.
+ # Connects Core output, cancellation checks, sandbox enforcement and workspace
+ # approvals to the terminal with colored status prefixes.
  #
 
 from src.core.runtime import Runtime
 from src.core.tool.base_tool import _APPROVAL_LOCK
 from .interrupt import is_requested, request
+from .printer import CLIPrinter
+
+_PRINTER = CLIPrinter()
+
+
+##
+ # @brief Render Core runtime messages with CLIPrinter colors and prefixes.
+ #
+ # @param text Message text emitted by Core components.
+ #
+ # @return None.
+ #
+def _terminal_output(text):
+    msg = str(text)
+    stripped = msg.lstrip()
+    if stripped.startswith(("Token:", "Result length:")):
+        _PRINTER.print(f"{_PRINTER.C_GRAY}{msg}{_PRINTER.C_RESET}", level="debug")
+    elif stripped.startswith(("Tool requested:", "Media attached:")):
+        _PRINTER.print(msg, level="info")
+    else:
+        print(msg)
+    # End-if
+# End-def
 
 
 ##
@@ -54,5 +77,11 @@ def _approve(action_desc, abs_target, abs_workspace):
  # @return Runtime connected to the terminal and process stop flag.
  #
 def cli_runtime():
-    return Runtime(cancelled=is_requested, approve=_approve, echo=True)
+    return Runtime(
+        output=_terminal_output,
+        cancelled=is_requested,
+        approve=_approve,
+        echo=True,
+        sandbox=True,
+    )
 # End-def
