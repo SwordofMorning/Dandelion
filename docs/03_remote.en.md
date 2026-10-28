@@ -13,8 +13,7 @@ src/remote/
 ├── execution/   # Main agent assembly, single blocking interrupt loop, background workers
 ├── storage/     # SQLite lifecycle store, pure-filesystem syncs (assets/syncs/), and reply persistence
 ├── channels/    # HTTP API (MD5 ACCESS_KEY verification) and allowlisted Telegram polling/delivery
-├── tool/        # Remote tools (agent/task_tool.py and communication/message_tool.py)
-├── exports/     # Explicit Google Drive daily report export from assets/syncs/
+├── tool/        # Remote tools (agent/task_tool.py, communication/message_tool.py, drive/drive_tool.py)
 ├── sysprompt.py # RemotePromptBuilder for the 24/7 server assistant
 ├── service.py   # remote.cfg loader and service lifecycle management
 └── __main__.py  # Thin module entrypoint for python -m src.remote
@@ -66,7 +65,19 @@ FOLDER_ID =
 
 ---
 
-## 三、Server Lifecycle Script (`remote.sh`)
+## 三、Google Drive Tool (`google_drive`) & Self-Backup
+
+`GoogleDriveTool` (`src/remote/tool/drive/drive_tool.py`) exposes sandboxed Google Drive operations to the Remote Main Agent:
+
+1. Automatic Root Creation & Confinement: Automatically detects or creates the `Dandelion Remote` root folder (with `reports/`, `memory/`, `data/`, and `files/` subfolders) and confines all relative paths strictly inside `Dandelion Remote/`.
+2. Supported Actions:
+   - `backup`: Self-backup global memories (`llm/memory/*.md` -> `memory/`), synced session summaries (`assets/syncs/` -> `data/`), and daily Google Docs reports (`reports/Dandelion YYYY-MM-DD`).
+   - `restore_memory`: Restore memory files from `Dandelion Remote/memory/` to local `llm/memory/`.
+   - `list` / `upload` / `download`: List, upload, or download files within `Dandelion Remote/`.
+
+---
+
+## 四、Server Lifecycle Script (`remote.sh`)
 
 Manage the Dandelion Remote daemon directly from the repository root:
 

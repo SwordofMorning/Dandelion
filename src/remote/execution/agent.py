@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 
 from ..sysprompt import RemotePromptBuilder
-from ..tool import SubmitTaskTool, TaskControlTool, SendMessageTool
+from ..tool import SubmitTaskTool, TaskControlTool, SendMessageTool, GoogleDriveTool
 
 MAIN_DIRECT_TOOLS = (
     "bash",
@@ -202,6 +202,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
             }
             result["submit_task"] = SubmitTaskTool(jobs, str(session_id), workspace, context)
             result["task_control"] = TaskControlTool(jobs, str(session_id))
+            result["google_drive"] = GoogleDriveTool(config, workspace, backups=backups)
             if hub is not None:
                 result["send_message"] = SendMessageTool(hub, str(session_id))
             # End-if

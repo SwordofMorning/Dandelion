@@ -25,7 +25,7 @@ from .storage.store import Store
 
 
 ##
- # @brief Dispatch Dandelion Remote service and Drive export commands.
+ # @brief Dispatch Dandelion Remote service commands.
  #
  # @param argv Optional command arguments; None reads the process arguments.
  #
@@ -34,7 +34,7 @@ from .storage.store import Store
 def main(argv=None):
     default_cfg = remote_config_path()
     parser = argparse.ArgumentParser(
-        description="Run the Dandelion Remote service or export daily synced session reports to Google Drive."
+        description="Run the Dandelion Remote service."
     )
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve")
@@ -42,12 +42,8 @@ def main(argv=None):
     serve.add_argument("--port", type=int, default=None)
     serve.add_argument("--workspace", default=None)
     serve.add_argument("--workers", type=int, default=None)
-    drive = commands.add_parser("drive-export")
-    drive.add_argument("--workspace", default=None)
-    for command in (serve, drive):
-        command.add_argument("--config", default=default_cfg)
-        command.add_argument("--data-dir", default=None)
-    # End-for
+    serve.add_argument("--config", default=default_cfg)
+    serve.add_argument("--data-dir", default=None)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -66,13 +62,7 @@ def main(argv=None):
 
     store = Store(str(data_dir / "remote.sqlite3"))
     try:
-        if args.command == "drive-export":
-            from .exports.drive import export_drive
-            result = export_drive(store, workspace_dir=workspace, drive_cfg=config.get("DRIVE"))
-            print(f"Exported {result['exported']} daily documents to Google Drive.")
-        else:
-            _serve(args, parser, config, store, data_dir, workspace)
-        # End-if
+        _serve(args, parser, config, store, data_dir, workspace)
     finally:
         store.close()
     # End-try

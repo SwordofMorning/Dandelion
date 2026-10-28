@@ -6,7 +6,7 @@
 
 1. `src/core/`：收纳与前端无关的通用执行机制与抽象基类，包括 `agent/`（`MyAgent`、`BasePromptBuilder`、`MemoryManager`、`SkillManager`、`ContextCompressor`、`ContextPruner`、`run_agent_loop`）、`tool/`（内置工具集，含 `remember`、`forget`、`prune_context`）、`subagent/` 与 `utils/`。
 2. `src/cli/`：提供本地终端交互、带沙箱边界保护的 `cli_runtime()`、`CLIPromptBuilder` 以及手动会话同步客户端 `sync.py`。本地客户端读取 `cli.cfg`（兼容回退 `api.cfg`）。
-3. `src/remote/`：提供部署在专用服务器上的全天候个人编码与陪伴助手，解除本地路径与命令沙箱限制（`sandbox=False`），采用单阻塞中断循环与工具化外部通讯。远端服务器统一读取 `remote.cfg`，无需配置繁琐的环境变量，并通过根目录的 `./remote.sh` 脚本一键管理。
+3. `src/remote/`：提供部署在专用服务器上的全天候个人编码与陪伴助手，解除本地路径与命令沙箱限制（`sandbox=False`），采用单阻塞中断循环与工具化外部通讯和云盘自我备份。远端服务器统一读取 `remote.cfg`，无需配置环境变量，并通过根目录的 `./remote.sh` 脚本一键管理。
 
 Remote 的目录布局如下：
 
@@ -15,8 +15,7 @@ src/remote/
 ├── execution/   # 主 Agent 装配、单阻塞中断循环与后台 Worker
 ├── storage/     # SQLite 生命周期存储、纯文件系统会话同步 (assets/syncs/) 与回复队列
 ├── channels/    # 基于 MD5 ACCESS_KEY 校验的 HTTP 接口与 Telegram 长轮询收发
-├── tool/        # Remote 专属工具（agent/task_tool.py 与 communication/message_tool.py）
-├── exports/     # 基于 assets/syncs/ 的显式 Google Drive 日报导出
+├── tool/        # Remote 专属工具（agent/task_tool.py、communication/message_tool.py、drive/drive_tool.py）
 ├── sysprompt.py # RemotePromptBuilder 全天候助手系统提示词
 ├── service.py   # remote.cfg 加载、服务装配与平滑停机
 └── __main__.py  # python -m src.remote 薄入口
@@ -70,7 +69,19 @@ FOLDER_ID =
 
 ---
 
-## 三、服务端一键部署与管理（`remote.sh`）
+## 三、Google Drive 工具（`google_drive`）与受控自我备份
+
+Dandelion Remote 将 Google Drive 封装为 `google_drive` 工具（`GoogleDriveTool`），由模型自主调用：
+
+1. 自动创建与根目录边界锁死：首次调用时自动在 Google Drive 查找或创建 `Dandelion Remote` 根文件夹（及 `reports/`、`memory/`、`data/`、`files/` 四个子文件夹），并将所有路径寻址严格锁定在 `Dandelion Remote/` 内部，禁止越界访问其他私人云盘文件。
+2. 五项标准动作：
+   - `backup`：一键自我备份（将本地 `llm/memory/*.md` 同步至 `memory/`、将 `assets/syncs/` 会话摘要同步至 `data/`，并更新 `reports/` 下的今日 Google Docs 在线日报供 Gemini App 读取）。
+   - `restore_memory`：从云盘 `memory/` 恢复全局记忆到本地 `llm/memory/`。
+   - `list` / `upload` / `download`：在 `Dandelion Remote/`（如 `files/` 交换区）与服务器本地之间列出、上传或下载文件。
+
+---
+
+## 四、服务端一键部署与管理（`remote.sh`）
 
 在远端服务器上使用仓库根目录的 `remote.sh` 脚本管理服务生命周期：
 
