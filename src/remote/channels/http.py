@@ -173,28 +173,6 @@ def make_server(host, port, store, jobs, loop, hub, token, device_tokens=None, b
             elif self.command == "GET" and path == "/sessions":
                 self._reply(200, {"sessions": backups.list_sessions(
                     device=query.get("device", [None])[0], project=query.get("project", [None])[0])})
-            elif self.command == "GET" and path.startswith("/sessions/"):
-                parts = path.split("/")
-                try:
-                    if len(parts) == 4:
-                        body = backups.read_file(parts[2], parts[3])
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/octet-stream")
-                        self.send_header("Content-Length", str(len(body)))
-                        self.end_headers()
-                        self.wfile.write(body)
-                    elif len(parts) == 3:
-                        self._reply(200, backups.read_session(
-                            parts[2],
-                            offset=int(query.get("offset", [0])[0]),
-                            limit=int(query.get("limit", [100])[0]),
-                        ))
-                    else:
-                        self._reply(404, {"error": "Session backup was not found"})
-                    # End-if
-                except KeyError:
-                    self._reply(404, {"error": "Session backup was not found"})
-                # End-try
             elif self.command == "GET" and path == "/replies":
                 if not session:
                     raise ValueError("session_id is required")

@@ -191,13 +191,15 @@ class ContextPruner:
      # @param safe_client SafeLLMClient instance for the pruning SubAgent call.
      # @param session_manager SessionManager used for pre-prune backup archiving.
      # @param runtime Optional Runtime callbacks for status messages.
+     # @param config Optional loaded model configuration dictionary.
      #
      # @return None.
      #
-    def __init__(self, safe_client, session_manager, runtime=None):
+    def __init__(self, safe_client, session_manager, runtime=None, config=None):
         self.client = safe_client
         self.session = session_manager
         self.runtime = runtime if runtime is not None else Runtime()
+        self.config = config if isinstance(config, dict) else {}
     # End-def
 
     ##
@@ -313,7 +315,7 @@ class ContextPruner:
         )
         payload = {
             "model": self.client.model_id,
-            "max_tokens": 2048,
+            "max_tokens": int(self.config.get("MAX_TOKENS", 64000)),
             "system": PRUNE_SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_prompt}],
         }

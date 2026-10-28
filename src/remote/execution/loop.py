@@ -148,6 +148,7 @@ class RemoteLoop:
             safe_client=agent.client,
             session_manager=agent.session,
             runtime=agent.runtime,
+            config=agent.config,
         )
         pruned_history, _ = pruner.prune(
             old_history,

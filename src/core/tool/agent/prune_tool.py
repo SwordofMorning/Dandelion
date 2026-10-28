@@ -90,6 +90,7 @@ class PruneContextTool(BaseTool):
             safe_client=self.agent.client,
             session_manager=self.agent.session,
             runtime=self.agent.runtime,
+            config=self.agent.config,
         )
         new_history, stats = pruner.prune(
             self.agent.history,

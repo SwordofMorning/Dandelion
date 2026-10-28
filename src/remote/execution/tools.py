@@ -133,9 +133,8 @@ class TaskControlTool(BaseTool):
      #
     def get_description(self):
         return (
-            "List/get/cancel this conversation's background jobs, create/list/cancel persistent "
-            "schedules, or inspect synced sessions in assets/syncs/ (list_sessions, read_session). "
-            "A reminder sends text directly without a model call; analysis wakes the main agent. "
+            "List/get/cancel this conversation's background jobs, or create/list/cancel persistent "
+            "schedules. A reminder sends text directly without a model call; analysis wakes the main agent. "
             "Use timezone-aware ISO8601 due_at and optional interval in seconds."
         )
     # End-def
@@ -158,17 +157,10 @@ class TaskControlTool(BaseTool):
                         "schedule",
                         "list_schedules",
                         "cancel_schedule",
-                        "list_sessions",
-                        "read_session",
                     ],
                 },
                 "job_id": {"type": "string"},
                 "schedule_id": {"type": "string"},
-                "snapshot_id": {"type": "string"},
-                "device": {"type": "string"},
-                "project": {"type": "string"},
-                "offset": {"type": "integer", "minimum": 0},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "due_at": {"type": "string"},
                 "text": {"type": "string"},
                 "kind": {"type": "string", "enum": ["reminder", "analysis"]},
@@ -181,23 +173,17 @@ class TaskControlTool(BaseTool):
     ##
      # @brief Execute one validated tool action and return its structured outcome.
      #
-     # @param action Requested control or inspection operation.
+     # @param action Requested control or schedule operation.
      # @param job_id Target background job identifier for get or cancel.
      # @param schedule_id Target schedule identifier for cancel_schedule.
      # @param due_at Timezone-aware ISO8601 timestamp for schedule creation.
      # @param text Reminder or analysis text for schedule creation.
      # @param kind Schedule delivery mode ("reminder" or "analysis").
      # @param interval Optional repeat interval in seconds.
-     # @param snapshot_id Target session_id or snapshot_id for read_session.
-     # @param device Optional device filter for list_sessions.
-     # @param project Optional project filter for list_sessions.
-     # @param offset Starting message index for read_session pagination.
-     # @param limit Maximum number of messages returned by read_session.
      #
      # @return (success, payload_or_error) tuple.
      #
-    def execute(self, action, job_id="", schedule_id="", due_at="", text="", kind="reminder", interval=None,
-                snapshot_id="", device=None, project=None, offset=0, limit=20):
+    def execute(self, action, job_id="", schedule_id="", due_at="", text="", kind="reminder", interval=None):
         try:
             if action == "list":
                 result = [
@@ -220,20 +206,6 @@ class TaskControlTool(BaseTool):
                 result = self.jobs.store.list_schedules(self.session_id)
             elif action == "cancel_schedule":
                 result = {"cancelled": self.jobs.store.cancel_schedule(schedule_id, self.session_id)}
-            elif action in ("list_sessions", "read_session"):
-                if action == "list_sessions":
-                    result = {"sessions": self.backups.list_sessions(device=device, project=project)}
-                else:
-                    result = self.backups.read_session(snapshot_id, offset=offset, limit=limit)
-                # End-if
-                encoded = json.dumps(result, ensure_ascii=False)
-                if len(encoded) > 7400:
-                    encoded = encoded[:7200] + (
-                        "\n[Backup reference view truncated. Request a smaller history page or filter "
-                        "list_sessions by device/project.]"
-                    )
-                # End-if
-                return True, encoded
             else:
                 return False, "Unknown action"
             # End-if

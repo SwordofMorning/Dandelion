@@ -379,60 +379,6 @@ class BackupStore:
     # End-def
 
     ##
-     # @brief Read raw bytes of an allowed file from a synced session directory.
-     #
-     # @param identifier Session ID or snapshot_id.
-     # @param name Filename ("history.log", "meta.log", "task_state.json", or "summary.md").
-     #
-     # @return Raw file bytes; raises KeyError when not found.
-     #
-    def read_file(self, identifier, name):
-        if name not in ALLOWED_FILES + ("summary.md",):
-            raise KeyError("Session backup file was not found")
-        # End-if
-        session_dir = self._find_session_dir(identifier)
-        if session_dir is None or not (session_dir / name).is_file():
-            raise KeyError("Session backup was not found")
-        # End-if
-        return (session_dir / name).read_bytes()
-    # End-def
-
-    ##
-     # @brief Read a bounded message page and metadata from a synced session.
-     #
-     # @param identifier Session ID or snapshot_id.
-     # @param offset First history message index.
-     # @param limit Maximum messages to include (1..100).
-     #
-     # @return Dictionary with session metadata, paged history, meta.log and task_state.
-     #
-    def read_session(self, identifier, offset=0, limit=100):
-        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
-            raise ValueError("History offset must be nonnegative and limit must be 1..100")
-        # End-if
-        session_dir = self._find_session_dir(identifier)
-        if session_dir is None:
-            raise KeyError("Session backup was not found")
-        # End-if
-        info = self._load_dir_meta(session_dir)
-        if info is None:
-            raise KeyError("Session backup was not found")
-        # End-if
-        history = json.loads((session_dir / "history.log").read_text(encoding="utf-8"))
-        metadata = json.loads((session_dir / "meta.log").read_text(encoding="utf-8"))
-        return {
-            "snapshot": info,
-            "files": {
-                "history.log": history[offset:offset + limit],
-                "meta.log": metadata,
-                "task_state.json": info.get("task_state", {}),
-                "summary.md": info.get("summary", ""),
-            },
-            "history": {"offset": offset, "limit": limit, "total": len(history)},
-        }
-    # End-def
-
-    ##
      # @brief Render a compact overview of recently synced sessions for [Dandelion Context].
      #
      # @param limit Maximum number of recent sessions to include.
