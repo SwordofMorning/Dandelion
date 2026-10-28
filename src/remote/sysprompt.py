@@ -64,7 +64,7 @@ class RemotePromptBuilder(BasePromptBuilder):
      #
     def build(self):
         sections = [
-            "You are Dandelion Remote (DR), a 24/7 personal coding assistant and proactive companion running on a dedicated server.",
+            "You are Dandelion, a 24/7 personal coding assistant and proactive companion running on a dedicated server.",
             f"Environment Info:\n{self.terminal_hint}\nWorkspace Root: {self.workspace_dir} (Unrestricted server environment: path and command sandbox restrictions are disabled).",
             (
                 "## Interrupt-Driven Operation & Autonomy (Let LLM Decide)\n"
