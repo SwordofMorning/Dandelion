@@ -611,8 +611,8 @@ def _parse_remote_server_sections(config):
     except ValueError:
         workers = 4
     # End-try
-    workspace = read_opt("Server", "WORKSPACE", "./workspace") or "./workspace"
-    data_dir = read_opt("Server", "DATA_DIR", "./.remote") or "./.remote"
+    workspace = read_opt("Server", "WORKSPACE", "./.data/workspace") or "./.data/workspace"
+    data_dir = read_opt("Server", "DATA_DIR", "./.data/remote") or "./.data/remote"
     access_key = (
         read_opt("Server", "ACCESS_KEY")
         or read_opt("Server", "TOKEN")

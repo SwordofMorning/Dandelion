@@ -86,7 +86,7 @@ class SendMessageTool(BaseTool):
                 },
                 "pin": {
                     "type": "boolean",
-                    "description": "True for critical alerts, completed long background tasks, or urgent reminders to pin the message in Telegram and trigger an extra banner notification; False by default."
+                    "description": "True for critical alerts, completed long background tasks, or key reminders to pin the message to the top of the Telegram chat header for persistent visual visibility; False by default."
                 }
             },
             "required": ["text"]

@@ -6,7 +6,7 @@
  # Accepts private text, photo, and document messages from authorized chats,
  # saves incoming attachments into <workspace>/assets/telegram/, posts interrupt
  # events to the blocking RemoteLoop, and delivers outgoing messages with
- # typing indicators, reply quotes, and notification priority controls.
+ # typing indicators, reply quotes, notification controls, and chat pinning.
  #
 
 import logging
@@ -39,8 +39,9 @@ class Telegram:
         if not token or not allowed_chats:
             raise ValueError("Telegram requires a token and an explicit chat allowlist")
         # End-if
-        self.url = "https://api.telegram.org/bot" + token
-        self.file_url = "https://api.telegram.org/file/bot" + token
+        self._token = str(token)
+        self.url = "https://api.telegram.org/bot" + self._token
+        self.file_url = "https://api.telegram.org/file/bot" + self._token
         self.allowed = {str(chat) for chat in allowed_chats}
         self.loop = loop
         self.hub = hub
@@ -61,11 +62,19 @@ class Telegram:
      # @return Decoded Telegram result payload.
      #
     def _call(self, method, data):
-        response = requests.post(self.url + "/" + method, json=data, timeout=(10, 40))
+        try:
+            response = requests.post(self.url + "/" + method, json=data, timeout=(10, 40))
+        except requests.RequestException:
+            raise RuntimeError("Telegram API network request failed") from None
+        # End-try
         if response.status_code != 200:
             raise RuntimeError("Telegram returned HTTP " + str(response.status_code))
         # End-if
-        result = response.json()
+        try:
+            result = response.json()
+        except ValueError:
+            raise RuntimeError("Telegram returned invalid JSON") from None
+        # End-try
         if not result.get("ok"):
             raise RuntimeError("Telegram rejected the request")
         # End-if
@@ -88,12 +97,21 @@ class Telegram:
             raise RuntimeError("Telegram getFile returned no file_path")
         # End-if
         raw_name = Path(file_name or Path(remote_path).name or "attachment").name
-        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name).strip("._") or "attachment"
-        if not Path(safe_name).suffix and Path(remote_path).suffix:
-            safe_name += Path(remote_path).suffix.lower()
+        raw_suffix = Path(raw_name).suffix
+        ext = (raw_suffix or Path(remote_path).suffix).lower()
+        ext = re.sub(r"[^.a-z0-9]+", "", ext)[:16]
+        if ext and not ext.startswith("."):
+            ext = "." + ext
         # End-if
+        stem_raw = raw_name[:-len(raw_suffix)] if raw_suffix else raw_name
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem_raw).strip("._")[:100] or "attachment"
+        safe_name = stem + ext
         target = self.media_dir / f"tg_{update_id}_{safe_name}"
-        response = requests.get(self.file_url + "/" + remote_path.lstrip("/"), timeout=(10, 60))
+        try:
+            response = requests.get(self.file_url + "/" + remote_path.lstrip("/"), timeout=(10, 60))
+        except requests.RequestException:
+            raise RuntimeError("Telegram file download network request failed") from None
+        # End-try
         if response.status_code != 200:
             raise RuntimeError("Telegram file download returned HTTP " + str(response.status_code))
         # End-if
@@ -140,7 +158,7 @@ class Telegram:
      # @param text Message text to send.
      # @param reply_to_message_id Optional user message ID to quote-reply.
      # @param disable_notification True for silent delivery; False for popup alert.
-     # @param pin True to pin the sent message and trigger a pin banner alert.
+     # @param pin True to pin the sent message to the chat header.
      #
      # @return None.
      #
@@ -216,7 +234,13 @@ class Telegram:
         for idx, row in enumerate(rows):
             chat = row["session_id"].split(":", 1)[1]
             try:
-                self.send_text(chat, row["text"])
+                self.send_text(
+                    chat,
+                    row["text"],
+                    reply_to_message_id=row.get("reply_to"),
+                    disable_notification=not bool(row.get("notify", 1)),
+                    pin=bool(row.get("pin", 0)),
+                )
                 self.hub.mark_sent(row["id"])
             except Exception:
                 for remaining in rows[idx:]:
@@ -260,17 +284,26 @@ class Telegram:
                             # End-if
                             self.send_typing(chat)
                             notes = []
-                            if photos and isinstance(photos[-1], dict) and photos[-1].get("file_id"):
+                            best_photo = max(
+                                (p for p in photos if isinstance(p, dict) and p.get("file_id")),
+                                key=lambda p: (
+                                    int(p.get("width") or 0) * int(p.get("height") or 0),
+                                    int(p.get("file_size") or 0),
+                                ),
+                                default=None,
+                            )
+                            if best_photo is not None:
                                 try:
                                     rel = self._download_media(
-                                        photos[-1]["file_id"], update["update_id"]
+                                        best_photo["file_id"], update["update_id"]
                                     )
                                     notes.append(
                                         f"[Telegram Attachment saved at: {rel} - call 'read_image' "
                                         "(or 'read_pdf' / 'read_file') on this path to inspect it.]"
                                     )
                                 except Exception as exc:
-                                    notes.append(f"[Telegram photo download failed: {exc}]")
+                                    err = str(exc).replace(self._token, "<redacted>")
+                                    notes.append(f"[Telegram photo download failed: {err}]")
                                 # End-try
                             # End-if
                             if isinstance(document, dict) and document.get("file_id"):
@@ -285,7 +318,8 @@ class Telegram:
                                         "(or 'read_pdf' / 'read_file') on this path to inspect it.]"
                                     )
                                 except Exception as exc:
-                                    notes.append(f"[Telegram document download failed: {exc}]")
+                                    err = str(exc).replace(self._token, "<redacted>")
+                                    notes.append(f"[Telegram document download failed: {err}]")
                                 # End-try
                             # End-if
                             body = text or "User sent an attachment via Telegram."
