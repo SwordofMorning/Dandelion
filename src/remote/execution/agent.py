@@ -26,6 +26,8 @@ MAIN_DIRECT_TOOLS = (
     "list_directory",
     "grep_search",
     "markdown_editor",
+    "read_image",
+    "read_pdf",
     "load_skill",
     "get_time",
     "remember",

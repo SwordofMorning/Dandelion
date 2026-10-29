@@ -53,8 +53,8 @@ def main(argv=None):
     # End-if
     srv_cfg = config.get("SERVER") or {}
 
-    raw_data_dir = args.data_dir or srv_cfg.get("data_dir") or ".remote"
-    raw_workspace = args.workspace or srv_cfg.get("workspace") or "./workspace"
+    raw_data_dir = args.data_dir or srv_cfg.get("data_dir") or ".data/remote"
+    raw_workspace = args.workspace or srv_cfg.get("workspace") or "./.data/workspace"
     data_dir = Path(raw_data_dir).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     workspace = str(Path(raw_workspace).resolve())
@@ -121,7 +121,10 @@ def _serve(args, parser, config, store, data_dir, workspace):
     server = make_server(
         host, port, store, jobs, loop, hub, access_key, backups=backups,
     )
-    telegram = Telegram(telegram_token, chats, loop, hub) if telegram_token else None
+    telegram = (
+        Telegram(telegram_token, chats, loop, hub, workspace_dir=workspace)
+        if telegram_token else None
+    )
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
 
     ##

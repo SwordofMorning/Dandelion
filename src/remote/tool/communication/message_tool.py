@@ -1,10 +1,11 @@
 ##
  # @file src/remote/tool/communication/message_tool.py
- # @date 2026/10/28
+ # @date 2026/10/29
  #
  # @brief Agent-initiated external communication tool.
- # Allows Dandelion Remote to decide autonomously when to send a message to
- # the user over Telegram or the durable reply channel.
+ # Serves as the sole outbound messaging gateway for Dandelion Remote to reach
+ # the user over Telegram or durable remote channels, while ordinary plain-text
+ # model outputs remain persisted strictly inside history.log.
  #
 
 import json
@@ -27,16 +28,6 @@ class SendMessageTool(BaseTool):
         super().__init__()
         self.hub = hub
         self.default_session_id = str(default_session_id)
-        self.sent_in_turn = 0
-    # End-def
-
-    ##
-     # @brief Reset the per-turn send counter before a new event turn starts.
-     #
-     # @return None.
-     #
-    def reset_turn(self):
-        self.sent_in_turn = 0
     # End-def
 
     ##
@@ -56,10 +47,10 @@ class SendMessageTool(BaseTool):
     def get_description(self):
         return (
             "Send a message to the user via Telegram or the active remote chat channel. "
-            "Use this tool whenever you want to reply to the user, proactively report "
-            "completed background work, or share important insights from synced sessions. "
-            "If you are processing a background sync or schedule and do not need to disturb "
-            "the user, simply do not call this tool."
+            "This is the ONLY way the user receives your messages (ordinary plain-text "
+            "responses are saved to history.log only and are NOT sent to the user). "
+            "Call this tool whenever you want to reply, send a quick ACK, report completed "
+            "work, or proactively share insights. Do not call it when working silently."
         )
     # End-def
 
@@ -79,6 +70,10 @@ class SendMessageTool(BaseTool):
                 "session_id": {
                     "type": "string",
                     "description": "Optional target session/chat identifier (e.g. 'telegram:123456'). Defaults to the current conversation or primary Telegram chat."
+                },
+                "notify": {
+                    "type": "boolean",
+                    "description": "True (default) to trigger a standard popup/sound notification; False for silent delivery (e.g. late-night notes or non-urgent background digests)."
                 }
             },
             "required": ["text"]
@@ -86,23 +81,29 @@ class SendMessageTool(BaseTool):
     # End-def
 
     ##
-     # @brief Deliver the message through ChannelHub and record that a message was sent.
+     # @brief Deliver the message through ChannelHub.
      #
      # @param text Message text to deliver.
      # @param session_id Optional target session identifier override.
+     # @param notify True to trigger a device notification; False for silent delivery.
      #
      # @return (success_bool, status_json_string) tuple.
      #
-    def execute(self, text="", session_id=""):
+    def execute(self, text="", session_id="", notify=True):
         body = str(text or "").strip()
         if not body:
             return False, "Error: 'text' must be non-empty."
         # End-if
         target = str(session_id or "").strip() or self.default_session_id
+        notify_flag = True if notify is None else bool(notify)
         try:
-            delivered_to = self.hub.notify(target, body)
-            self.sent_in_turn += 1
-            return True, json.dumps({"sent": True, "session_id": delivered_to, "chars": len(body)})
+            delivered_to = self.hub.notify(target, body, notify=notify_flag)
+            return True, json.dumps({
+                "sent": True,
+                "session_id": delivered_to,
+                "chars": len(body),
+                "notify": notify_flag,
+            })
         except Exception as exc:
             return False, f"Error sending message: {exc}"
         # End-try

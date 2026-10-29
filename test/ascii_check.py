@@ -20,8 +20,8 @@ import os
 import sys
 
 SKIP_DIRS = {
-    ".git", "__pycache__", ".env", ".log", "llm",
-    "build", "dist", "node_modules", "venv", ".venv",
+    ".git", "__pycache__", ".env", ".log", ".data", ".playground",
+    "llm", "build", "dist", "node_modules", "venv", ".venv",
 }
 
 SKIP_FILES = {
