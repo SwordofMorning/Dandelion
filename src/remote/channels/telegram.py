@@ -167,12 +167,6 @@ class Telegram:
         if chat_str not in self.allowed:
             raise ValueError("Chat ID is not in DANDELION_TELEGRAM_CHATS allowlist")
         # End-if
-        if reply_to_message_id is None:
-            last_id = self.hub.state("telegram_last_msg:" + chat_str, default="")
-            if str(last_id).isdigit():
-                reply_to_message_id = int(last_id)
-            # End-if
-        # End-if
         body = str(text or "").strip() or "(empty reply)"
         for idx, pos in enumerate(range(0, len(body), 3500)):
             payload = {

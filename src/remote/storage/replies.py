@@ -79,18 +79,19 @@ class ChannelHub:
      # @param text Message text to persist.
      # @param notify True to trigger a device notification; False for silent delivery.
      # @param pin True to pin the message in Telegram for persistent visual salience.
-     # @param reply_to_message_id Optional Telegram message ID to quote-reply.
+     # @param quote True to quote-reply the user's latest Telegram message; False by default.
+     # @param reply_to_message_id Optional explicit Telegram message ID to quote-reply.
      #
      # @return (resolved_session_id, reply_id, body_text, resolved_reply_to) tuple.
      #
-    def enqueue(self, session_id, text, notify=True, pin=False, reply_to_message_id=None):
+    def enqueue(self, session_id, text, notify=True, pin=False, quote=False, reply_to_message_id=None):
         target = str(session_id or "").strip()
         if (not target or target in ("default", "system", "sync")) and self.default_telegram_session:
             target = self.default_telegram_session
         # End-if
         body = str(text or "")
         reply_to = int(reply_to_message_id) if reply_to_message_id is not None else None
-        if reply_to is None and target.startswith("telegram:"):
+        if reply_to is None and quote and target.startswith("telegram:"):
             chat_id = target.split(":", 1)[1]
             last_id = self.state("telegram_last_msg:" + chat_id, default="")
             if str(last_id).isdigit():
@@ -154,16 +155,18 @@ class ChannelHub:
      # @param text Message text to deliver.
      # @param notify True to trigger a device notification; False for silent delivery.
      # @param pin True to pin the message in Telegram for persistent visual salience.
-     # @param reply_to_message_id Optional Telegram message ID to quote-reply.
+     # @param quote True to quote-reply the user's latest Telegram message; False by default.
+     # @param reply_to_message_id Optional explicit Telegram message ID to quote-reply.
      #
      # @return Resolved session_id to which the message was delivered.
      #
-    def notify(self, session_id, text, notify=True, pin=False, reply_to_message_id=None):
+    def notify(self, session_id, text, notify=True, pin=False, quote=False, reply_to_message_id=None):
         target, reply_id, body, resolved_reply_to = self.enqueue(
             session_id,
             text,
             notify=notify,
             pin=pin,
+            quote=quote,
             reply_to_message_id=reply_to_message_id,
         )
         return self.deliver(
