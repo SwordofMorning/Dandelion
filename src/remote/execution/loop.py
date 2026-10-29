@@ -259,29 +259,29 @@ class RemoteLoop:
         backup_ok, _ = backup.create("remote_turn", history_messages=len(agent.history))
 
         typing_stop = threading.Event()
-        if event["kind"] == "message" and str(session_id).startswith("telegram:"):
-            tg = getattr(getattr(self.notify, "__self__", None), "telegram", None)
-            if tg is not None and hasattr(tg, "send_typing"):
-                chat_id = str(session_id).split(":", 1)[1]
-
-                ##
-                 # @brief Refresh Telegram typing action every 4s until the turn finishes.
-                 #
-                 # @return None.
-                 #
-                def keep_typing():
-                    while not typing_stop.is_set() and not self._stop.is_set():
-                        tg.send_typing(chat_id)
-                        typing_stop.wait(4.0)
-                    # End-while
-                # End-def
-
-                threading.Thread(target=keep_typing, name="telegram-typing", daemon=True).start()
-            # End-if
-        # End-if
-
-        agent.inject_user_message(self._message(event))
         try:
+            if event["kind"] == "message" and str(session_id).startswith("telegram:"):
+                tg = getattr(getattr(self.notify, "__self__", None), "telegram", None)
+                if tg is not None and hasattr(tg, "send_typing"):
+                    chat_id = str(session_id).split(":", 1)[1]
+
+                    ##
+                     # @brief Refresh Telegram typing action every 4s until the turn finishes.
+                     #
+                     # @return None.
+                     #
+                    def keep_typing():
+                        while not typing_stop.is_set() and not self._stop.is_set():
+                            tg.send_typing(chat_id)
+                            typing_stop.wait(4.0)
+                        # End-while
+                    # End-def
+
+                    threading.Thread(target=keep_typing, name="telegram-typing", daemon=True).start()
+                # End-if
+            # End-if
+
+            agent.inject_user_message(self._message(event))
             ok, error = run_agent_loop(
                 agent,
                 should_stop=lambda: self._stop.is_set() or agent.runtime.cancelled(),
