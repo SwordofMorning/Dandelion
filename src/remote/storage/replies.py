@@ -88,14 +88,23 @@ class ChannelHub:
      # @param target Resolved conversation identifier.
      # @param reply_id Primary key of the enqueued reply row.
      # @param body Message text to send.
+     # @param notify True to trigger a device notification; False for silent delivery.
+     # @param pin True to pin the message in Telegram for urgent visibility.
+     # @param reply_to_message_id Optional Telegram message ID to quote-reply.
      #
      # @return Resolved session_id.
      #
-    def deliver(self, target, reply_id, body):
+    def deliver(self, target, reply_id, body, notify=True, pin=False, reply_to_message_id=None):
         if self.telegram is not None and target.startswith("telegram:"):
             chat_id = target.split(":", 1)[1]
             try:
-                self.telegram.send_text(chat_id, body)
+                self.telegram.send_text(
+                    chat_id,
+                    body,
+                    reply_to_message_id=reply_to_message_id,
+                    disable_notification=not bool(notify),
+                    pin=bool(pin),
+                )
                 self.mark_sent(reply_id)
             except Exception:
                 logging.warning("Direct Telegram send failed; queued for retry")
@@ -116,12 +125,22 @@ class ChannelHub:
      #
      # @param session_id Target conversation identifier (or "default").
      # @param text Message text to deliver.
+     # @param notify True to trigger a device notification; False for silent delivery.
+     # @param pin True to pin the message in Telegram for urgent visibility.
+     # @param reply_to_message_id Optional Telegram message ID to quote-reply.
      #
      # @return Resolved session_id to which the message was delivered.
      #
-    def notify(self, session_id, text):
+    def notify(self, session_id, text, notify=True, pin=False, reply_to_message_id=None):
         target, reply_id, body = self.enqueue(session_id, text)
-        return self.deliver(target, reply_id, body)
+        return self.deliver(
+            target,
+            reply_id,
+            body,
+            notify=notify,
+            pin=pin,
+            reply_to_message_id=reply_to_message_id,
+        )
     # End-def
 
     ##

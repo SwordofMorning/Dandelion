@@ -79,6 +79,14 @@ class SendMessageTool(BaseTool):
                 "session_id": {
                     "type": "string",
                     "description": "Optional target session/chat identifier (e.g. 'telegram:123456'). Defaults to the current conversation or primary Telegram chat."
+                },
+                "notify": {
+                    "type": "boolean",
+                    "description": "True (default) to trigger an explicit popup/sound notification on the user's device; False for silent delivery (e.g. late-night notes or low-priority background logs)."
+                },
+                "pin": {
+                    "type": "boolean",
+                    "description": "True for critical alerts, completed long background tasks, or urgent reminders to pin the message in Telegram and trigger an extra banner notification; False by default."
                 }
             },
             "required": ["text"]
@@ -90,19 +98,29 @@ class SendMessageTool(BaseTool):
      #
      # @param text Message text to deliver.
      # @param session_id Optional target session identifier override.
+     # @param notify True to trigger a device notification; False for silent delivery.
+     # @param pin True to pin the message in Telegram for urgent visibility.
      #
      # @return (success_bool, status_json_string) tuple.
      #
-    def execute(self, text="", session_id=""):
+    def execute(self, text="", session_id="", notify=True, pin=False):
         body = str(text or "").strip()
         if not body:
             return False, "Error: 'text' must be non-empty."
         # End-if
         target = str(session_id or "").strip() or self.default_session_id
+        notify_flag = True if notify is None else bool(notify)
+        pin_flag = bool(pin)
         try:
-            delivered_to = self.hub.notify(target, body)
+            delivered_to = self.hub.notify(target, body, notify=notify_flag, pin=pin_flag)
             self.sent_in_turn += 1
-            return True, json.dumps({"sent": True, "session_id": delivered_to, "chars": len(body)})
+            return True, json.dumps({
+                "sent": True,
+                "session_id": delivered_to,
+                "chars": len(body),
+                "notify": notify_flag,
+                "pin": pin_flag,
+            })
         except Exception as exc:
             return False, f"Error sending message: {exc}"
         # End-try

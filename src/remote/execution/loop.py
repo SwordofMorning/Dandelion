@@ -259,6 +259,14 @@ class RemoteLoop:
             send_tool.reset_turn()
         # End-if
 
+        if str(session_id).startswith("telegram:"):
+            hub = getattr(self.notify, "__self__", None)
+            tg = getattr(hub, "telegram", None)
+            if tg is not None and hasattr(tg, "send_typing"):
+                tg.send_typing(str(session_id).split(":", 1)[1])
+            # End-if
+        # End-if
+
         backup = SessionBackup(agent.session.current_session_dir)
         backup_ok, _ = backup.create("remote_turn", history_messages=len(agent.history))
 

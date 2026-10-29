@@ -50,8 +50,8 @@ DEVICE_ID = work-pc
 [Server]
 HOST = 0.0.0.0
 PORT = 8765
-WORKSPACE = ./workspace
-DATA_DIR = ./.remote
+WORKSPACE = ./.data/workspace
+DATA_DIR = ./.data/remote
 WORKERS = 4
 ACCESS_KEY = dr-your-shared-secret-key
 

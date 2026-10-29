@@ -6,9 +6,17 @@ venv/
 ENV/
 env/
 
-# Logs and Caches
+# Unified Runtime & Agent Data
+.data/
+
+# Logs, Caches & Transitional Runtime Directories
 .log/
 .remote/
+workspace/
+.playfround/
+.playground_parsed/
+*.zip
+*.log
 __pycache__/
 *.pyc
 *.pyo

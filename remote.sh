@@ -20,8 +20,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CFG_FILE="$("$PYTHON_BIN" -c 'import sys; sys.path.insert(0, "."); from mk.lib.paths import remote_config_path; print(remote_config_path())')"
-DATA_DIR="${DR_DATA_DIR:-$ROOT_DIR/.remote}"
-WORKSPACE_DIR="${DR_WORKSPACE_DIR:-$ROOT_DIR/workspace}"
+DATA_DIR="${DR_DATA_DIR:-$ROOT_DIR/.data/remote}"
+WORKSPACE_DIR="${DR_WORKSPACE_DIR:-$ROOT_DIR/.data/workspace}"
 PID_FILE="$DATA_DIR/remote.pid"
 LOG_FILE="$DATA_DIR/remote.log"
 
@@ -75,8 +75,8 @@ MODEL_LIST = [
 [Server]
 HOST = 0.0.0.0
 PORT = 8765
-WORKSPACE = ./workspace
-DATA_DIR = ./.remote
+WORKSPACE = ./.data/workspace
+DATA_DIR = ./.data/remote
 WORKERS = 4
 ACCESS_KEY = ${GEN_KEY}
 
