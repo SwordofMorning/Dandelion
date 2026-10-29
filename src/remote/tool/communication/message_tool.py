@@ -73,15 +73,7 @@ class SendMessageTool(BaseTool):
                 },
                 "notify": {
                     "type": "boolean",
-                    "description": "True (default) to trigger an explicit popup/sound notification on the user's device; False for silent delivery (e.g. late-night notes or low-priority background logs)."
-                },
-                "pin": {
-                    "type": "boolean",
-                    "description": "True for critical alerts, completed long background tasks, or key reminders to pin the message to the top of the Telegram chat header for persistent visual visibility; False by default."
-                },
-                "quote": {
-                    "type": "boolean",
-                    "description": "True to quote-reply the user's latest Telegram message (useful when disambiguating among multiple messages); False by default for clean plain messages."
+                    "description": "True (default) to trigger a standard popup/sound notification; False for silent delivery (e.g. late-night notes or non-urgent background digests)."
                 }
             },
             "required": ["text"]
@@ -94,35 +86,23 @@ class SendMessageTool(BaseTool):
      # @param text Message text to deliver.
      # @param session_id Optional target session identifier override.
      # @param notify True to trigger a device notification; False for silent delivery.
-     # @param pin True to pin the message in Telegram for persistent visual visibility.
-     # @param quote True to quote-reply the user's latest Telegram message; False by default.
      #
      # @return (success_bool, status_json_string) tuple.
      #
-    def execute(self, text="", session_id="", notify=True, pin=False, quote=False):
+    def execute(self, text="", session_id="", notify=True):
         body = str(text or "").strip()
         if not body:
             return False, "Error: 'text' must be non-empty."
         # End-if
         target = str(session_id or "").strip() or self.default_session_id
         notify_flag = True if notify is None else bool(notify)
-        pin_flag = bool(pin)
-        quote_flag = bool(quote)
         try:
-            delivered_to = self.hub.notify(
-                target,
-                body,
-                notify=notify_flag,
-                pin=pin_flag,
-                quote=quote_flag,
-            )
+            delivered_to = self.hub.notify(target, body, notify=notify_flag)
             return True, json.dumps({
                 "sent": True,
                 "session_id": delivered_to,
                 "chars": len(body),
                 "notify": notify_flag,
-                "pin": pin_flag,
-                "quote": quote_flag,
             })
         except Exception as exc:
             return False, f"Error sending message: {exc}"

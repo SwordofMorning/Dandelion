@@ -6,7 +6,7 @@
  # Accepts private text, photo, and document messages from authorized chats,
  # saves incoming attachments into <workspace>/assets/telegram/, posts interrupt
  # events to the blocking RemoteLoop, and delivers outgoing messages with
- # typing indicators, reply quotes, notification controls, and chat pinning.
+ # typing indicators and explicit/silent notification control.
  #
 
 import logging
@@ -156,42 +156,22 @@ class Telegram:
      #
      # @param chat_id Target Telegram chat identifier.
      # @param text Message text to send.
-     # @param reply_to_message_id Optional user message ID to quote-reply.
-     # @param disable_notification True for silent delivery; False for popup alert.
-     # @param pin True to pin the sent message to the chat header.
+     # @param disable_notification True for silent delivery; False for standard notification.
      #
      # @return None.
      #
-    def send_text(self, chat_id, text, reply_to_message_id=None, disable_notification=False, pin=False):
+    def send_text(self, chat_id, text, disable_notification=False):
         chat_str = str(chat_id)
         if chat_str not in self.allowed:
             raise ValueError("Chat ID is not in DANDELION_TELEGRAM_CHATS allowlist")
         # End-if
         body = str(text or "").strip() or "(empty reply)"
-        for idx, pos in enumerate(range(0, len(body), 3500)):
-            payload = {
+        for pos in range(0, len(body), 3500):
+            self._call("sendMessage", {
                 "chat_id": chat_str,
                 "text": body[pos:pos + 3500],
                 "disable_notification": bool(disable_notification),
-            }
-            if idx == 0 and reply_to_message_id:
-                payload["reply_parameters"] = {
-                    "message_id": int(reply_to_message_id),
-                    "allow_sending_without_reply": True,
-                }
-            # End-if
-            sent = self._call("sendMessage", payload)
-            if pin and idx == 0 and isinstance(sent, dict) and sent.get("message_id"):
-                try:
-                    self._call("pinChatMessage", {
-                        "chat_id": chat_str,
-                        "message_id": int(sent["message_id"]),
-                        "disable_notification": bool(disable_notification),
-                    })
-                except Exception:
-                    logging.warning("Telegram pinChatMessage failed; message was still delivered")
-                # End-try
-            # End-if
+            })
         # End-for
     # End-def
 
@@ -231,9 +211,7 @@ class Telegram:
                 self.send_text(
                     chat,
                     row["text"],
-                    reply_to_message_id=row.get("reply_to"),
                     disable_notification=not bool(row.get("notify", 1)),
-                    pin=bool(row.get("pin", 0)),
                 )
                 self.hub.mark_sent(row["id"])
             except Exception:
@@ -272,11 +250,6 @@ class Telegram:
                             self.loop.cancel(session)
                             self.hub.notify(session, "Cancellation requested.")
                         else:
-                            msg_id = message.get("message_id")
-                            if msg_id is not None:
-                                self.hub.set_state("telegram_last_msg:" + chat, msg_id)
-                            # End-if
-                            self.send_typing(chat)
                             notes = []
                             best_photo = max(
                                 (p for p in photos if isinstance(p, dict) and p.get("file_id")),
@@ -323,7 +296,7 @@ class Telegram:
                             self.loop.post(
                                 "message",
                                 session,
-                                {"text": body, "message_id": msg_id},
+                                {"text": body},
                                 event_id="telegram:" + str(update["update_id"]),
                             )
                         # End-if

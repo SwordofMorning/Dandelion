@@ -31,26 +31,18 @@ class ChannelHub:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL, text TEXT NOT NULL,
                     sent INTEGER NOT NULL DEFAULT 0,
-                    notify INTEGER NOT NULL DEFAULT 1,
-                    pin INTEGER NOT NULL DEFAULT 0,
-                    reply_to INTEGER DEFAULT NULL
+                    notify INTEGER NOT NULL DEFAULT 1
                 );
                 CREATE TABLE IF NOT EXISTS channel_state (
                     name TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
                 UPDATE replies SET sent=0 WHERE sent=-1;
             """)
-            for ddl in (
-                "ALTER TABLE replies ADD COLUMN notify INTEGER NOT NULL DEFAULT 1",
-                "ALTER TABLE replies ADD COLUMN pin INTEGER NOT NULL DEFAULT 0",
-                "ALTER TABLE replies ADD COLUMN reply_to INTEGER DEFAULT NULL",
-            ):
-                try:
-                    store.conn.execute(ddl)
-                except Exception:
-                    pass
-                # End-try
-            # End-for
+            try:
+                store.conn.execute("ALTER TABLE replies ADD COLUMN notify INTEGER NOT NULL DEFAULT 1")
+            except Exception:
+                pass
+            # End-try
         # End-with
     # End-def
 
@@ -78,36 +70,24 @@ class ChannelHub:
      # @param session_id Target conversation identifier (or "default").
      # @param text Message text to persist.
      # @param notify True to trigger a device notification; False for silent delivery.
-     # @param pin True to pin the message in Telegram for persistent visual salience.
-     # @param quote True to quote-reply the user's latest Telegram message; False by default.
-     # @param reply_to_message_id Optional explicit Telegram message ID to quote-reply.
      #
-     # @return (resolved_session_id, reply_id, body_text, resolved_reply_to) tuple.
+     # @return (resolved_session_id, reply_id, body_text) tuple.
      #
-    def enqueue(self, session_id, text, notify=True, pin=False, quote=False, reply_to_message_id=None):
+    def enqueue(self, session_id, text, notify=True):
         target = str(session_id or "").strip()
         if (not target or target in ("default", "system", "sync")) and self.default_telegram_session:
             target = self.default_telegram_session
         # End-if
         body = str(text or "")
-        reply_to = int(reply_to_message_id) if reply_to_message_id is not None else None
-        if reply_to is None and quote and target.startswith("telegram:"):
-            chat_id = target.split(":", 1)[1]
-            last_id = self.state("telegram_last_msg:" + chat_id, default="")
-            if str(last_id).isdigit():
-                reply_to = int(last_id)
-            # End-if
-        # End-if
         notify_int = 1 if (True if notify is None else bool(notify)) else 0
-        pin_int = 1 if bool(pin) else 0
         with self.store.lock, self.store.conn:
             cur = self.store.conn.execute(
-                "INSERT INTO replies(session_id,text,sent,notify,pin,reply_to) VALUES (?,?,-1,?,?,?)",
-                (target, body, notify_int, pin_int, reply_to),
+                "INSERT INTO replies(session_id,text,sent,notify) VALUES (?,?,-1,?)",
+                (target, body, notify_int),
             )
             reply_id = int(cur.lastrowid)
         # End-with
-        return target, reply_id, body, reply_to
+        return target, reply_id, body
     # End-def
 
     ##
@@ -117,21 +97,17 @@ class ChannelHub:
      # @param reply_id Primary key of the enqueued reply row.
      # @param body Message text to send.
      # @param notify True to trigger a device notification; False for silent delivery.
-     # @param pin True to pin the message in Telegram for persistent visual salience.
-     # @param reply_to_message_id Optional Telegram message ID to quote-reply.
      #
      # @return Resolved session_id.
      #
-    def deliver(self, target, reply_id, body, notify=True, pin=False, reply_to_message_id=None):
+    def deliver(self, target, reply_id, body, notify=True):
         if self.telegram is not None and target.startswith("telegram:"):
             chat_id = target.split(":", 1)[1]
             try:
                 self.telegram.send_text(
                     chat_id,
                     body,
-                    reply_to_message_id=reply_to_message_id,
                     disable_notification=not bool(notify),
-                    pin=bool(pin),
                 )
                 self.mark_sent(reply_id)
             except Exception:
@@ -154,29 +130,12 @@ class ChannelHub:
      # @param session_id Target conversation identifier (or "default").
      # @param text Message text to deliver.
      # @param notify True to trigger a device notification; False for silent delivery.
-     # @param pin True to pin the message in Telegram for persistent visual salience.
-     # @param quote True to quote-reply the user's latest Telegram message; False by default.
-     # @param reply_to_message_id Optional explicit Telegram message ID to quote-reply.
      #
      # @return Resolved session_id to which the message was delivered.
      #
-    def notify(self, session_id, text, notify=True, pin=False, quote=False, reply_to_message_id=None):
-        target, reply_id, body, resolved_reply_to = self.enqueue(
-            session_id,
-            text,
-            notify=notify,
-            pin=pin,
-            quote=quote,
-            reply_to_message_id=reply_to_message_id,
-        )
-        return self.deliver(
-            target,
-            reply_id,
-            body,
-            notify=notify,
-            pin=pin,
-            reply_to_message_id=resolved_reply_to,
-        )
+    def notify(self, session_id, text, notify=True):
+        target, reply_id, body = self.enqueue(session_id, text, notify=notify)
+        return self.deliver(target, reply_id, body, notify=notify)
     # End-def
 
     ##
@@ -191,7 +150,7 @@ class ChannelHub:
         with self.store.lock, self.store.conn:
             for chat in allowed_chats:
                 rows.extend(self.store.conn.execute(
-                    "SELECT id,session_id,text,notify,pin,reply_to FROM replies "
+                    "SELECT id,session_id,text,notify FROM replies "
                     "WHERE sent=0 AND session_id=? ORDER BY id LIMIT 20",
                     ("telegram:" + str(chat),),
                 ).fetchall())
