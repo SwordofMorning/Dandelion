@@ -208,13 +208,10 @@ class Telegram:
         # End-try
         with self._progress_lock:
             cur = self._progress.get(chat_str)
-            if cur is None:
+            if cur is None or not cur.get("active") or cur.get("message_id") != msg_id:
                 return
             # End-if
             cur["editing"] = False
-            if not cur.get("active") or cur.get("message_id") != msg_id:
-                return
-            # End-if
             if edit_ok:
                 cur["text"] = sent_text
                 cur["last_ts"] = time.monotonic()
