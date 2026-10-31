@@ -574,6 +574,11 @@ class MyAgent:
             self.runtime.emit(f"\n[!] Context threshold reached: {reason}")
             new_hist, stats = self.compressor.compress(self.history)
             if stats.get("status") == "archive_failed":
+                if self.history and self.history[-1].get("role") == "assistant":
+                    self.history.pop()
+                    self.session.save_history(self.history)
+                # End-if
+                self._pending_media_blocks = []
                 return False, f"Compaction archive failed: {stats.get('error')}"
             # End-if
             if new_hist is not None:
@@ -716,11 +721,27 @@ class MyAgent:
      #
     def stop_turn(self, note="[Turn stopped by user.]"):
         self._pending_media_blocks = []
+        changed = False
+        while self.history and self.history[-1].get("role") == "assistant":
+            tail_content = self.history[-1].get("content", [])
+            has_unpaired_tool = isinstance(tail_content, list) and any(
+                (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_use"
+                for b in tail_content
+            )
+            if not has_unpaired_tool:
+                break
+            # End-if
+            self.history.pop()
+            changed = True
+        # End-while
         if self.history and self.history[-1].get("role") == "user":
             self.history.append({
                 "role": "assistant",
                 "content": [{"type": "text", "text": str(note)}],
             })
+            changed = True
+        # End-if
+        if changed:
             self.session.save_history(self.history)
         # End-if
         self.session.log_api_call("TURN STOPPED", {

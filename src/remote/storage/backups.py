@@ -257,11 +257,8 @@ class BackupStore:
             # End-if
         # End-for
         has_summary = (dest_dir / "summary.md").is_file()
-        already_handled = (
-            prev_meta.get("digested_snapshot_id") == snapshot_id
-            or prev_meta.get("queued_snapshot_id") == snapshot_id
-        )
-        if not (has_summary and already_handled):
+        already_digested = (prev_meta.get("digested_snapshot_id") == snapshot_id)
+        if not (has_summary and already_digested):
             return {"unchanged": False}
         # End-if
         return {
@@ -329,14 +326,31 @@ class BackupStore:
 
         dest_dir.mkdir(parents=True, exist_ok=True)
         if source_dir != dest_dir:
-            for name in manifest["files"]:
-                src_file = source_dir / name
-                tmp_file = dest_dir / (name + ".tmp")
-                shutil.copyfile(src_file, tmp_file)
-                os.replace(tmp_file, dest_dir / name)
-            # End-for
+            staged_tmps = []
+            try:
+                for name in manifest["files"]:
+                    src_file = source_dir / name
+                    tmp_file = dest_dir / (name + ".tmp")
+                    shutil.copyfile(src_file, tmp_file)
+                    staged_tmps.append((tmp_file, dest_dir / name))
+                # End-for
+                for tmp_file, final_file in staged_tmps:
+                    os.replace(tmp_file, final_file)
+                # End-for
+            finally:
+                for tmp_file, _ in staged_tmps:
+                    if tmp_file.exists():
+                        tmp_file.unlink(missing_ok=True)
+                    # End-if
+                # End-for
+            # End-try
             shutil.rmtree(stage_dir, ignore_errors=True)
         # End-if
+        for opt_name in OPTIONAL_FILES:
+            if opt_name not in manifest["files"]:
+                (dest_dir / opt_name).unlink(missing_ok=True)
+            # End-if
+        # End-for
 
         new_hist_sha = manifest["files"]["history.log"]["sha256"]
         prev_hist_sha = (
@@ -367,7 +381,7 @@ class BackupStore:
         needs_digest = bool(
             changed
             or not has_summary
-            or (prev_digested != snapshot_id and prev_queued != snapshot_id)
+            or (prev_digested != snapshot_id)
         )
         return {
             "accepted": snapshot_id,

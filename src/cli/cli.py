@@ -737,15 +737,26 @@ class InteractiveCLI:
         if not hist:
             return
         # End-if
-        tail = hist[-1]
-        if tail.get("role") != "user":
-            return
+        changed = False
+        while hist and hist[-1].get("role") == "assistant":
+            tail_content = hist[-1].get("content", [])
+            has_unpaired_tool = isinstance(tail_content, list) and any(
+                (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_use"
+                for b in tail_content
+            )
+            if not has_unpaired_tool:
+                break
+            # End-if
+            hist.pop()
+            changed = True
+        # End-while
+        if hist and hist[-1].get("role") == "user" and not isinstance(hist[-1].get("content", ""), list):
+            hist.pop()
+            changed = True
         # End-if
-        if isinstance(tail.get("content", ""), list):
-            return  # tool_result payload: never roll back
+        if changed:
+            self.session.save_history(hist)
         # End-if
-        hist.pop()
-        self.session.save_history(hist)
     # End-def
 
     ##

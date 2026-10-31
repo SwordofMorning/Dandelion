@@ -432,10 +432,10 @@ class SubAgent(ISubAgent):
      # @param messages raw messages (history).
      #
     def _extract_final_summary(self, messages):
-        for msg in reversed(messages):
+        for idx, msg in enumerate(reversed(messages)):
             if msg["role"] == "assistant":
                 text = self.client.extract_text(msg["content"])
-                if text and len(text.strip()) > 20:
+                if text and (idx == 0 or len(text.strip()) > 20):
                     return text.strip()
         return ""
     # End-def
