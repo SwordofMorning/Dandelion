@@ -325,33 +325,6 @@ class BackupStore:
         # End-if
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        if source_dir != dest_dir:
-            staged_tmps = []
-            try:
-                for name in manifest["files"]:
-                    src_file = source_dir / name
-                    tmp_file = dest_dir / (name + ".tmp")
-                    shutil.copyfile(src_file, tmp_file)
-                    staged_tmps.append((tmp_file, dest_dir / name))
-                # End-for
-                for tmp_file, final_file in staged_tmps:
-                    os.replace(tmp_file, final_file)
-                # End-for
-            finally:
-                for tmp_file, _ in staged_tmps:
-                    if tmp_file.exists():
-                        tmp_file.unlink(missing_ok=True)
-                    # End-if
-                # End-for
-            # End-try
-            shutil.rmtree(stage_dir, ignore_errors=True)
-        # End-if
-        for opt_name in OPTIONAL_FILES:
-            if opt_name not in manifest["files"]:
-                (dest_dir / opt_name).unlink(missing_ok=True)
-            # End-if
-        # End-for
-
         new_hist_sha = manifest["files"]["history.log"]["sha256"]
         prev_hist_sha = (
             prev_meta.get("files", {}).get("history.log", {}).get("sha256")
@@ -374,9 +347,59 @@ class BackupStore:
             digested_snapshot_id=prev_digested,
             path=str(dest_dir),
         )
+
+        tracked_names = ALLOWED_FILES + ("sync_meta.json",)
+        prev_snapshot = {
+            fn: (dest_dir / fn).read_bytes() if (dest_dir / fn).is_file() else None
+            for fn in tracked_names
+        }
+        staged_tmps = []
         tmp_meta = prev_meta_file.with_suffix(".json.tmp")
-        tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp_meta, prev_meta_file)
+        try:
+            if source_dir != dest_dir:
+                for name in manifest["files"]:
+                    src_file = source_dir / name
+                    tmp_file = dest_dir / (name + ".tmp")
+                    shutil.copyfile(src_file, tmp_file)
+                    staged_tmps.append((tmp_file, dest_dir / name))
+                # End-for
+            # End-if
+            tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            staged_tmps.append((tmp_meta, prev_meta_file))
+
+            for tmp_file, final_file in staged_tmps:
+                os.replace(tmp_file, final_file)
+            # End-for
+            for opt_name in OPTIONAL_FILES:
+                if opt_name not in manifest["files"]:
+                    (dest_dir / opt_name).unlink(missing_ok=True)
+                # End-if
+            # End-for
+        except Exception:
+            for fn, raw_bytes in prev_snapshot.items():
+                fpath = dest_dir / fn
+                try:
+                    if raw_bytes is None:
+                        fpath.unlink(missing_ok=True)
+                    else:
+                        fpath.write_bytes(raw_bytes)
+                    # End-if
+                except OSError:
+                    pass
+                # End-try
+            # End-for
+            raise
+        finally:
+            for tmp_file, _ in staged_tmps:
+                if tmp_file.exists():
+                    tmp_file.unlink(missing_ok=True)
+                # End-if
+            # End-for
+        # End-try
+
+        if source_dir != dest_dir:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+        # End-if
 
         needs_digest = bool(
             changed
