@@ -361,11 +361,16 @@ class RemoteLoop:
             mode = cancel.mode() if cancel is not None and hasattr(cancel, "mode") else "rollback"
             if mode == "stop":
                 agent.stop_turn("[Turn paused at step boundary: preempted by newer event.]")
-                if event["kind"] == "sync_received" and event.get("id"):
-                    self.store.requeue_event(event["id"])
-                    return False, None
-                # End-if
-                return True, None
+                with self.store.changed, self._agents_lock:
+                    cur_mode = cancel.mode() if cancel is not None and hasattr(cancel, "mode") else "rollback"
+                    if cur_mode == "stop":
+                        if event["kind"] == "sync_received" and event.get("id"):
+                            self.store.requeue_event(event["id"])
+                            return False, None
+                        # End-if
+                        return True, None
+                    # End-if
+                # End-with
             # End-if
             if backup_ok:
                 agent.rollback_turn(backup=backup, trigger="remote_cancel")

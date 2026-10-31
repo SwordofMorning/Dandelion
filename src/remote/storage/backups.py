@@ -242,6 +242,19 @@ class BackupStore:
             if not target.is_file() or target.stat().st_size != spec["size"]:
                 return {"unchanged": False}
             # End-if
+            digest = hashlib.sha256()
+            try:
+                with target.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(CHUNK_SIZE), b""):
+                        digest.update(chunk)
+                    # End-for
+                # End-with
+            except OSError:
+                return {"unchanged": False}
+            # End-try
+            if digest.hexdigest() != spec["sha256"]:
+                return {"unchanged": False}
+            # End-if
         # End-for
         has_summary = (dest_dir / "summary.md").is_file()
         already_handled = (

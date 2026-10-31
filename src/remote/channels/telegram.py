@@ -166,19 +166,68 @@ class Telegram:
         with self._progress_lock:
             prev = self._progress.get(chat_str)
             stale = list(prev.get("stale_ids", [])) if prev else []
+            old_timer = prev.get("timer") if prev else None
+            if old_timer is not None:
+                old_timer.cancel()
+            # End-if
             self._progress[chat_str] = {
+                "active": True,
                 "message_id": msg_id,
                 "stale_ids": stale,
                 "text": initial_text if msg_id is not None else "",
+                "desired_text": initial_text,
                 "last_ts": 0.0,
                 "step": 0,
                 "tools": [],
+                "timer": None,
             }
         # End-with
     # End-def
 
     ##
-     # @brief Update the step-based progress bubble with a 1.5s timestamp guard.
+     # @brief Flush a deferred progress bubble update when the 1.5s cooldown expires.
+     #
+     # @param chat_str Target Telegram chat identifier string.
+     #
+     # @return None.
+     #
+    def _flush_progress(self, chat_str):
+        with self._progress_lock:
+            state = self._progress.get(chat_str)
+            if state is None:
+                return
+            # End-if
+            state["timer"] = None
+            if not state.get("active"):
+                return
+            # End-if
+            msg_id = state.get("message_id")
+            desired = state.get("desired_text", "")
+            last_text = state.get("text", "")
+            if msg_id is None or not desired or desired == last_text:
+                return
+            # End-if
+        # End-with
+        try:
+            self._call("editMessageText", {
+                "chat_id": chat_str,
+                "message_id": int(msg_id),
+                "text": desired,
+            })
+            with self._progress_lock:
+                cur = self._progress.get(chat_str)
+                if cur is not None and cur.get("message_id") == msg_id:
+                    cur["text"] = desired
+                    cur["last_ts"] = time.monotonic()
+                # End-if
+            # End-with
+        except Exception:
+            pass
+        # End-try
+    # End-def
+
+    ##
+     # @brief Update the step-based progress bubble with a 1.5s timestamp guard and deferred flush.
      #
      # @param chat_id Target Telegram chat identifier.
      # @param text Runtime status line emitted by MyAgent.step().
@@ -192,9 +241,10 @@ class Telegram:
             return
         # End-if
         first_tool_in_step = False
+        now = time.monotonic()
         with self._progress_lock:
             state = self._progress.get(chat_str)
-            if state is None:
+            if state is None or not state.get("active"):
                 return
             # End-if
             if stripped == "Thinking...":
@@ -217,12 +267,29 @@ class Telegram:
                 f"[Step {step_num}] Running: {', '.join(tools)} ..."
                 if tools else f"[Step {step_num}] Thinking..."
             )
+            state["desired_text"] = status_text
             msg_id = state.get("message_id")
             last_text = state.get("text", "")
             last_ts = float(state.get("last_ts", 0.0))
+            if msg_id is not None and status_text != last_text:
+                if not first_tool_in_step and (now - last_ts) < PROGRESS_MIN_INTERVAL:
+                    if state.get("timer") is None:
+                        delay = max(0.05, PROGRESS_MIN_INTERVAL - (now - last_ts))
+                        timer = threading.Timer(delay, self._flush_progress, args=(chat_str,))
+                        timer.daemon = True
+                        state["timer"] = timer
+                        timer.start()
+                    # End-if
+                    return
+                # End-if
+                old_timer = state.get("timer")
+                if old_timer is not None:
+                    old_timer.cancel()
+                    state["timer"] = None
+                # End-if
+            # End-if
         # End-with
 
-        now = time.monotonic()
         if msg_id is None:
             try:
                 sent = self._call("sendMessage", {
@@ -233,7 +300,7 @@ class Telegram:
                 if isinstance(sent, dict) and sent.get("message_id"):
                     with self._progress_lock:
                         cur = self._progress.get(chat_str)
-                        if cur is not None:
+                        if cur is not None and cur.get("active"):
                             cur["message_id"] = int(sent["message_id"])
                             cur["text"] = status_text
                             cur["last_ts"] = (
@@ -249,9 +316,6 @@ class Telegram:
         # End-if
 
         if status_text == last_text:
-            return
-        # End-if
-        if not first_tool_in_step and (now - last_ts) < PROGRESS_MIN_INTERVAL:
             return
         # End-if
         try:
@@ -286,6 +350,11 @@ class Telegram:
         with self._progress_lock:
             state = self._progress.get(chat_str)
             if state is not None:
+                old_timer = state.get("timer")
+                if old_timer is not None:
+                    old_timer.cancel()
+                    state["timer"] = None
+                # End-if
                 for sid in state.get("stale_ids", []):
                     if sid is not None and sid not in to_delete:
                         to_delete.append(sid)
@@ -299,6 +368,7 @@ class Telegram:
                     state["message_id"] = None
                     state["stale_ids"] = []
                     state["text"] = ""
+                    state["desired_text"] = ""
                     state["tools"] = []
                 else:
                     self._progress.pop(chat_str, None)
@@ -325,12 +395,15 @@ class Telegram:
                     # End-for
                 else:
                     self._progress[chat_str] = {
+                        "active": False,
                         "message_id": None,
                         "stale_ids": failed,
                         "text": "",
+                        "desired_text": "",
                         "last_ts": 0.0,
                         "step": 0,
                         "tools": [],
+                        "timer": None,
                     }
                 # End-if
             # End-with

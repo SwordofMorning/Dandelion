@@ -200,7 +200,11 @@ class SessionSync:
                     continue
                 # End-try
 
-                probe = self._post(url, dict(manifest, check=True))
+                try:
+                    probe = self._post(url, dict(manifest, check=True))
+                except ValueError:
+                    probe = {}
+                # End-try
                 if probe.get("unchanged") is True and probe.get("accepted") == manifest["snapshot_id"]:
                     result["skipped"].append(f"{session_id}: unchanged (skipped)")
                     continue
