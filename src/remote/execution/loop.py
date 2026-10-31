@@ -109,8 +109,8 @@ class RemoteLoop:
      # @return True when pending events or an active agent turn were signaled.
      #
     def cancel(self, session_id):
-        cancelled_pending = self.store.cancel_pending_events(str(session_id)) > 0
-        with self._agents_lock:
+        with self.store.changed, self._agents_lock:
+            cancelled_pending = self.store.cancel_pending_events(str(session_id)) > 0
             agent = self._agents.get(str(session_id))
             cancel_event = getattr(agent, "_remote_cancel_event", None)
             if cancel_event is not None:

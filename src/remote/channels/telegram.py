@@ -172,6 +172,7 @@ class Telegram:
             # End-if
             self._progress[chat_str] = {
                 "active": True,
+                "editing": False,
                 "message_id": msg_id,
                 "stale_ids": stale,
                 "text": initial_text if msg_id is not None else "",
@@ -181,6 +182,50 @@ class Telegram:
                 "tools": [],
                 "timer": None,
             }
+        # End-with
+    # End-def
+
+    ##
+     # @brief Perform a serialized editMessageText and schedule a follow-up timer if desired_text advanced.
+     #
+     # @param chat_str Target Telegram chat identifier string.
+     # @param msg_id Bubble message identifier to edit.
+     # @param sent_text Text being sent in this edit call.
+     #
+     # @return None.
+     #
+    def _do_edit_progress(self, chat_str, msg_id, sent_text):
+        edit_ok = False
+        try:
+            self._call("editMessageText", {
+                "chat_id": chat_str,
+                "message_id": int(msg_id),
+                "text": sent_text,
+            })
+            edit_ok = True
+        except Exception:
+            pass
+        # End-try
+        with self._progress_lock:
+            cur = self._progress.get(chat_str)
+            if cur is None:
+                return
+            # End-if
+            cur["editing"] = False
+            if not cur.get("active") or cur.get("message_id") != msg_id:
+                return
+            # End-if
+            if edit_ok:
+                cur["text"] = sent_text
+                cur["last_ts"] = time.monotonic()
+            # End-if
+            desired = cur.get("desired_text", "")
+            if desired and desired != cur.get("text", "") and cur.get("timer") is None:
+                timer = threading.Timer(PROGRESS_MIN_INTERVAL, self._flush_progress, args=(chat_str,))
+                timer.daemon = True
+                cur["timer"] = timer
+                timer.start()
+            # End-if
         # End-with
     # End-def
 
@@ -198,7 +243,7 @@ class Telegram:
                 return
             # End-if
             state["timer"] = None
-            if not state.get("active"):
+            if not state.get("active") or state.get("editing"):
                 return
             # End-if
             msg_id = state.get("message_id")
@@ -207,23 +252,9 @@ class Telegram:
             if msg_id is None or not desired or desired == last_text:
                 return
             # End-if
+            state["editing"] = True
         # End-with
-        try:
-            self._call("editMessageText", {
-                "chat_id": chat_str,
-                "message_id": int(msg_id),
-                "text": desired,
-            })
-            with self._progress_lock:
-                cur = self._progress.get(chat_str)
-                if cur is not None and cur.get("message_id") == msg_id:
-                    cur["text"] = desired
-                    cur["last_ts"] = time.monotonic()
-                # End-if
-            # End-with
-        except Exception:
-            pass
-        # End-try
+        self._do_edit_progress(chat_str, msg_id, desired)
     # End-def
 
     ##
@@ -268,10 +299,16 @@ class Telegram:
                 if tools else f"[Step {step_num}] Thinking..."
             )
             state["desired_text"] = status_text
+            if state.get("editing"):
+                return
+            # End-if
             msg_id = state.get("message_id")
             last_text = state.get("text", "")
             last_ts = float(state.get("last_ts", 0.0))
-            if msg_id is not None and status_text != last_text:
+            if msg_id is not None:
+                if status_text == last_text:
+                    return
+                # End-if
                 if not first_tool_in_step and (now - last_ts) < PROGRESS_MIN_INTERVAL:
                     if state.get("timer") is None:
                         delay = max(0.05, PROGRESS_MIN_INTERVAL - (now - last_ts))
@@ -287,10 +324,14 @@ class Telegram:
                     old_timer.cancel()
                     state["timer"] = None
                 # End-if
+                state["editing"] = True
+            else:
+                state["editing"] = True
             # End-if
         # End-with
 
         if msg_id is None:
+            new_mid = None
             try:
                 sent = self._call("sendMessage", {
                     "chat_id": chat_str,
@@ -298,42 +339,33 @@ class Telegram:
                     "disable_notification": True,
                 })
                 if isinstance(sent, dict) and sent.get("message_id"):
-                    with self._progress_lock:
-                        cur = self._progress.get(chat_str)
-                        if cur is not None and cur.get("active"):
-                            cur["message_id"] = int(sent["message_id"])
-                            cur["text"] = status_text
-                            cur["last_ts"] = (
-                                time.monotonic() if tools else 0.0
-                            )
-                        # End-if
-                    # End-with
+                    new_mid = int(sent["message_id"])
                 # End-if
             except Exception:
                 pass
             # End-try
+            with self._progress_lock:
+                cur = self._progress.get(chat_str)
+                if cur is not None:
+                    cur["editing"] = False
+                    if cur.get("active") and new_mid is not None:
+                        cur["message_id"] = new_mid
+                        cur["text"] = status_text
+                        cur["last_ts"] = time.monotonic() if tools else 0.0
+                        desired = cur.get("desired_text", "")
+                        if desired and desired != status_text and cur.get("timer") is None:
+                            timer = threading.Timer(PROGRESS_MIN_INTERVAL, self._flush_progress, args=(chat_str,))
+                            timer.daemon = True
+                            cur["timer"] = timer
+                            timer.start()
+                        # End-if
+                    # End-if
+                # End-if
+            # End-with
             return
         # End-if
 
-        if status_text == last_text:
-            return
-        # End-if
-        try:
-            self._call("editMessageText", {
-                "chat_id": chat_str,
-                "message_id": int(msg_id),
-                "text": status_text,
-            })
-            with self._progress_lock:
-                cur = self._progress.get(chat_str)
-                if cur is not None and cur.get("message_id") == msg_id:
-                    cur["text"] = status_text
-                    cur["last_ts"] = time.monotonic()
-                # End-if
-            # End-with
-        except Exception:
-            pass
-        # End-try
+        self._do_edit_progress(chat_str, msg_id, status_text)
     # End-def
 
     ##
@@ -365,6 +397,7 @@ class Telegram:
                     to_delete.append(mid)
                 # End-if
                 if keep_active:
+                    state["editing"] = False
                     state["message_id"] = None
                     state["stale_ids"] = []
                     state["text"] = ""
@@ -396,6 +429,7 @@ class Telegram:
                 else:
                     self._progress[chat_str] = {
                         "active": False,
+                        "editing": False,
                         "message_id": None,
                         "stale_ids": failed,
                         "text": "",
