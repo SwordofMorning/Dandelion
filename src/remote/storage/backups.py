@@ -147,6 +147,9 @@ class BackupStore:
         snapshot_id = manifest["snapshot_id"]
         session_id = manifest["session_id"]
         with self.lock:
+            if payload.get("check") is True:
+                return self._check_unchanged(manifest)
+            # End-if
             if payload.get("commit") is True:
                 return self._commit(manifest)
             # End-if
@@ -209,6 +212,66 @@ class BackupStore:
             # End-if
             return {"received": end}
         # End-with
+    # End-def
+
+    ##
+     # @brief Fast pre-check whether a session snapshot is already synced and digested.
+     #
+     # @param manifest Verified identity and file digests.
+     #
+     # @return Dictionary indicating whether the session is unchanged on disk.
+     #
+    def _check_unchanged(self, manifest):
+        snapshot_id = manifest["snapshot_id"]
+        session_id = manifest["session_id"]
+        dest_dir = (self.syncs_dir / session_id).resolve()
+        prev_meta_file = dest_dir / "sync_meta.json"
+        if dest_dir.parent != self.syncs_dir or not prev_meta_file.is_file():
+            return {"unchanged": False}
+        # End-if
+        try:
+            prev_meta = json.loads(prev_meta_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"unchanged": False}
+        # End-try
+        if prev_meta.get("snapshot_id") != snapshot_id:
+            return {"unchanged": False}
+        # End-if
+        for name, spec in manifest["files"].items():
+            target = dest_dir / name
+            if not target.is_file() or target.stat().st_size != spec["size"]:
+                return {"unchanged": False}
+            # End-if
+            digest = hashlib.sha256()
+            try:
+                with target.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(CHUNK_SIZE), b""):
+                        digest.update(chunk)
+                    # End-for
+                # End-with
+            except OSError:
+                return {"unchanged": False}
+            # End-try
+            if digest.hexdigest() != spec["sha256"]:
+                return {"unchanged": False}
+            # End-if
+        # End-for
+        has_summary = (dest_dir / "summary.md").is_file()
+        already_handled = (
+            prev_meta.get("digested_snapshot_id") == snapshot_id
+            or prev_meta.get("queued_snapshot_id") == snapshot_id
+        )
+        if not (has_summary and already_handled):
+            return {"unchanged": False}
+        # End-if
+        return {
+            "unchanged": True,
+            "accepted": snapshot_id,
+            "session_id": session_id,
+            "changed": False,
+            "needs_digest": False,
+            "path": f"assets/syncs/{session_id}",
+        }
     # End-def
 
     ##

@@ -95,7 +95,9 @@ class BaseTool:
         # End-if
 
         if runtime is not None:
-            return bool(runtime.approve(action_desc, abs_target, abs_workspace))
+            tool_name = self.get_name()
+            desc = action_desc if action_desc.startswith("[") else f"[{tool_name}] {action_desc}"
+            return bool(runtime.approve(desc, abs_target, abs_workspace))
         # End-if
 
         return False
