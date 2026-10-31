@@ -45,11 +45,12 @@ class RemoteLoop:
         self._session_dates = {}
         self._active_session = None
         self._active_kind = None
+        self._active_event_id = None
         self._agents_lock = threading.RLock()
     # End-def
 
     ##
-     # @brief Persist a user, analysis or sync_received interrupt event and preempt active user turns.
+     # @brief Persist a user, analysis or sync_received interrupt event and preempt active turns atomically.
      #
      # @param kind Event category ("message", "analysis", or "sync_received").
      # @param session_id Conversation identifier used to scope persisted records.
@@ -70,10 +71,24 @@ class RemoteLoop:
             raise ValueError("Event text is required")
         # End-if
         target = str(session_id)
-        ev_id = self.store.add_event(kind, target, payload, event_id)
-        if kind == "message":
+
+        ##
+         # @brief Signal Stop preemption under the store lock only when a distinct new event was inserted.
+         #
+         # @param inserted_id Newly inserted event identifier.
+         #
+         # @return None.
+         #
+        def on_inserted(inserted_id):
+            if kind not in ("message", "sync_received"):
+                return
+            # End-if
             with self._agents_lock:
-                if self._active_session == target and self._active_kind == "message":
+                if self._active_session != target or self._active_event_id == inserted_id:
+                    return
+                # End-if
+                if (kind == "message" and self._active_kind in ("message", "sync_received")) or (
+                        kind == "sync_received" and self._active_kind == "sync_received"):
                     agent = self._agents.get(target)
                     cancel = getattr(agent, "_remote_cancel_event", None)
                     if cancel is not None and hasattr(cancel, "request"):
@@ -81,8 +96,9 @@ class RemoteLoop:
                     # End-if
                 # End-if
             # End-with
-        # End-if
-        return ev_id
+        # End-def
+
+        return self.store.add_event(kind, target, payload, event_id, on_inserted=on_inserted)
     # End-def
 
     ##
@@ -213,6 +229,22 @@ class RemoteLoop:
         # End-if
 
         if kind == "sync_received":
+            sessions = payload.get("sessions") if isinstance(payload, dict) else None
+            if isinstance(sessions, list) and len(sessions) > 1:
+                items_str = "\n".join(
+                    f"- session_id={s.get('session_id', '')} | device={s.get('device', '')} | "
+                    f"project={s.get('project', '')} | path={s.get('path', '')}"
+                    for s in sessions if isinstance(s, dict)
+                )
+                return (
+                    f"[Interrupt: CLI Sessions Synced (Batch of {len(sessions)}) | time={now}]\n"
+                    f"{items_str}\n"
+                    "Multiple local Dandelion CLI sessions were synced. Inspect the files in each directory "
+                    "(meta.log, task_state.json, history.log), write/update summary.md inside each directory, "
+                    "and update your memory ('remember'/'forget'). Call 'send_message' only if you want to "
+                    "proactively share an insight or ask the user a question."
+                )
+            # End-if
             header = (
                 f"[Interrupt: CLI Session Synced | session_id={payload.get('session_id', '')} | "
                 f"device={payload.get('device', '')} | project={payload.get('project', '')} | "
@@ -264,11 +296,12 @@ class RemoteLoop:
         with self._agents_lock:
             agent = self._agent(session_id)
             cancel = getattr(agent, "_remote_cancel_event", None)
-            if self._active_session != session_id and cancel is not None:
+            if self._active_event_id != event.get("id") and cancel is not None:
                 cancel.clear()
             # End-if
             self._active_session = session_id
             self._active_kind = event["kind"]
+            self._active_event_id = event.get("id")
         # End-with
 
         tg = getattr(getattr(self.notify, "__self__", None), "telegram", None)
@@ -296,6 +329,7 @@ class RemoteLoop:
             with self._agents_lock:
                 self._active_session = None
                 self._active_kind = None
+                self._active_event_id = None
             # End-with
         # End-try
 
@@ -304,12 +338,21 @@ class RemoteLoop:
             return False, None
         # End-if
 
-        sync_sess = event["payload"].get("session_id", "") if event["kind"] == "sync_received" else ""
-        sync_snap = event["payload"].get("snapshot_id", "") if event["kind"] == "sync_received" else ""
+        sync_entries = []
+        if event["kind"] == "sync_received" and isinstance(event.get("payload"), dict):
+            raw_list = event["payload"].get("sessions") or [event["payload"]]
+            sync_entries = [
+                (str(s.get("session_id", "")), str(s.get("snapshot_id", "")))
+                for s in raw_list
+                if isinstance(s, dict) and s.get("session_id") and s.get("snapshot_id")
+            ]
+        # End-if
 
         if error is not None:
-            if sync_sess and sync_snap and self.backups is not None:
-                self.backups.finalize_digest(sync_sess, sync_snap, success=False)
+            if self.backups is not None:
+                for s_id, snap_id in sync_entries:
+                    self.backups.finalize_digest(s_id, snap_id, success=False)
+                # End-for
             # End-if
             return True, "Agent failed: " + str(error)
         # End-if
@@ -317,20 +360,28 @@ class RemoteLoop:
         if not ok:
             mode = cancel.mode() if cancel is not None and hasattr(cancel, "mode") else "rollback"
             if mode == "stop":
-                agent.stop_turn("[Turn paused at step boundary: user sent a follow-up message.]")
+                agent.stop_turn("[Turn paused at step boundary: preempted by newer event.]")
+                if event["kind"] == "sync_received" and event.get("id"):
+                    self.store.requeue_event(event["id"])
+                    return False, None
+                # End-if
                 return True, None
             # End-if
             if backup_ok:
                 agent.rollback_turn(backup=backup, trigger="remote_cancel")
             # End-if
-            if sync_sess and sync_snap and self.backups is not None:
-                self.backups.finalize_digest(sync_sess, sync_snap, success=False)
+            if self.backups is not None:
+                for s_id, snap_id in sync_entries:
+                    self.backups.finalize_digest(s_id, snap_id, success=False)
+                # End-for
             # End-if
             return True, "Turn cancelled and rolled back."
         # End-if
 
-        if sync_sess and sync_snap and self.backups is not None:
-            self.backups.finalize_digest(sync_sess, sync_snap, success=True)
+        if self.backups is not None:
+            for s_id, snap_id in sync_entries:
+                self.backups.finalize_digest(s_id, snap_id, success=True)
+            # End-for
         # End-if
 
         return True, None
@@ -361,6 +412,7 @@ class RemoteLoop:
                     # End-if
                     self._active_session = sess
                     self._active_kind = event["kind"]
+                    self._active_event_id = event["id"]
                 # End-with
             # End-with
 
@@ -371,8 +423,11 @@ class RemoteLoop:
                 fallback_reply = "Remote event failed: " + str(exc)
             # End-try
 
-            if not completed and self._stop.is_set():
-                break
+            if not completed:
+                if self._stop.is_set():
+                    break
+                # End-if
+                continue
             # End-if
 
             if fallback_reply:

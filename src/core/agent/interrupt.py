@@ -3,31 +3,25 @@
  # @date 2026/10/29
  #
  # @brief Shared cooperative turn-interrupt controller for CLI and Remote hosts.
- # Tracks stop vs rollback requests across step checkpoints so active turns
- # can either roll back to the pre-commit SessionBackup or stop in place at
- # the current step boundary while preserving completed session progress.
+ # Uses lock-free atomic tuple replacement so signal handlers (Ctrl+C SIGINT)
+ # can never deadlock when interrupting the main thread mid-operation.
  #
-
-import threading
 
 MODE_STOP = "stop"
 MODE_ROLLBACK = "rollback"
 
 
 ##
- # @brief Thread-safe cooperative interrupt state for one agent or process.
+ # @brief Signal-safe and thread-safe cooperative interrupt state.
  #
 class TurnInterrupt:
     ##
-     # @brief Initialize an idle interrupt state.
+     # @brief Initialize an idle interrupt state tuple (requested, mode, reason).
      #
      # @return None.
      #
     def __init__(self):
-        self._lock = threading.Lock()
-        self._requested = False
-        self._mode = ""
-        self._reason = ""
+        self._state = (False, "", "")
     # End-def
 
     ##
@@ -40,15 +34,14 @@ class TurnInterrupt:
      #
     def request(self, reason="", mode=MODE_ROLLBACK):
         target = MODE_STOP if str(mode).strip().lower() == MODE_STOP else MODE_ROLLBACK
-        with self._lock:
-            self._requested = True
-            if self._mode != MODE_ROLLBACK:
-                self._mode = target
-            # End-if
-            if reason or not self._reason:
-                self._reason = str(reason or "")
-            # End-if
-        # End-with
+        _, cur_mode, cur_reason = self._state
+        next_mode = (
+            MODE_ROLLBACK
+            if (cur_mode == MODE_ROLLBACK or target == MODE_ROLLBACK)
+            else MODE_STOP
+        )
+        next_reason = str(reason or cur_reason or "")
+        self._state = (True, next_mode, next_reason)
     # End-def
 
     ##
@@ -57,7 +50,7 @@ class TurnInterrupt:
      # @return True when an interrupt has been requested.
      #
     def is_requested(self):
-        return bool(self._requested)
+        return bool(self._state[0])
     # End-def
 
     ##
@@ -66,7 +59,7 @@ class TurnInterrupt:
      # @return Mode string.
      #
     def mode(self):
-        return self._mode
+        return self._state[1]
     # End-def
 
     ##
@@ -75,7 +68,7 @@ class TurnInterrupt:
      # @return Reason string.
      #
     def reason(self):
-        return self._reason
+        return self._state[2]
     # End-def
 
     ##
@@ -84,11 +77,7 @@ class TurnInterrupt:
      # @return None.
      #
     def clear(self):
-        with self._lock:
-            self._requested = False
-            self._mode = ""
-            self._reason = ""
-        # End-with
+        self._state = (False, "", "")
     # End-def
 
     ##

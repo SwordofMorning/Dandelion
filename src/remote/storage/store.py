@@ -109,15 +109,15 @@ class Store:
      # @param payload JSON-serializable event payload.
      # @param event_id Optional deterministic event identifier.
      #
-     # @return Persisted event identifier.
+     # @return (event_id, was_inserted_bool) tuple.
      #
     def _event(self, kind, session_id, payload, event_id=None):
         event_id = event_id or "evt_" + uuid.uuid4().hex
-        self.conn.execute(
+        cur = self.conn.execute(
             "INSERT OR IGNORE INTO events(id,kind,session_id,payload,created_at) VALUES(?,?,?,?,?)",
             (event_id, kind, str(session_id), json.dumps(payload, ensure_ascii=False), time.time()),
         )
-        return event_id
+        return event_id, (cur.rowcount > 0)
     # End-def
 
     ##
@@ -127,26 +127,31 @@ class Store:
      # @param session_id Conversation identifier used to scope persisted records.
      # @param payload JSON-serializable event payload.
      # @param event_id Optional deterministic event identifier.
+     # @param on_inserted Optional callback(event_id) invoked inside the monitor lock when a new row was inserted.
      #
      # @return Persisted event identifier.
      #
-    def add_event(self, kind, session_id, payload, event_id=None):
+    def add_event(self, kind, session_id, payload, event_id=None, on_inserted=None):
         with self.changed, self.conn:
-            result = self._event(kind, session_id, payload, event_id)
+            ev_id, inserted = self._event(kind, session_id, payload, event_id)
+            if inserted and on_inserted is not None:
+                on_inserted(ev_id)
+            # End-if
             self.changed.notify_all()
-            return result
+            return ev_id
         # End-with
     # End-def
 
     ##
-     # @brief Claim the next pending interrupt event atomically, coalescing burst messages.
+     # @brief Claim the next pending interrupt event atomically, prioritizing user messages and coalescing batches.
      #
      # @return Claimed event dictionary, or None when none are pending.
      #
     def claim_event(self):
         with self.lock, self.conn:
             row = self.conn.execute(
-                "SELECT * FROM events WHERE status='pending' ORDER BY created_at,rowid LIMIT 1"
+                "SELECT * FROM events WHERE status='pending' "
+                "ORDER BY CASE WHEN kind='message' THEN 0 ELSE 1 END, created_at, rowid LIMIT 1"
             ).fetchone()
             if row is None:
                 return None
@@ -176,9 +181,69 @@ class Store:
                     )
                     return dict(row, payload=payload)
                 # End-if
+            elif row["kind"] == "sync_received" and isinstance(payload, dict):
+                extras = self.conn.execute(
+                    "SELECT id,payload FROM events "
+                    "WHERE status='pending' AND kind='sync_received' AND session_id=? AND id!=? "
+                    "ORDER BY created_at,rowid",
+                    (row["session_id"], row["id"]),
+                ).fetchall()
+                if extras:
+                    by_sess = {}
+                    for entry in (payload.get("sessions") or [payload]):
+                        if isinstance(entry, dict) and entry.get("session_id"):
+                            by_sess[entry["session_id"]] = {
+                                "session_id": entry.get("session_id", ""),
+                                "device": entry.get("device", ""),
+                                "project": entry.get("project", ""),
+                                "path": entry.get("path", ""),
+                                "snapshot_id": entry.get("snapshot_id", ""),
+                            }
+                        # End-if
+                    # End-for
+                    for item in extras:
+                        extra_data = json.loads(item["payload"])
+                        if isinstance(extra_data, dict):
+                            for entry in (extra_data.get("sessions") or [extra_data]):
+                                if isinstance(entry, dict) and entry.get("session_id"):
+                                    by_sess[entry["session_id"]] = {
+                                        "session_id": entry.get("session_id", ""),
+                                        "device": entry.get("device", ""),
+                                        "project": entry.get("project", ""),
+                                        "path": entry.get("path", ""),
+                                        "snapshot_id": entry.get("snapshot_id", ""),
+                                    }
+                                # End-if
+                            # End-for
+                        # End-if
+                        self.conn.execute("UPDATE events SET status='done' WHERE id=?", (item["id"],))
+                    # End-for
+                    merged_list = list(by_sess.values())
+                    first = merged_list[0] if merged_list else payload
+                    payload = dict(first, sessions=merged_list)
+                    self.conn.execute(
+                        "UPDATE events SET status='processing', payload=? WHERE id=?",
+                        (json.dumps(payload, ensure_ascii=False), row["id"]),
+                    )
+                    return dict(row, payload=payload)
+                # End-if
             # End-if
             self.conn.execute("UPDATE events SET status='processing' WHERE id=?", (row["id"],))
             return dict(row, payload=payload)
+        # End-with
+    # End-def
+
+    ##
+     # @brief Return a preempted processing event back to pending status for batch coalescing.
+     #
+     # @param event_id Event identifier to requeue.
+     #
+     # @return None.
+     #
+    def requeue_event(self, event_id):
+        with self.changed, self.conn:
+            self.conn.execute("UPDATE events SET status='pending' WHERE id=?", (event_id,))
+            self.changed.notify_all()
         # End-with
     # End-def
 

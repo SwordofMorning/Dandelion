@@ -164,10 +164,13 @@ class Telegram:
             pass
         # End-try
         with self._progress_lock:
+            prev = self._progress.get(chat_str)
+            stale = list(prev.get("stale_ids", [])) if prev else []
             self._progress[chat_str] = {
                 "message_id": msg_id,
+                "stale_ids": stale,
                 "text": initial_text if msg_id is not None else "",
-                "last_ts": time.monotonic() if msg_id is not None else 0.0,
+                "last_ts": 0.0,
                 "step": 0,
                 "tools": [],
             }
@@ -188,6 +191,7 @@ class Telegram:
         if not stripped:
             return
         # End-if
+        first_tool_in_step = False
         with self._progress_lock:
             state = self._progress.get(chat_str)
             if state is None:
@@ -195,9 +199,11 @@ class Telegram:
             # End-if
             if stripped == "Thinking...":
                 state["step"] += 1
+                state["tools"] = []
             elif stripped.startswith("Tool requested:"):
                 tname = stripped.split(":", 1)[1].strip()
                 if tname and tname != "send_message":
+                    first_tool_in_step = (len(state["tools"]) == 0)
                     state["tools"].append(tname)
                 else:
                     return
@@ -230,7 +236,9 @@ class Telegram:
                         if cur is not None:
                             cur["message_id"] = int(sent["message_id"])
                             cur["text"] = status_text
-                            cur["last_ts"] = time.monotonic()
+                            cur["last_ts"] = (
+                                time.monotonic() if tools else 0.0
+                            )
                         # End-if
                     # End-with
                 # End-if
@@ -240,7 +248,10 @@ class Telegram:
             return
         # End-if
 
-        if status_text == last_text or (now - last_ts) < PROGRESS_MIN_INTERVAL:
+        if status_text == last_text:
+            return
+        # End-if
+        if not first_tool_in_step and (now - last_ts) < PROGRESS_MIN_INTERVAL:
             return
         # End-if
         try:
@@ -271,29 +282,58 @@ class Telegram:
      #
     def end_progress(self, chat_id, keep_active=False):
         chat_str = str(chat_id)
-        msg_id = None
+        to_delete = []
         with self._progress_lock:
-            if keep_active:
-                state = self._progress.get(chat_str)
-                if state is not None:
-                    msg_id = state.get("message_id")
+            state = self._progress.get(chat_str)
+            if state is not None:
+                for sid in state.get("stale_ids", []):
+                    if sid is not None and sid not in to_delete:
+                        to_delete.append(sid)
+                    # End-if
+                # End-for
+                mid = state.get("message_id")
+                if mid is not None and mid not in to_delete:
+                    to_delete.append(mid)
+                # End-if
+                if keep_active:
                     state["message_id"] = None
+                    state["stale_ids"] = []
                     state["text"] = ""
                     state["tools"] = []
-                # End-if
-            else:
-                state = self._progress.pop(chat_str, None)
-                if state is not None:
-                    msg_id = state.get("message_id")
+                else:
+                    self._progress.pop(chat_str, None)
                 # End-if
             # End-if
         # End-with
-        if msg_id is not None:
+        failed = []
+        for mid in to_delete:
             try:
-                self._call("deleteMessage", {"chat_id": chat_str, "message_id": int(msg_id)})
+                self._call("deleteMessage", {"chat_id": chat_str, "message_id": int(mid)})
             except Exception:
-                pass
+                failed.append(mid)
             # End-try
+        # End-for
+        if failed:
+            with self._progress_lock:
+                cur = self._progress.get(chat_str)
+                if cur is not None:
+                    existing = cur.setdefault("stale_ids", [])
+                    for mid in failed:
+                        if mid not in existing:
+                            existing.append(mid)
+                        # End-if
+                    # End-for
+                else:
+                    self._progress[chat_str] = {
+                        "message_id": None,
+                        "stale_ids": failed,
+                        "text": "",
+                        "last_ts": 0.0,
+                        "step": 0,
+                        "tools": [],
+                    }
+                # End-if
+            # End-with
         # End-if
     # End-def
 

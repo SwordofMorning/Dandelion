@@ -200,6 +200,12 @@ class SessionSync:
                     continue
                 # End-try
 
+                probe = self._post(url, dict(manifest, check=True))
+                if probe.get("unchanged") is True and probe.get("accepted") == manifest["snapshot_id"]:
+                    result["skipped"].append(f"{session_id}: unchanged (skipped)")
+                    continue
+                # End-if
+
                 for name, raw in content.items():
                     for offset in range(0, max(1, len(raw)), CHUNK_SIZE):
                         chunk = raw[offset:offset + CHUNK_SIZE]
