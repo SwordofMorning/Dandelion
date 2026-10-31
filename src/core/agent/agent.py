@@ -499,6 +499,9 @@ class MyAgent:
 
         while attempt < max_attempts:
             attempt += 1
+            if attempt == 1 and not self.runtime.echo:
+                self.runtime.emit("Thinking...")
+            # End-if
             resp, err = self.client.safe_stream_request(
                 payload,
                 log_tag=f"PRE LLM CALL - MAIN (attempt {attempt}/{max_attempts})",
@@ -702,5 +705,63 @@ class MyAgent:
         # prefix byte-identical lets the server-side prefix cache survive a
         # session resume. Stale blocks are harmless (the newest injected
         # block always carries the latest state) and compaction removes them.
+    # End-def
+
+    ##
+     # @brief Truncate the running turn at the current step boundary while keeping progress.
+     #
+     # @param note Closing assistant marker appended when history ends on a user turn.
+     #
+     # @return None.
+     #
+    def stop_turn(self, note="[Turn stopped by user.]"):
+        self._pending_media_blocks = []
+        if self.history and self.history[-1].get("role") == "user":
+            self.history.append({
+                "role": "assistant",
+                "content": [{"type": "text", "text": str(note)}],
+            })
+            self.session.save_history(self.history)
+        # End-if
+        self.session.log_api_call("TURN STOPPED", {
+            "status": "stopped",
+            "note": str(note),
+            "history_messages": len(self.history),
+        })
+    # End-def
+
+    ##
+     # @brief Restore the session state captured before the turn started.
+     #
+     # @param backup Optional SessionBackup instance; defaults to current session.
+     # @param trigger Reason tag recorded in the audit log.
+     #
+     # @return (success_bool, restored_items, failed_items) tuple.
+     #
+    def rollback_turn(self, backup=None, trigger=""):
+        from src.core.utils.logging.backup import SessionBackup
+
+        snap = backup if backup is not None else SessionBackup(self.session.current_session_dir)
+        if not snap.is_valid():
+            return False, [], ["invalid_backup"]
+        # End-if
+        restored, failed = snap.restore()
+        if failed:
+            self.session.log_api_call("TURN ROLLBACK", {
+                "trigger": str(trigger),
+                "status": "failed",
+                "failed": failed,
+            })
+            return False, restored, failed
+        # End-if
+        self.reload_history()
+        self.session.log_api_call("TURN ROLLBACK", {
+            "trigger": str(trigger),
+            "status": "done",
+            "restored": restored,
+            "failed": failed,
+            "history_messages": len(self.history),
+        })
+        return True, restored, failed
     # End-def
 # End-class

@@ -43,11 +43,13 @@ class RemoteLoop:
         self._stop = threading.Event()
         self._agents = {}
         self._session_dates = {}
+        self._active_session = None
+        self._active_kind = None
         self._agents_lock = threading.RLock()
     # End-def
 
     ##
-     # @brief Persist a user, analysis or sync_received interrupt event.
+     # @brief Persist a user, analysis or sync_received interrupt event and preempt active user turns.
      #
      # @param kind Event category ("message", "analysis", or "sync_received").
      # @param session_id Conversation identifier used to scope persisted records.
@@ -67,13 +69,26 @@ class RemoteLoop:
                 kind != "sync_received" and not str(payload.get("text", "")).strip()):
             raise ValueError("Event text is required")
         # End-if
-        return self.store.add_event(kind, str(session_id), payload, event_id)
+        target = str(session_id)
+        ev_id = self.store.add_event(kind, target, payload, event_id)
+        if kind == "message":
+            with self._agents_lock:
+                if self._active_session == target and self._active_kind == "message":
+                    agent = self._agents.get(target)
+                    cancel = getattr(agent, "_remote_cancel_event", None)
+                    if cancel is not None and hasattr(cancel, "request"):
+                        cancel.request("user_preempt", mode="stop")
+                    # End-if
+                # End-if
+            # End-with
+        # End-if
+        return ev_id
     # End-def
 
     ##
-     # @brief Request cancellation of queued and active work for a conversation.
+     # @brief Request rollback cancellation of queued and active work for a conversation.
      #
-     # @param session_id Conversation identifier whose turn should stop.
+     # @param session_id Conversation identifier whose turn should stop and roll back.
      #
      # @return True when pending events or an active agent turn were signaled.
      #
@@ -83,7 +98,11 @@ class RemoteLoop:
             agent = self._agents.get(str(session_id))
             cancel_event = getattr(agent, "_remote_cancel_event", None)
             if cancel_event is not None:
-                cancel_event.set()
+                if hasattr(cancel_event, "request"):
+                    cancel_event.request("user_cancel", mode="rollback")
+                else:
+                    cancel_event.set()
+                # End-if
                 return True
             # End-if
             return cancelled_pending
@@ -241,44 +260,28 @@ class RemoteLoop:
             return True, msg
         # End-if
 
-        session_id = event["session_id"]
-        agent = self._agent(session_id)
-        cancel = getattr(agent, "_remote_cancel_event", None)
-        if cancel is not None:
-            cancel.clear()
-        # End-if
+        session_id = str(event["session_id"])
+        with self._agents_lock:
+            agent = self._agent(session_id)
+            cancel = getattr(agent, "_remote_cancel_event", None)
+            if self._active_session != session_id and cancel is not None:
+                cancel.clear()
+            # End-if
+            self._active_session = session_id
+            self._active_kind = event["kind"]
+        # End-with
 
-        self._check_daily_rollover(agent, session_id)
-        repair_interrupted_tools(agent)
-
-        if agent.runtime.cancelled() and not self._stop.is_set():
-            return True, "Turn cancelled before execution."
-        # End-if
-
-        backup = SessionBackup(agent.session.current_session_dir)
-        backup_ok, _ = backup.create("remote_turn", history_messages=len(agent.history))
-
-        typing_stop = threading.Event()
+        tg = getattr(getattr(self.notify, "__self__", None), "telegram", None)
+        chat_id = session_id.split(":", 1)[1] if session_id.startswith("telegram:") else ""
         try:
-            if event["kind"] == "message" and str(session_id).startswith("telegram:"):
-                tg = getattr(getattr(self.notify, "__self__", None), "telegram", None)
-                if tg is not None and hasattr(tg, "send_typing"):
-                    chat_id = str(session_id).split(":", 1)[1]
+            self._check_daily_rollover(agent, session_id)
+            repair_interrupted_tools(agent)
 
-                    ##
-                     # @brief Refresh Telegram typing action every 4s until the turn finishes.
-                     #
-                     # @return None.
-                     #
-                    def keep_typing():
-                        while not typing_stop.is_set() and not self._stop.is_set():
-                            tg.send_typing(chat_id)
-                            typing_stop.wait(4.0)
-                        # End-while
-                    # End-def
+            backup = SessionBackup(agent.session.current_session_dir)
+            backup_ok, _ = backup.create("remote_turn", history_messages=len(agent.history))
 
-                    threading.Thread(target=keep_typing, name="telegram-typing", daemon=True).start()
-                # End-if
+            if event["kind"] == "message" and chat_id and tg is not None and hasattr(tg, "start_progress"):
+                tg.start_progress(chat_id)
             # End-if
 
             agent.inject_user_message(self._message(event))
@@ -287,7 +290,13 @@ class RemoteLoop:
                 should_stop=lambda: self._stop.is_set() or agent.runtime.cancelled(),
             )
         finally:
-            typing_stop.set()
+            if chat_id and tg is not None and hasattr(tg, "end_progress"):
+                tg.end_progress(chat_id)
+            # End-if
+            with self._agents_lock:
+                self._active_session = None
+                self._active_kind = None
+            # End-with
         # End-try
 
         # Process shutdown (SIGTERM/SIGINT): leave event in 'processing' for recover().
@@ -306,9 +315,13 @@ class RemoteLoop:
         # End-if
 
         if not ok:
+            mode = cancel.mode() if cancel is not None and hasattr(cancel, "mode") else "rollback"
+            if mode == "stop":
+                agent.stop_turn("[Turn paused at step boundary: user sent a follow-up message.]")
+                return True, None
+            # End-if
             if backup_ok:
-                backup.restore()
-                agent.reload_history()
+                agent.rollback_turn(backup=backup, trigger="remote_cancel")
             # End-if
             if sync_sess and sync_snap and self.backups is not None:
                 self.backups.finalize_digest(sync_sess, sync_snap, success=False)
@@ -339,6 +352,16 @@ class RemoteLoop:
                     self.store.changed.wait(timeout=delay)
                     continue
                 # End-if
+                with self._agents_lock:
+                    sess = str(event["session_id"])
+                    existing = self._agents.get(sess)
+                    cancel = getattr(existing, "_remote_cancel_event", None)
+                    if cancel is not None:
+                        cancel.clear()
+                    # End-if
+                    self._active_session = sess
+                    self._active_kind = event["kind"]
+                # End-with
             # End-with
 
             try:

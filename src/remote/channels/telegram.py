@@ -14,10 +14,12 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 
 import requests
 
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
+PROGRESS_MIN_INTERVAL = 1.5
 
 
 ##
@@ -50,6 +52,8 @@ class Telegram:
         self.media_dir.mkdir(parents=True, exist_ok=True)
         self.stopped = threading.Event()
         self.threads = []
+        self._progress = {}
+        self._progress_lock = threading.Lock()
         self.hub.bind_telegram(self, allowed_chats)
     # End-def
 
@@ -133,22 +137,164 @@ class Telegram:
     # End-def
 
     ##
-     # @brief Emit a best-effort 'typing' chat action indicator to an authorized chat.
+     # @brief Create an initial silent progress bubble at the start of a user turn.
      #
      # @param chat_id Target Telegram chat identifier.
      #
      # @return None.
      #
-    def send_typing(self, chat_id):
+    def start_progress(self, chat_id):
         chat_str = str(chat_id)
         if chat_str not in self.allowed:
             return
         # End-if
+        self.end_progress(chat_str, keep_active=False)
+        initial_text = "[Step 1] Thinking..."
+        msg_id = None
         try:
-            self._call("sendChatAction", {"chat_id": chat_str, "action": "typing"})
+            sent = self._call("sendMessage", {
+                "chat_id": chat_str,
+                "text": initial_text,
+                "disable_notification": True,
+            })
+            if isinstance(sent, dict) and sent.get("message_id"):
+                msg_id = int(sent["message_id"])
+            # End-if
         except Exception:
             pass
         # End-try
+        with self._progress_lock:
+            self._progress[chat_str] = {
+                "message_id": msg_id,
+                "text": initial_text if msg_id is not None else "",
+                "last_ts": time.monotonic() if msg_id is not None else 0.0,
+                "step": 0,
+                "tools": [],
+            }
+        # End-with
+    # End-def
+
+    ##
+     # @brief Update the step-based progress bubble with a 1.5s timestamp guard.
+     #
+     # @param chat_id Target Telegram chat identifier.
+     # @param text Runtime status line emitted by MyAgent.step().
+     #
+     # @return None.
+     #
+    def on_progress(self, chat_id, text):
+        chat_str = str(chat_id)
+        stripped = str(text or "").strip()
+        if not stripped:
+            return
+        # End-if
+        with self._progress_lock:
+            state = self._progress.get(chat_str)
+            if state is None:
+                return
+            # End-if
+            if stripped == "Thinking...":
+                state["step"] += 1
+            elif stripped.startswith("Tool requested:"):
+                tname = stripped.split(":", 1)[1].strip()
+                if tname and tname != "send_message":
+                    state["tools"].append(tname)
+                else:
+                    return
+                # End-if
+            else:
+                return
+            # End-if
+            step_num = max(int(state["step"]), 1)
+            tools = list(state["tools"][-4:])
+            status_text = (
+                f"[Step {step_num}] Running: {', '.join(tools)} ..."
+                if tools else f"[Step {step_num}] Thinking..."
+            )
+            msg_id = state.get("message_id")
+            last_text = state.get("text", "")
+            last_ts = float(state.get("last_ts", 0.0))
+        # End-with
+
+        now = time.monotonic()
+        if msg_id is None:
+            try:
+                sent = self._call("sendMessage", {
+                    "chat_id": chat_str,
+                    "text": status_text,
+                    "disable_notification": True,
+                })
+                if isinstance(sent, dict) and sent.get("message_id"):
+                    with self._progress_lock:
+                        cur = self._progress.get(chat_str)
+                        if cur is not None:
+                            cur["message_id"] = int(sent["message_id"])
+                            cur["text"] = status_text
+                            cur["last_ts"] = time.monotonic()
+                        # End-if
+                    # End-with
+                # End-if
+            except Exception:
+                pass
+            # End-try
+            return
+        # End-if
+
+        if status_text == last_text or (now - last_ts) < PROGRESS_MIN_INTERVAL:
+            return
+        # End-if
+        try:
+            self._call("editMessageText", {
+                "chat_id": chat_str,
+                "message_id": int(msg_id),
+                "text": status_text,
+            })
+            with self._progress_lock:
+                cur = self._progress.get(chat_str)
+                if cur is not None and cur.get("message_id") == msg_id:
+                    cur["text"] = status_text
+                    cur["last_ts"] = time.monotonic()
+                # End-if
+            # End-with
+        except Exception:
+            pass
+        # End-try
+    # End-def
+
+    ##
+     # @brief Delete the temporary progress bubble before formal delivery or at turn end.
+     #
+     # @param chat_id Target Telegram chat identifier.
+     # @param keep_active True to keep turn tracking alive for subsequent steps after a mid-turn send.
+     #
+     # @return None.
+     #
+    def end_progress(self, chat_id, keep_active=False):
+        chat_str = str(chat_id)
+        msg_id = None
+        with self._progress_lock:
+            if keep_active:
+                state = self._progress.get(chat_str)
+                if state is not None:
+                    msg_id = state.get("message_id")
+                    state["message_id"] = None
+                    state["text"] = ""
+                    state["tools"] = []
+                # End-if
+            else:
+                state = self._progress.pop(chat_str, None)
+                if state is not None:
+                    msg_id = state.get("message_id")
+                # End-if
+            # End-if
+        # End-with
+        if msg_id is not None:
+            try:
+                self._call("deleteMessage", {"chat_id": chat_str, "message_id": int(msg_id)})
+            except Exception:
+                pass
+            # End-try
+        # End-if
     # End-def
 
     ##
@@ -165,6 +311,7 @@ class Telegram:
         if chat_str not in self.allowed:
             raise ValueError("Chat ID is not in DANDELION_TELEGRAM_CHATS allowlist")
         # End-if
+        self.end_progress(chat_str, keep_active=True)
         body = str(text or "").strip() or "(empty reply)"
         for pos in range(0, len(body), 3500):
             self._call("sendMessage", {

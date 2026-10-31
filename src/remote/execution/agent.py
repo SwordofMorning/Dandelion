@@ -139,7 +139,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
      # @return Restored agent with unrestricted runtime, communication and delegation tools.
      #
     def create(session_id):
-        from src.core.agent import MyAgent
+        from src.core.agent import MyAgent, TurnInterrupt
         from src.core.agent.tools import build_tools
         from src.core.runtime import Runtime
         from src.core.utils.logging.session import SessionManager
@@ -147,10 +147,28 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
         scope = hashlib.sha256(str(session_id).encode()).hexdigest()
         root = Path(data_dir) / "sessions" / scope
         session = SessionManager(log_dir=str(root))
-        cancelled = threading.Event()
+        interrupt = TurnInterrupt()
+        sess_str = str(session_id)
+
+        ##
+         # @brief Forward Core step progress output to Telegram when active.
+         #
+         # @param text Emitted runtime status text.
+         #
+         # @return None.
+         #
+        def emit_output(text):
+            if sess_str.startswith("telegram:") and hub is not None:
+                tg = getattr(hub, "telegram", None)
+                if tg is not None and hasattr(tg, "on_progress"):
+                    tg.on_progress(sess_str.split(":", 1)[1], text)
+                # End-if
+            # End-if
+        # End-def
+
         runtime = Runtime(
-            output=lambda text: None,
-            cancelled=cancelled.is_set,
+            output=emit_output,
+            cancelled=interrupt.is_requested,
             approve=lambda action, target, ws: True,
             echo=False,
             sandbox=False,
@@ -219,7 +237,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
             tool_factory=tools,
             prompt_builder_cls=prompt_factory,
         )
-        agent._remote_cancel_event = cancelled
+        agent._remote_cancel_event = interrupt
         repair_interrupted_tools(agent)
         return agent
     # End-def

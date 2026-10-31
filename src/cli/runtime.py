@@ -52,14 +52,14 @@ def _approve(action_desc, abs_target, abs_workspace):
         print(f"    Target   : {abs_target}")
         print(f"    Workspace: {abs_workspace}")
         while True:
-            answer = input("    Allow this operation? [y/N/C]: ").strip().lower()
+            answer = input("    Allow this operation? [y/N/C (pause turn: Stop/Rollback)]: ").strip().lower()
             if answer in ("y", "yes"):
                 print("    [+] User approved outside access.")
                 return True
             # End-if
             if answer in ("c", "cancel"):
                 request("tool_cancel")
-                print("    [!] Canceled: this call is denied and the turn will stop and roll back.")
+                print("    [!] Canceled: this call is denied and the turn will pause at the step checkpoint.")
                 return False
             # End-if
             if answer in ("n", "no", ""):

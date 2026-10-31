@@ -139,7 +139,7 @@ class Store:
     # End-def
 
     ##
-     # @brief Claim the next pending interrupt event atomically.
+     # @brief Claim the next pending interrupt event atomically, coalescing burst messages.
      #
      # @return Claimed event dictionary, or None when none are pending.
      #
@@ -151,8 +151,34 @@ class Store:
             if row is None:
                 return None
             # End-if
+            payload = json.loads(row["payload"])
+            if row["kind"] == "message" and isinstance(payload, dict):
+                extras = self.conn.execute(
+                    "SELECT id,payload FROM events "
+                    "WHERE status='pending' AND kind='message' AND session_id=? AND id!=? "
+                    "ORDER BY created_at,rowid",
+                    (row["session_id"], row["id"]),
+                ).fetchall()
+                if extras:
+                    texts = [str(payload.get("text", "")).strip()]
+                    for item in extras:
+                        extra_data = json.loads(item["payload"])
+                        extra_text = str(extra_data.get("text", "")).strip() if isinstance(extra_data, dict) else ""
+                        if extra_text:
+                            texts.append(extra_text)
+                        # End-if
+                        self.conn.execute("UPDATE events SET status='done' WHERE id=?", (item["id"],))
+                    # End-for
+                    payload = dict(payload, text="\n\n".join(t for t in texts if t))
+                    self.conn.execute(
+                        "UPDATE events SET status='processing', payload=? WHERE id=?",
+                        (json.dumps(payload, ensure_ascii=False), row["id"]),
+                    )
+                    return dict(row, payload=payload)
+                # End-if
+            # End-if
             self.conn.execute("UPDATE events SET status='processing' WHERE id=?", (row["id"],))
-            return dict(row, payload=json.loads(row["payload"]))
+            return dict(row, payload=payload)
         # End-with
     # End-def
 

@@ -788,39 +788,83 @@ class InteractiveCLI:
         # End-if
         request_stop("sigint")
         self.cli.warning(
-            f"Stop requested ({stop_reason()}): the current step will finish, "
-            f"then the turn is rolled back to before this commit (a prompt is "
-            f"shown if it cannot be rolled back)."
+            f"Interrupt requested ({stop_reason()}): finishing the current step, "
+            f"then pausing for [S]top / [R]ollback / [C]ontinue."
         )
+    # End-def
+
+    ##
+     # @brief Prompt the user to choose Stop, Rollback, or Continue at an interrupt checkpoint.
+     #
+     # @param trigger Reason tag ("sigint" or "tool_cancel").
+     #
+     # @return 'S' (stop in place), 'R' (rollback to before commit), or 'C' (continue).
+     #
+    def _prompt_interrupt_action(self, trigger):
+        prev_active = self._turn_active
+        self._turn_active = False
+        try:
+            self.cli.info(f"\nTurn paused at step boundary (trigger: {trigger or 'sigint'}). Choose an action:")
+            self.cli.raw("  [S]top here : Keep completed steps in session history (for follow-up instructions)")
+            self.cli.raw("  [R]ollback  : Undo this turn to before commit and restore staged draft")
+            self.cli.raw("  [C]ontinue  : Resume turn execution")
+            while True:
+                try:
+                    choice = input(
+                        f"{self.cli.C_CYAN}[?]{self.cli.C_RESET} "
+                        "[S]top / [R]ollback / [C]ontinue: "
+                    ).strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    print()
+                    return "R"
+                # End-try
+                if choice in ("s", "stop"):
+                    return "S"
+                elif choice in ("r", "rollback"):
+                    return "R"
+                elif choice in ("c", "continue"):
+                    return "C"
+                # End-if
+                self.cli.error("Invalid choice. Please enter S / R / C.")
+            # End-while
+        finally:
+            self._turn_active = prev_active
+        # End-try
     # End-def
 
     ##
      # @brief Consume a pending stop request at a turn checkpoint.
      #
-     # @return True when the turn must stop (the rollback already ran).
+     # @return True when the turn must stop (either stopped in place or rolled back).
      # @retval True Stop the turn now.
-     # @retval False Nothing requested, or the request was refused.
-     #
-     # @note Safety rule: stopping is only allowed when the turn has a complete
-     #       backup AND the restore succeeds. Otherwise the request is refused
-     #       and the agent keeps running, because stopping a turn without
-     #       restoring it could leave a tool_use without its matching
-     #       tool_result (breaking the next request) or a half-restored session.
+     # @retval False Nothing requested, or the user chose Continue (or rollback failed).
      #
     def _try_stop(self):
         if not stop_requested():
             return False
         # End-if
 
+        trig = stop_reason()
+        choice = self._prompt_interrupt_action(trig)
+        if choice == "C":
+            clear_stop()
+            self.cli.info("Resuming turn execution...")
+            return False
+        # End-if
+
+        if choice == "S":
+            self._do_stop(trig)
+            clear_stop()
+            return True
+        # End-if
+
         if not SessionBackup(self.session.current_session_dir).is_valid():
-            self.cli.error("Stop failed: no usable backup for this turn, continuing.")
+            self.cli.error("Rollback failed: no usable backup for this turn, continuing.")
             clear_stop()
             return False
         # End-if
 
         if not self._do_rollback():
-            # The restore could not be completed; the session was put back the
-            # way it was, so the turn simply keeps running.
             self.cli.error("Stop failed: the rollback could not be completed, continuing.")
             clear_stop()
             return False
@@ -831,59 +875,53 @@ class InteractiveCLI:
     # End-def
 
     ##
+     # @brief Stop the turn at the current step boundary while preserving completed session progress.
+     #
+     # @param trigger Interrupt trigger tag ("sigint" or "tool_cancel").
+     #
+     # @return True.
+     #
+    def _do_stop(self, trigger=""):
+        if self.staged_message.strip():
+            # Stopped before the first step was accepted: pop any unaccepted user
+            # message and keep the draft in staged.md.
+            self._rollback_pending_message()
+            self._backup_ready = False
+            self.cli.info("Turn stopped before first step completed. Staged draft preserved.")
+            return True
+        # End-if
+
+        self.agent.stop_turn("[Turn stopped by user.]")
+        self._backup_ready = False
+        self.cli.success(
+            f"Stopped at current step boundary (trigger: {trigger or 'sigint'}). "
+            f"Completed progress ({len(self.agent.history)} messages) is preserved in this session."
+        )
+        self.cli.info("Draft your follow-up or supplementary instructions with 'vim' and 'commit' to continue.")
+        self.cli.warning("Workspace changes are NOT rolled back; review them yourself (git status).")
+        return True
+    # End-def
+
+    ##
      # @brief Restore the session state captured before the last commit.
      #
      # @return True when the rollback completed (state reloaded); False when
      #         nothing was rolled back and the turn should keep running.
      #
-     # @note Session files (history.log / staged.md / task_state.json / memory)
-     #       are restored from .log/sess_xx/backup, then the agent history and
-     #       the staged draft are reloaded into memory. artifacts/ and api.log
-     #       are intentionally outside the backup (see src/core/utils/logging/backup.py).
-     # @note The restore is all-or-nothing (SessionBackup.restore): on failure
-     #       the session is left exactly as it was and the in-memory history and
-     #       draft are NOT reloaded, so the caller can safely continue the turn.
-     # @note Workspace changes (file writes, bash, ssh) are OUT of scope: the
-     #       user is told to review them with git.
-     #
     def _do_rollback(self):
-        restored, failed = SessionBackup(self.session.current_session_dir).restore()
-
-        if failed:
-            # A refused rollback is as important for a post-mortem as a
-            # successful one, so it is audited as well.
-            self.session.log_api_call("TURN ROLLBACK", {
-                "trigger": stop_reason(),
-                "status": "failed",
-                "failed": failed,
-            })
+        ok, restored, failed = self.agent.rollback_turn(trigger=stop_reason())
+        if not ok:
             self.cli.error("Rollback could not be completed: " + ", ".join(failed))
             self.cli.info("Nothing was rolled back; the turn keeps running.")
             return False
         # End-if
 
-        self.agent.reload_history()
         self.staged_message = self.session.load_staged()
         self._backup_ready = False
-
-        # Audit trail: api.log is deliberately outside the backup set, so this
-        # record survives the rollback it describes and makes a post-mortem
-        # possible without inferring the event from timestamps alone.
-        self.session.log_api_call("TURN ROLLBACK", {
-            "trigger": stop_reason(),
-            "status": "done",
-            "restored": restored,
-            "failed": failed,
-            "history_messages": len(self.agent.history),
-            "draft_chars": len(self.staged_message.strip()),
-        })
 
         self.cli.success(
             f"Rolled back to before the last commit (trigger: {stop_reason()}): "
             + ", ".join(restored))
-        if failed:
-            self.cli.error("Rollback reported failures: " + ", ".join(failed))
-        # End-if
         self.cli.info(
             f"Original input restored to the staged buffer "
             f"({len(self.staged_message.strip())} chars). Commit to resend it, "
