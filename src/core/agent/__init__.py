@@ -19,6 +19,7 @@ from .compress import (
 )
 from .prune import ContextPruner, validate_history_protocol, group_atomic_units
 from .runner import run_agent_loop
+from .interrupt import TurnInterrupt, MODE_STOP, MODE_ROLLBACK
 from .tools import build_tools, build_worker_pool
 
 __all__ = [
@@ -36,6 +37,9 @@ __all__ = [
     "validate_history_protocol",
     "group_atomic_units",
     "run_agent_loop",
+    "TurnInterrupt",
+    "MODE_STOP",
+    "MODE_ROLLBACK",
     "build_tools",
     "build_worker_pool",
 ]

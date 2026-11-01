@@ -147,6 +147,9 @@ class BackupStore:
         snapshot_id = manifest["snapshot_id"]
         session_id = manifest["session_id"]
         with self.lock:
+            if payload.get("check") is True:
+                return self._check_unchanged(manifest)
+            # End-if
             if payload.get("commit") is True:
                 return self._commit(manifest)
             # End-if
@@ -212,6 +215,63 @@ class BackupStore:
     # End-def
 
     ##
+     # @brief Fast pre-check whether a session snapshot is already synced and digested.
+     #
+     # @param manifest Verified identity and file digests.
+     #
+     # @return Dictionary indicating whether the session is unchanged on disk.
+     #
+    def _check_unchanged(self, manifest):
+        snapshot_id = manifest["snapshot_id"]
+        session_id = manifest["session_id"]
+        dest_dir = (self.syncs_dir / session_id).resolve()
+        prev_meta_file = dest_dir / "sync_meta.json"
+        if dest_dir.parent != self.syncs_dir or not prev_meta_file.is_file():
+            return {"unchanged": False}
+        # End-if
+        try:
+            prev_meta = json.loads(prev_meta_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"unchanged": False}
+        # End-try
+        if prev_meta.get("snapshot_id") != snapshot_id:
+            return {"unchanged": False}
+        # End-if
+        for name, spec in manifest["files"].items():
+            target = dest_dir / name
+            if not target.is_file() or target.stat().st_size != spec["size"]:
+                return {"unchanged": False}
+            # End-if
+            digest = hashlib.sha256()
+            try:
+                with target.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(CHUNK_SIZE), b""):
+                        digest.update(chunk)
+                    # End-for
+                # End-with
+            except OSError:
+                return {"unchanged": False}
+            # End-try
+            if digest.hexdigest() != spec["sha256"]:
+                return {"unchanged": False}
+            # End-if
+        # End-for
+        has_summary = (dest_dir / "summary.md").is_file()
+        already_digested = (prev_meta.get("digested_snapshot_id") == snapshot_id)
+        if not (has_summary and already_digested):
+            return {"unchanged": False}
+        # End-if
+        return {
+            "unchanged": True,
+            "accepted": snapshot_id,
+            "session_id": session_id,
+            "changed": False,
+            "needs_digest": False,
+            "path": f"assets/syncs/{session_id}",
+        }
+    # End-def
+
+    ##
      # @brief Validate staged files and atomically publish into assets/syncs/<session_id>/.
      #
      # @param manifest Verified identity and file digests.
@@ -265,16 +325,6 @@ class BackupStore:
         # End-if
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        if source_dir != dest_dir:
-            for name in manifest["files"]:
-                src_file = source_dir / name
-                tmp_file = dest_dir / (name + ".tmp")
-                shutil.copyfile(src_file, tmp_file)
-                os.replace(tmp_file, dest_dir / name)
-            # End-for
-            shutil.rmtree(stage_dir, ignore_errors=True)
-        # End-if
-
         new_hist_sha = manifest["files"]["history.log"]["sha256"]
         prev_hist_sha = (
             prev_meta.get("files", {}).get("history.log", {}).get("sha256")
@@ -297,14 +347,64 @@ class BackupStore:
             digested_snapshot_id=prev_digested,
             path=str(dest_dir),
         )
+
+        tracked_names = ALLOWED_FILES + ("sync_meta.json",)
+        prev_snapshot = {
+            fn: (dest_dir / fn).read_bytes() if (dest_dir / fn).is_file() else None
+            for fn in tracked_names
+        }
+        staged_tmps = []
         tmp_meta = prev_meta_file.with_suffix(".json.tmp")
-        tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp_meta, prev_meta_file)
+        try:
+            if source_dir != dest_dir:
+                for name in manifest["files"]:
+                    src_file = source_dir / name
+                    tmp_file = dest_dir / (name + ".tmp")
+                    shutil.copyfile(src_file, tmp_file)
+                    staged_tmps.append((tmp_file, dest_dir / name))
+                # End-for
+            # End-if
+            tmp_meta.write_text(json.dumps(sync_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            staged_tmps.append((tmp_meta, prev_meta_file))
+
+            for tmp_file, final_file in staged_tmps:
+                os.replace(tmp_file, final_file)
+            # End-for
+            for opt_name in OPTIONAL_FILES:
+                if opt_name not in manifest["files"]:
+                    (dest_dir / opt_name).unlink(missing_ok=True)
+                # End-if
+            # End-for
+        except Exception:
+            for fn, raw_bytes in prev_snapshot.items():
+                fpath = dest_dir / fn
+                try:
+                    if raw_bytes is None:
+                        fpath.unlink(missing_ok=True)
+                    else:
+                        fpath.write_bytes(raw_bytes)
+                    # End-if
+                except OSError:
+                    pass
+                # End-try
+            # End-for
+            raise
+        finally:
+            for tmp_file, _ in staged_tmps:
+                if tmp_file.exists():
+                    tmp_file.unlink(missing_ok=True)
+                # End-if
+            # End-for
+        # End-try
+
+        if source_dir != dest_dir:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+        # End-if
 
         needs_digest = bool(
             changed
             or not has_summary
-            or (prev_digested != snapshot_id and prev_queued != snapshot_id)
+            or (prev_digested != snapshot_id)
         )
         return {
             "accepted": snapshot_id,

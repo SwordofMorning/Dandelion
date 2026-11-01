@@ -181,7 +181,7 @@ def is_plain_user_msg(msg):
 
 
 ##
- # @brief True if message is an assistant message that ends with a tool_use block.
+ # @brief True if message is an assistant message containing any tool_use block.
  #
 def msg_ends_with_tool_use(msg):
     if not isinstance(msg, dict) or msg.get("role") != "assistant":
@@ -189,11 +189,10 @@ def msg_ends_with_tool_use(msg):
     # End-if
     content = msg.get("content")
     if isinstance(content, list) and content:
-        last = content[-1]
-        if isinstance(last, dict):
-            return last.get("type") == "tool_use"
-        # End-if
-        return getattr(last, "type", None) == "tool_use"
+        return any(
+            (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_use"
+            for b in content
+        )
     # End-if
     return False
 # End-def

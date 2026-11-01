@@ -104,19 +104,36 @@ class OpenAIProvider(LLMProvider):
             elif isinstance(content, list):
                 if role == "user":
                     text_parts = []
+                    media_parts = []
                     for block in content:
                         if isinstance(block, dict):
-                            if block.get("type") == "text":
+                            btype = block.get("type")
+                            if btype == "text":
                                 text_parts.append(block.get("text", ""))
-                            elif block.get("type") == "tool_result":
+                            elif btype == "image":
+                                src = block.get("source") if isinstance(block.get("source"), dict) else {}
+                                mtype = src.get("media_type") or "image/png"
+                                data = src.get("data") or ""
+                                if data:
+                                    media_parts.append({
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{mtype};base64,{data}"}
+                                    })
+                            elif btype == "tool_result":
                                 # OpenAI requires a specific role="tool" message for each tool result
                                 openai_msgs.append({
                                     "role": "tool",
                                     "tool_call_id": block.get("tool_use_id", ""),
                                     "content": str(block.get("content", ""))
                                 })
-                    # If there was standard text alongside tool results, append it as user
-                    if text_parts:
+                    # If there was standard text or image media alongside tool results, append as user
+                    if media_parts:
+                        user_content = []
+                        if text_parts:
+                            user_content.append({"type": "text", "text": "\n".join(text_parts)})
+                        user_content.extend(media_parts)
+                        openai_msgs.append({"role": "user", "content": user_content})
+                    elif text_parts:
                         openai_msgs.append({"role": "user", "content": "\n".join(text_parts)})
 
                 elif role == "assistant":
