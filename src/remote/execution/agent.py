@@ -32,6 +32,7 @@ MAIN_DIRECT_TOOLS = (
     "get_time",
     "remember",
     "forget",
+    "memory_search",
     "update_state",
     "prune_context",
 )

@@ -317,7 +317,8 @@ class RemoteLoop:
                 tg.start_progress(chat_id)
             # End-if
 
-            agent.inject_user_message(self._message(event))
+            m_query = str(event["payload"].get("text", "")) if event["kind"] == "message" else None
+            agent.inject_user_message(self._message(event), memory_query=m_query)
             ok, error = run_agent_loop(
                 agent,
                 should_stop=lambda: self._stop.is_set() or agent.runtime.cancelled(),

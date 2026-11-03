@@ -108,7 +108,7 @@ class BasePromptBuilder:
             "Memory & Context Management:",
             "1. You have a persistent two-tier memory system (global tier + session tier, up to 500 index entries per tier).",
             "2. Relevant memories and the current task state are auto-injected by your runtime as a [Dandelion Context] block appended to the latest user message. It is reference data - not something the user typed.",
-            "3. Use 'remember' (scope='global' or 'session') to persist important facts; use 'forget' to remove obsolete, superseded, or merged memories so your memory stays clean and self-organized; use 'update_state' to keep target/todos/completed current.",
+            "3. Use 'remember' (scope='global' or 'session'; re-using an existing 'name' in the same scope upserts/replaces the entry) to persist important facts; use 'forget' to remove obsolete or merged memories; use 'memory_search' to actively query global/session memories beyond the passive top-K digest; use 'update_state' to keep target/todos/completed current.",
             "4. Update your memory whenever necessary to record key engineering paths, decisions, and code status before context compression or pruning.",
         ]
         if self._has_tool("prune_context"):
