@@ -647,6 +647,45 @@ def _parse_remote_server_sections(config):
 # End-def
 
 ##
+ # @brief Parse [Memory] and [Embedding] sections with safe fallback to disabled.
+ #
+ # @param config ConfigParser instance.
+ #
+ # @return Normalized memory and embedding configuration dict.
+ #
+def _parse_memory_config(config):
+    sec_map = {s.lower(): s for s in config.sections()}
+    def _opt(sec, key, default=""):
+        real = sec_map.get(sec.lower())
+        return config.get(real, key, fallback=default, raw=True).strip().strip("\"'") if real else default
+    # End-def
+
+    try:
+        top_k = max(1, int(_opt("Memory", "PASSIVE_TOP_K", "5") or "5"))
+        min_sim = min(1.0, max(0.0, float(_opt("Memory", "MIN_SIMILARITY", "0.35") or "0.35")))
+        timeout_ms = max(100, int(_opt("Embedding", "TIMEOUT_MS", "1500") or "1500"))
+        batch_size = max(1, int(_opt("Embedding", "BATCH_SIZE", "32") or "32"))
+    except ValueError:
+        top_k, min_sim, timeout_ms, batch_size = 5, 0.35, 1500, 32
+    # End-try
+    provider = (_opt("Embedding", "PROVIDER", "disabled") or "disabled").lower()
+    model, raw_dims = _opt("Embedding", "MODEL", ""), _opt("Embedding", "DIMENSIONS", "")
+    dims = int(raw_dims) if raw_dims.isdigit() and int(raw_dims) > 0 else None
+    base_url = _opt("Embedding", "BASE_URL", "").rstrip("/")
+    api_key_env = _opt("Embedding", "API_KEY_ENV", "")
+    api_key = _opt("Embedding", "API_KEY", "") or (os.environ.get(api_key_env, "").strip() if api_key_env else "")
+    if provider not in ("disabled", "mock", "gemini", "openai_compatible") or (
+        provider in ("gemini", "openai_compatible") and (not model or not api_key or (provider == "openai_compatible" and not base_url))
+    ):
+        print(f"[!] [Embedding] Invalid or incomplete config for PROVIDER={provider!r}; falling back to 'disabled'.")
+        provider = "disabled"
+    # End-if
+    emb = {"provider": provider, "model": model, "dimensions": dims, "base_url": base_url,
+           "api_key": api_key, "api_key_env": api_key_env, "timeout_ms": timeout_ms, "batch_size": batch_size}
+    return {"passive_top_k": top_k, "min_similarity": min_sim, "embedding": emb, **emb}
+# End-def
+
+##
  # @brief Load config.
  # 
  # @param file_path file path to config.
@@ -706,7 +745,7 @@ def load_api_config(file_path):
 
     # Iterate through all sections to parse providers and find the main agent.
     for section in config.sections():
-        if section in ("Main", "Remote", "Server", "Telegram", "Drive"):
+        if section.lower() in ("main", "remote", "server", "telegram", "drive", "memory", "embedding"):
             continue
         # End-if
 
@@ -804,6 +843,7 @@ def load_api_config(file_path):
         "SERVER": server_cfg,
         "TELEGRAM": telegram_cfg,
         "DRIVE": drive_cfg,
+        "MEMORY": _parse_memory_config(config),
     }
 # End-def
 

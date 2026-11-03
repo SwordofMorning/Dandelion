@@ -27,7 +27,7 @@ import time
 
 from src.core.utils import SafeLLMClient
 from src.core.runtime import Runtime
-from src.core.agent.memory import MemoryManager
+from src.core.agent.memory import MemoryManager, _UNSET
 from src.core.agent.skill import SkillManager
 from src.core.agent.sysprompt import PromptBuilder
 from src.core.agent.tools import build_tools
@@ -161,7 +161,8 @@ class MyAgent:
             session_manager=self.session,
             safe_client=self.client,
             logger=self.session,
-            runtime=self.runtime
+            runtime=self.runtime,
+            memory_config=self.config.get("MEMORY"),
         )
         self.skill = SkillManager(
             skill_dir=os.path.join(self.workspace_dir, "llm", "skill"),
@@ -177,6 +178,7 @@ class MyAgent:
         # so the tail of system_prompt stays stable during tool loops (cache-friendly).
         self._memories_key = None
         self._memories_cache = ""
+        self._memory_query = _UNSET
 
         # ----- Context compressor, pruner & usage metrics -----
         self.compressor = ContextCompressor(self.client, self.session, self.config, runtime=self.runtime)
@@ -302,10 +304,11 @@ class MyAgent:
                 key = (i, hash(str(msg.get("content", ""))[:2000]))
                 break
         # End-for
+        key = (key, self._memory_query if self._memory_query is not _UNSET else "auto")
         if key is not None and key == self._memories_key:
             return self._memories_cache
         self._memories_key = key
-        self._memories_cache = self.memory.load_memories_string(self.history)
+        self._memories_cache = self.memory.load_memories_string(self.history, query_override=self._memory_query)
         return self._memories_cache
     # End-def
 
@@ -689,7 +692,8 @@ class MyAgent:
      #
      # @param text User input text to append to history.
      #
-    def inject_user_message(self, text):
+    def inject_user_message(self, text, *, memory_query=_UNSET):
+        self._memory_query = memory_query
         self.history.append({"role": "user", "content": text})
         self.session.save_history(self.history)
     # End-def
@@ -705,6 +709,7 @@ class MyAgent:
         # the session tier (and possibly the whole history) changed.
         self._memories_key = None
         self._memories_cache = ""
+        self._memory_query = _UNSET
         # NOTE: previously injected [Dandelion Context] blocks inside
         # history are intentionally NOT stripped here: keeping the messages
         # prefix byte-identical lets the server-side prefix cache survive a

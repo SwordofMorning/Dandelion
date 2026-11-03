@@ -16,7 +16,7 @@ from src.core.tool import (
     GrepSearchTool, WriteFileTool, ReadFileTool, ListDirectoryTool,
     EditFileTool, PlanTool, SpawnSubagentTool, WebSearchTool,
     ReadExcelTool, WriteExcelTool,
-    StateTool, MemoryTool, ForgetMemoryTool, PruneContextTool,
+    StateTool, MemoryTool, ForgetMemoryTool, MemorySearchTool, PruneContextTool,
     SSHTool, TimeTool,
     ReadPdfTool, ReadImageTool
 )
@@ -34,7 +34,7 @@ from src.core.tool import (
  #
  # @return Dictionary of worker-eligible tool instances and list of media tools.
  #
-def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager, runtime, host=None):
+def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager, runtime, host=None, memory_manager=None):
     bash = BashTool(workspace_dir=workspace_dir)
     skill_loader = LoadSkillTool(skill_manager)
     md_editor = MarkdownTool(workspace_dir=workspace_dir)
@@ -64,6 +64,10 @@ def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager,
         write_excel_tool.get_name(): write_excel_tool,
         ssh_tool.get_name(): ssh_tool,
     }
+    if memory_manager is not None:
+        ms_tool = MemorySearchTool(memory_manager)
+        all_tools[ms_tool.get_name()] = ms_tool
+    # End-if
 
     media_exts = config.get("MEDIA_EXTS", []) or []
     media_limits = config.get("MEDIA_LIMITS", {}) or {}
@@ -111,7 +115,11 @@ def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager,
  #
  # @return Configured SubAgentPool instance.
  #
-def build_worker_pool(config, client, session_manager, workspace_dir, runtime):
+def build_worker_pool(config, client, session_manager, workspace_dir, runtime, memory_manager=None):
+    from src.core.agent.memory import MemoryManager
+    if memory_manager is None:
+        memory_manager = MemoryManager(os.path.join(workspace_dir, "llm", "memory"), session_manager=session_manager, safe_client=client, logger=session_manager, runtime=runtime, memory_config=config.get("MEMORY"))
+    # End-if
     skill_mgr = SkillManager(
         skill_dir=os.path.join(workspace_dir, "llm", "skill"),
         runtime=runtime,
@@ -123,6 +131,7 @@ def build_worker_pool(config, client, session_manager, workspace_dir, runtime):
         session_manager=session_manager,
         runtime=runtime,
         host=None,
+        memory_manager=memory_manager,
     )
     return SubAgentPool(
         safe_client=client,
@@ -150,6 +159,7 @@ def build_tools(agent):
         session_manager=agent.session,
         runtime=agent.runtime,
         host=agent,
+        memory_manager=agent.memory,
     )
 
     state_tool = StateTool(workspace_dir=agent.workspace_dir, session_manager=agent.session)

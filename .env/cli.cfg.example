@@ -147,3 +147,17 @@ MODEL_LIST = [
 ; URL=https://sub2api.swordofmorning.com/dandelion-sync
 ; ACCESS_KEY=dr-your-shared-secret-key
 ; DEVICE_ID=work-laptop
+
+[Memory]
+PASSIVE_TOP_K=5
+MIN_SIMILARITY=0.35
+
+[Embedding]
+PROVIDER=disabled
+MODEL=mock-semantic-v1
+DIMENSIONS=8
+BASE_URL=
+API_KEY=
+API_KEY_ENV=
+TIMEOUT_MS=1500
+BATCH_SIZE=32

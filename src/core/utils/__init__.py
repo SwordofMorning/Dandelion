@@ -16,6 +16,10 @@ from .llm_provider import (
 from .logging import AgentLogger, SessionManager
 from .routing import ModelRegistry, RegistryModelSpec, RoutingPolicy
 from .llm_request import SafeLLMClient
+from .embedding import (
+    EmbeddingError, validate_and_normalize_vector, EmbeddingProvider, DisabledEmbeddingProvider,
+    MockEmbeddingProvider, GeminiEmbeddingProvider, OpenAICompatibleEmbeddingProvider, create_embedding_provider,
+)
 
 __all__ = [
     "load_api_config",
