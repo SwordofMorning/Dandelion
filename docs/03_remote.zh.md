@@ -6,7 +6,7 @@
 
 1. `src/core/`：收纳与前端无关的通用执行机制与抽象基类，包括 `agent/`（`MyAgent`、`BasePromptBuilder`、`MemoryManager`、`SkillManager`、`ContextCompressor`、`ContextPruner`、`run_agent_loop`）、`tool/`（内置工具集，含 `remember`、`forget`、`prune_context`）、`subagent/` 与 `utils/`。
 2. `src/cli/`：提供本地终端交互、带沙箱边界保护的 `cli_runtime()`、`CLIPromptBuilder` 以及手动会话同步客户端 `sync.py`。本地客户端读取 `cli.cfg`（兼容回退 `api.cfg`）。
-3. `src/remote/`：提供部署在专用服务器上的全天候个人编码与陪伴助手，解除本地路径与命令沙箱限制（`sandbox=False`），采用单阻塞中断循环与工具化外部通讯和云盘自我备份。远端服务器统一读取 `remote.cfg`，无需配置环境变量，并通过根目录的 `./remote.sh` 脚本一键管理。
+3. `src/remote/`：提供部署在专用服务器上的全天候个人编码与陪伴助手，解除本地路径与命令沙箱限制（`sandbox=False`），采用单阻塞中断循环与工具化外部通讯和云盘自我备份。远端服务器统一读取 `remote.cfg`，无需配置环境变量，并通过根目录的 `python main.py remote` 命令一键管理。
 
 Remote 的目录布局如下：
 
@@ -17,6 +17,7 @@ src/remote/
 ├── channels/    # 基于 MD5 ACCESS_KEY 校验的 HTTP 接口与 Telegram 长轮询收发
 ├── tool/        # Remote 专属工具（agent/task_tool.py、communication/message_tool.py、drive/drive_tool.py）
 ├── sysprompt.py # RemotePromptBuilder 全天候助手系统提示词
+├── cli.py       # 守护进程生命周期管理（init/start/stop/restart/status/logs/fg）
 ├── service.py   # remote.cfg 加载、服务装配与平滑停机
 └── __main__.py  # python -m src.remote 薄入口
 ```
@@ -81,16 +82,16 @@ Dandelion Remote 将 Google Drive 封装为 `google_drive` 工具（`GoogleDrive
 
 ---
 
-## 四、服务端一键部署与管理（`remote.sh`）
+## 四、服务端一键部署与管理（`python main.py remote`）
 
-在远端服务器上使用仓库根目录的 `remote.sh` 脚本管理服务生命周期：
+在远端服务器上使用仓库根目录的 `python main.py remote` 命令管理服务生命周期：
 
 ```sh
-./remote.sh init      # 初始化目录、内置技能与 remote.cfg 模板（自动生成随机 ACCESS_KEY）
-./remote.sh start     # 后台守护模式启动 Dandelion Remote
-./remote.sh status    # 查看运行状态与 PID
-./remote.sh logs      # 实时查看运行日志
-./remote.sh restart   # 平滑重启服务
-./remote.sh stop      # 发送 SIGTERM 平滑停止服务
-./remote.sh fg        # 前台直接运行（用于调试）
+python main.py remote init      # 初始化目录、内置技能与 remote.cfg 模板（自动生成随机 ACCESS_KEY）
+python main.py remote start     # 自动守护模式在后台启动 Dandelion Remote
+python main.py remote status    # 查看运行状态与 PID
+python main.py remote logs      # 实时查看运行日志
+python main.py remote restart   # 平滑重启服务
+python main.py remote stop      # 发送 SIGTERM 平滑停止服务
+python main.py remote fg        # 前台直接运行（用于调试）
 ```
