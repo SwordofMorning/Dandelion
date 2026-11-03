@@ -6,7 +6,7 @@
 
 1. `src/core/`: Frontend-agnostic execution mechanisms and abstract base classes, including `agent/` (`MyAgent`, `BasePromptBuilder`, `MemoryManager`, `SkillManager`, `ContextCompressor`, `ContextPruner`, `run_agent_loop`), `tool/` (built-in tools including `remember`, `forget`, and `prune_context`), `subagent/`, and `utils/`.
 2. `src/cli/`: Local terminal frontend reading `cli.cfg` (with automatic fallback to legacy `api.cfg`), featuring workspace sandbox protection (`cli_runtime()`), `CLIPromptBuilder`, and manual session sync client `sync.py`.
-3. `src/remote/`: Always-on personal coding and companion assistant for dedicated server deployment (`sandbox=False`), configured via `remote.cfg` and managed via `./remote.sh`.
+3. `src/remote/`: Always-on personal coding and companion assistant for dedicated server deployment (`sandbox=False`), configured via `remote.cfg` and managed via `python main.py remote`.
 
 ```text
 src/remote/
@@ -15,6 +15,7 @@ src/remote/
 ├── channels/    # HTTP API (MD5 ACCESS_KEY verification) and allowlisted Telegram polling/delivery
 ├── tool/        # Remote tools (agent/task_tool.py, communication/message_tool.py, drive/drive_tool.py)
 ├── sysprompt.py # RemotePromptBuilder for the 24/7 server assistant
+├── cli.py       # Daemon lifecycle manager (init/start/stop/restart/status/logs/fg)
 ├── service.py   # remote.cfg loader and service lifecycle management
 └── __main__.py  # Thin module entrypoint for python -m src.remote
 ```
@@ -77,16 +78,16 @@ FOLDER_ID =
 
 ---
 
-## 四、Server Lifecycle Script (`remote.sh`)
+## 四、Server Lifecycle Management (`python main.py remote`)
 
 Manage the Dandelion Remote daemon directly from the repository root:
 
 ```sh
-./remote.sh init      # Seed workspace skills and generate remote.cfg with a random ACCESS_KEY
-./remote.sh start     # Start Dandelion Remote in background
-./remote.sh status    # Check daemon PID and status
-./remote.sh logs      # Tail runtime logs
-./remote.sh restart   # Gracefully restart the service
-./remote.sh stop      # Gracefully stop the service (SIGTERM)
-./remote.sh fg        # Run in foreground
+python main.py remote init      # Seed workspace skills and generate remote.cfg with a random ACCESS_KEY
+python main.py remote start     # Auto-daemonize Dandelion Remote in background
+python main.py remote status    # Check daemon PID and status
+python main.py remote logs      # Tail runtime logs
+python main.py remote restart   # Gracefully restart the service
+python main.py remote stop      # Gracefully stop the service (SIGTERM)
+python main.py remote fg        # Run in foreground
 ```
