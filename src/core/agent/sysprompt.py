@@ -8,6 +8,7 @@
  # requiring concrete frontends (CLI and Remote) to subclass BasePromptBuilder.
  #
 
+import os
 import platform
 import shutil
 
@@ -59,6 +60,42 @@ class BasePromptBuilder:
      #
     def _has_tool(self, name):
         return self.tool_names is None or name in self.tool_names
+    # End-def
+
+    ##
+     # @brief Read a Markdown system-prompt template from 'llm/sysprompt/<filename>'.
+     #
+     # @param filename Prompt Markdown filename inside 'llm/sysprompt/'.
+     # @param fallback Default text returned when no prompt file exists.
+     #
+     # @return Rendered prompt text with '{terminal_hint}' and '{workspace_dir}' substituted.
+     #
+    def _load_sysprompt_file(self, filename, fallback=""):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        candidates = [
+            os.path.join(str(self.workspace_dir), "llm", "sysprompt", filename),
+            os.path.join(repo_root, "llm", "sysprompt", filename),
+        ]
+        raw = ""
+        for path in candidates:
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        raw = f.read().strip()
+                    # End-with
+                    if raw:
+                        break
+                    # End-if
+                except (OSError, UnicodeDecodeError):
+                    continue
+                # End-try
+            # End-if
+        # End-for
+        text = raw or fallback
+        return (
+            text.replace("{terminal_hint}", self.terminal_hint)
+            .replace("{workspace_dir}", str(self.workspace_dir))
+        )
     # End-def
 
     ##
