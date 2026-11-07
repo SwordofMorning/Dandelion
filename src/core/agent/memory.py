@@ -31,10 +31,73 @@
  #            -> _read_index(tier_dir)            # per-tier MEMORY.md
  #
 
-import os
+import hashlib, json, os, re, sqlite3, time
 from src.core.runtime import Runtime
+from src.core.utils.embedding import EmbeddingError, create_embedding_provider, validate_and_normalize_vector
 
 MAX_INDEX_LINES = 500
+_UNSET = object()
+
+##
+ # @brief Load cached (content_hash, vector) entries from <tier_dir>/.vector_cache.sqlite3.
+ #
+def _load_tier_vectors(tier_dir, profile_key):
+    db_path = os.path.join(tier_dir or "", ".vector_cache.sqlite3")
+    if not os.path.exists(db_path): return {}
+    try:
+        with sqlite3.connect(db_path, timeout=2.0) as conn:
+            row = conn.execute("SELECT value FROM meta WHERE key='profile'").fetchone()
+            if not row or row[0] != profile_key: return {}
+            return {fn: (h, json.loads(v)) for fn, h, v in conn.execute("SELECT filename, hash, vec FROM vectors")}
+        # End-with
+    except Exception:
+        return {}
+    # End-try
+# End-def
+
+##
+ # @brief Persist (filename, content_hash, vector) entries into <tier_dir>/.vector_cache.sqlite3.
+ #
+def _save_tier_vectors(tier_dir, profile_key, entries):
+    if not tier_dir or not entries: return
+    os.makedirs(tier_dir, exist_ok=True)
+    db_path = os.path.join(tier_dir, ".vector_cache.sqlite3")
+    for attempt in range(2):
+        try:
+            with sqlite3.connect(db_path, timeout=2.0) as conn:
+                conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+                conn.execute("CREATE TABLE IF NOT EXISTS vectors (filename TEXT PRIMARY KEY, hash TEXT, vec TEXT)")
+                row = conn.execute("SELECT value FROM meta WHERE key='profile'").fetchone()
+                if not row or row[0] != profile_key:
+                    conn.execute("DELETE FROM vectors")
+                    conn.execute("INSERT OR REPLACE INTO meta VALUES ('profile', ?)", (profile_key,))
+                # End-if
+                conn.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?)", [(fn, h, json.dumps(v)) for fn, h, v in entries])
+            # End-with
+            return
+        except sqlite3.DatabaseError:
+            if attempt == 0 and os.path.exists(db_path):
+                try: os.remove(db_path)
+                except OSError: pass
+            # End-if
+        # End-try
+    # End-for
+# End-def
+
+##
+ # @brief Delete one cached vector entry from <tier_dir>/.vector_cache.sqlite3.
+ #
+def _delete_tier_vector(tier_dir, filename):
+    db_path = os.path.join(tier_dir or "", ".vector_cache.sqlite3")
+    if not os.path.exists(db_path): return
+    try:
+        with sqlite3.connect(db_path, timeout=2.0) as conn:
+            conn.execute("DELETE FROM vectors WHERE filename=?", (filename,))
+        # End-with
+    except Exception:
+        pass
+    # End-try
+# End-def
 
 ##
  # @brief Memory Management Class.
@@ -60,7 +123,8 @@ class MemoryManager:
      # @return None.
      #
     def __init__(self, memory_dir="./llm/memory", session_memory_dir=None,
-                 session_manager=None, safe_client=None, logger=None, runtime=None):
+                 session_manager=None, safe_client=None, logger=None, runtime=None,
+                 memory_config=None, embedding_provider=None):
         self.memory_dir = memory_dir
         # Static override (used by tests / standalone usage). When
         # session_manager is provided it wins, so `checkout` (session switch)
@@ -70,6 +134,11 @@ class MemoryManager:
         self.client = safe_client
         self.logger = logger
         self.runtime = runtime if runtime is not None else Runtime()
+        cfg = memory_config if isinstance(memory_config, dict) else {}
+        self.passive_top_k = max(1, int(cfg.get("passive_top_k", 5) or 5))
+        self.min_similarity = float(cfg.get("min_similarity", 0.35) if cfg.get("min_similarity") is not None else 0.35)
+        self.provider = embedding_provider or create_embedding_provider(cfg)
+        self._cooldown_until = 0.0
 
         if not os.path.exists(self.memory_dir):
             os.makedirs(self.memory_dir)
@@ -214,6 +283,7 @@ class MemoryManager:
                 "filename": fname,
                 "name": name,
                 "description": meta.get("description", ""),
+                "tags": meta.get("tags", "").strip("[]").strip(),
                 "body": body,
                 "scope": scope_label
             })
@@ -301,9 +371,106 @@ class MemoryManager:
      #
      # @return List of memory dicts (name/description/body/scope/filename).
      #
-    def select_relevant_memories(self, messages, max_items=5):
-        files = self.list_memories(scope="all")
-        if not files: return []
+    ##
+     # @brief Build canonical embedding text and SHA-256 content hash for a memory entry.
+     #
+    def _doc_text_and_hash(self, name, description, tags, body):
+        c = [self._frontmatter_clean(x).strip().strip("[]\"'") for x in (name, description, tags)]
+        doc = f"{c[0]}\n{c[1]}\n{c[2]}\n{str(body or '').strip()}"
+        return doc, hashlib.sha256(doc.encode("utf-8")).hexdigest()
+    # End-def
+
+    ##
+     # @brief Pre-embed a memory entry before writing to disk.
+     #
+     # @note Write-time UTF-8/ASCII fallback guard: vector memory is primary and
+     # supports UTF-8. When disabled or failing, preembed_entry raises EmbeddingError
+     # so MemoryTool rejects non-ASCII input and asks the LLM to re-submit in ASCII
+     # for keyword split compatibility. Do NOT remove this guard.
+     #
+    def preembed_entry(self, name, description, content="", tags=""):
+        if not self.provider.is_enabled():
+            raise EmbeddingError("Vector memory provider is disabled")
+        # End-if
+        return self.provider.embed_documents([self._doc_text_and_hash(name, description, tags, content)[0]])[0]
+    # End-def
+
+    ##
+     # @brief Search memories via primary vector retrieval with automatic keyword fallback.
+     #
+     # @note Keyword split mode includes a CJK 2-gram fallback alongside ASCII words
+     # (len > 3) so previously stored UTF-8/Chinese memories remain retrievable when
+     # the embedding service is temporarily unreachable or in cooldown.
+     #
+    def search(self, query, scope="all", top_k=5):
+        q, limit = str(query or "").split("[Dandelion Context")[0].strip(), max(1, int(top_k or self.passive_top_k))
+        if not q: return {"backend": "keyword", "reason": "empty_query", "hits": []}
+        tiers = ([ (self.session_memory_dir(), "session") ] if scope in ("all", "session") and self.session_memory_dir() else []) + (
+                 [ (self.memory_dir, "global") ] if scope in ("all", "global") else [])
+        reason = "provider_disabled"
+        if self.provider.is_enabled() and time.monotonic() >= self._cooldown_until:
+            try:
+                pkey, scored, q_vec = self.provider.profile_key(), [], None
+                for t_dir, s_label in tiers:
+                    items = self._list_tier(t_dir, s_label)
+                    if not items: continue
+                    cached, m_items, m_docs, m_hashes, vecs = _load_tier_vectors(t_dir, pkey), [], [], [], {}
+                    for it in items:
+                        doc, h = self._doc_text_and_hash(it["name"], it["description"], it.get("tags", ""), it["body"])
+                        ce = cached.get(it["filename"])
+                        if ce and ce[0] == h:
+                            try:
+                                vecs[it["filename"]] = validate_and_normalize_vector(ce[1], self.provider.dimensions)
+                                continue
+                            except EmbeddingError: pass
+                        # End-if
+                        m_items.append(it); m_docs.append(doc); m_hashes.append(h)
+                    # End-for
+                    if m_docs:
+                        new_vecs = self.provider.embed_documents(m_docs)
+                        for it, h, v in zip(m_items, m_hashes, new_vecs): vecs[it["filename"]] = v
+                        _save_tier_vectors(t_dir, pkey, [(it["filename"], h, v) for it, h, v in zip(m_items, m_hashes, new_vecs)])
+                    # End-if
+                    q_vec = q_vec or self.provider.embed_query(q)
+                    for it in items:
+                        v = vecs.get(it["filename"])
+                        sim = sum(a * b for a, b in zip(q_vec, v)) if v and len(v) == len(q_vec) else -1.0
+                        if sim >= self.min_similarity:
+                            scored.append((sim, 0 if s_label == "session" else 1, dict(it, score=round(sim, 4))))
+                        # End-if
+                    # End-for
+                # End-for
+                scored.sort(key=lambda x: (-round(x[0], 6), x[1], x[2]["name"]))
+                return {"backend": "vector", "reason": "ok", "hits": [x[2] for x in scored[:limit]]}
+            except EmbeddingError as exc:
+                self._cooldown_until, reason = time.monotonic() + 30.0, f"embedding_error: {exc}"
+            # End-try
+        elif self.provider.is_enabled():
+            reason = "cooldown"
+        # End-if
+        ascii_kws = [w for w in re.findall(r"[a-z0-9_]+", q.lower()) if len(w) > 3]
+        cjk_kws = [seg[i:i + 2] for seg in re.findall(r"[\u4e00-\u9fff]{2,}", q) for i in range(len(seg) - 1)]
+        keywords = list(dict.fromkeys(ascii_kws + cjk_kws))
+        if not keywords: return {"backend": "keyword", "reason": reason, "hits": []}
+        selected = []
+        for t_dir, s_label in tiers:
+            for f in self._list_tier(t_dir, s_label):
+                pool = (f["name"] + " " + f["description"] + " " + f.get("tags", "")).lower()
+                cnt = sum(1 for kw in keywords if kw in pool)
+                if cnt > 0:
+                    selected.append(dict(f, score=float(cnt)))
+                    if len(selected) >= limit: return {"backend": "keyword", "reason": reason, "hits": selected}
+                # End-if
+            # End-for
+        # End-for
+        return {"backend": "keyword", "reason": reason, "hits": selected}
+    # End-def
+
+    def select_relevant_memories(self, messages, max_items=None, *, query_override=_UNSET):
+        if query_override is None: return []
+        if query_override is not _UNSET:
+            return self.search(str(query_override), scope="all", top_k=max_items or self.passive_top_k)["hits"]
+        # End-if
 
         # Fallback keyword logic (skipping LLM call for speed/safety in C-style)
         recent_texts = []
@@ -325,7 +492,14 @@ class MemoryManager:
                     # End-for
                     content = " ".join(texts)
                 if isinstance(content, str):
-                    recent_texts.append(content)
+                    clean = content.split("[Dandelion Context")[0].strip()
+                    if clean.startswith(("[Interrupt: Scheduled Wakeup", "[Interrupt: CLI Session", "[Interrupt: Background Job")):
+                        continue
+                    # End-if
+                    if clean.startswith("[Interrupt: User Message"):
+                        clean = clean.split("\n", 2)[-1].strip()
+                    # End-if
+                    if clean: recent_texts.append(clean)
                 if len(recent_texts) >= 3:
                     break
             # End-if
@@ -333,28 +507,7 @@ class MemoryManager:
 
         recent = " ".join(reversed(recent_texts))[:2000]
         if not recent.strip(): return []
-
-        keywords = [w.lower() for w in recent.split() if len(w) > 3]
-
-        # Session tier first (current attention anchor), then global tier.
-        selected = []
-        for scope in ("session", "global"):
-            if len(selected) >= max_items:
-                break
-            tier_files = [f for f in files if f.get("scope") == scope]
-            for f in tier_files:
-                search_pool = (f["name"] + " " + f["description"]).lower()
-                # If any keyword matches, add to selected
-                if True in [kw in search_pool for kw in keywords]:
-                    selected.append(f)
-                    if len(selected) >= max_items:
-                        break
-                    # End-if
-                # End-if
-            # End-for
-        # End-for
-
-        return selected
+        return self.search(recent, scope="all", top_k=max_items or self.passive_top_k)["hits"]
     # End-def
 
     ##
@@ -362,8 +515,8 @@ class MemoryManager:
      #
      # @return Prompt string.
      #
-    def load_memories_string(self, messages):
-        selected = self.select_relevant_memories(messages)
+    def load_memories_string(self, messages, *, query_override=_UNSET):
+        selected = self.select_relevant_memories(messages, query_override=query_override)
         if not selected: return ""
 
         parts = ["<relevant_memories>"]
@@ -423,8 +576,10 @@ class MemoryManager:
      # @raise ValueError When name invalid/reserved/colliding, 
      # or scope='session' with no session configured.
      #
-    def write_memory(self, name, description, tags, content, scope="global"):
+    def write_memory(self, name, description, tags="general", content=_UNSET, scope="global", *, precomputed_vector=None):
         import datetime
+        if content is _UNSET: content, tags = tags, "general"
+        scope = "session" if str(scope or "global").lower() in ("session", "local") else "global"
         target_dir = self._dir_for_scope(scope)
         os.makedirs(target_dir, exist_ok=True)
 
@@ -503,6 +658,15 @@ class MemoryManager:
         os.replace(tmp_path, filepath)
 
         self._update_index(target_dir, clean_name, clean_desc, clean_tags, now)
+        doc, h = self._doc_text_and_hash(clean_name, clean_desc, clean_tags, content)
+        vec = precomputed_vector
+        if vec is None and self.provider.is_enabled() and time.monotonic() >= self._cooldown_until:
+            try: vec = self.provider.embed_documents([doc])[0]
+            except EmbeddingError: self._cooldown_until = time.monotonic() + 30.0
+        # End-if
+        if vec is not None:
+            _save_tier_vectors(target_dir, self.provider.profile_key(), [(filename, h, vec)])
+        # End-if
         return True
     # End-def
 
@@ -549,6 +713,7 @@ class MemoryManager:
         # End-if
 
         os.remove(filepath)
+        _delete_tier_vector(target_dir, filename)
         self._remove_from_index(target_dir, existing_name or clean_name, safe_name)
         return True
     # End-def

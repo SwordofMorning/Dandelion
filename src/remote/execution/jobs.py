@@ -40,6 +40,7 @@ class JobExecutor:
      # @return Serialized subagent result dictionary.
      #
     def __call__(self, job, cancel_event):
+        from src.core.agent.memory import MemoryManager
         from src.core.agent.tools import build_worker_pool
         from src.core.runtime import Runtime
         from src.core.utils import SafeLLMClient
@@ -74,6 +75,7 @@ class JobExecutor:
             session_manager=session,
             workspace_dir=job["workspace"],
             runtime=runtime,
+            memory_manager=MemoryManager(os.path.join(job["workspace"], "llm", "memory"), session_manager=session, memory_config=self.config.get("MEMORY")),
         )
         task = job["task_description"]
         if job["context"]:

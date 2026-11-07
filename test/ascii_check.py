@@ -24,9 +24,7 @@ SKIP_DIRS = {
     "llm", "build", "dist", "node_modules", "venv", ".venv",
 }
 
-SKIP_FILES = {
-    "sysprompt.py",
-}
+SKIP_FILES = set()
 
 
 def iter_py_files(root):

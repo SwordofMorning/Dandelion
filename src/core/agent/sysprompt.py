@@ -8,6 +8,7 @@
  # requiring concrete frontends (CLI and Remote) to subclass BasePromptBuilder.
  #
 
+import os
 import platform
 import shutil
 
@@ -62,6 +63,42 @@ class BasePromptBuilder:
     # End-def
 
     ##
+     # @brief Read a Markdown system-prompt template from 'llm/sysprompt/<filename>'.
+     #
+     # @param filename Prompt Markdown filename inside 'llm/sysprompt/'.
+     # @param fallback Default text returned when no prompt file exists.
+     #
+     # @return Rendered prompt text with '{terminal_hint}' and '{workspace_dir}' substituted.
+     #
+    def _load_sysprompt_file(self, filename, fallback=""):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        candidates = [
+            os.path.join(str(self.workspace_dir), "llm", "sysprompt", filename),
+            os.path.join(repo_root, "llm", "sysprompt", filename),
+        ]
+        raw = ""
+        for path in candidates:
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        raw = f.read().strip()
+                    # End-with
+                    if raw:
+                        break
+                    # End-if
+                except (OSError, UnicodeDecodeError):
+                    continue
+                # End-try
+            # End-if
+        # End-for
+        text = raw or fallback
+        return (
+            text.replace("{terminal_hint}", self.terminal_hint)
+            .replace("{workspace_dir}", str(self.workspace_dir))
+        )
+    # End-def
+
+    ##
      # @brief Build the Skills Catalog section when load_skill is available.
      #
      # @return Skills section string, or empty string.
@@ -78,7 +115,7 @@ class BasePromptBuilder:
     # End-def
 
     ##
-     # @brief Build the shared ASCII internal storage Language Policy section.
+     # @brief Build the shared Language Policy section for memory and internal state.
      #
      # @return Language policy section string.
      #
@@ -87,14 +124,12 @@ class BasePromptBuilder:
         return (
             "Language Policy:\n"
             "1. User-facing replies and final deliverables (documents, reports) MAY use the user's language (e.g., Chinese).\n"
-            "2. INTERNAL ARTIFACTS MUST BE ENGLISH/ASCII ONLY, including: tool inputs for 'remember', 'forget' and 'update_state' "
-            "(name, description, tags, content, scope, target, todos, completed), global memory files under llm/memory/, "
-            "session memory files under .log/sess_*/memory/, the per-tier MEMORY.md indexes, "
-            "task_state.json under .log/sess_*/task_state.json, artifact filenames, and any intermediate storage.\n"
-            "3. Rationale: internal keyword retrieval splits on ASCII whitespace; non-ASCII (Chinese) text breaks matching. "
-            "If the user speaks Chinese, translate internal state/memory content into English before storing.\n"
-            "4. Tools enforce this strictly: if 'remember' or 'update_state' returns an ASCII-only error, "
-            "translate the offending values to English and re-submit."
+            "2. For 'remember' and 'forget', 'name' and 'scope' MUST be English/ASCII identifiers. "
+            "'description', 'tags', and 'content' MAY be submitted in the user's natural language (UTF-8, e.g., Chinese) when vector memory is active.\n"
+            "3. For 'update_state' (target, todos, completed), task_state.json under .log/sess_*/task_state.json, and artifact filenames, "
+            "values MUST remain English/ASCII only.\n"
+            "4. Fallback enforcement: if 'remember' or 'update_state' returns an error indicating vector memory is unavailable or requiring English/ASCII, "
+            "translate the offending fields to English/ASCII and re-submit."
         )
     # End-def
 
@@ -108,7 +143,7 @@ class BasePromptBuilder:
             "Memory & Context Management:",
             "1. You have a persistent two-tier memory system (global tier + session tier, up to 500 index entries per tier).",
             "2. Relevant memories and the current task state are auto-injected by your runtime as a [Dandelion Context] block appended to the latest user message. It is reference data - not something the user typed.",
-            "3. Use 'remember' (scope='global' or 'session') to persist important facts; use 'forget' to remove obsolete, superseded, or merged memories so your memory stays clean and self-organized; use 'update_state' to keep target/todos/completed current.",
+            "3. Use 'remember' (scope='global' or 'session'; re-using an existing 'name' in the same scope upserts/replaces the entry) to persist important facts; use 'forget' to remove obsolete or merged memories; use 'memory_search' to actively query global/session memories beyond the passive top-K digest; use 'update_state' to keep target/todos/completed current.",
             "4. Update your memory whenever necessary to record key engineering paths, decisions, and code status before context compression or pruning.",
         ]
         if self._has_tool("prune_context"):
