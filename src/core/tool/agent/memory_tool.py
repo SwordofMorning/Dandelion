@@ -6,7 +6,8 @@
  # Validates model-facing memory fields and forwards writes to the global or
  # active-session memory tier through MemoryManager.
  #
- # @note Only allowed to write ASCII characters due to key words match.
+ # @note Supports UTF-8 content when vector memory is active; falls back to
+ #       requiring English/ASCII when vector memory is disabled or unavailable.
  #
  # @note write memory: LLM -> MemoryTool
  # @note read memory: In sysprompt (user's msg append).
@@ -78,8 +79,9 @@ class MemoryTool(BaseTool):
      #
      # @param kwargs schema properties: name, description, tags, content, scope.
      #
-     # @note ASCII-only enforcement: non-ASCII values are rejected because
-     # internal keyword retrieval splits on ASCII whitespace.
+     # @note Enforces ASCII for 'name' and 'scope'; allows UTF-8 for
+     # 'description', 'tags', and 'content' when vector pre-embedding succeeds,
+     # otherwise rejects non-ASCII asking the LLM to re-submit in English/ASCII.
      #
      # @return (success_bool, result_string)
      #

@@ -78,7 +78,7 @@ class BasePromptBuilder:
     # End-def
 
     ##
-     # @brief Build the shared ASCII internal storage Language Policy section.
+     # @brief Build the shared Language Policy section for memory and internal state.
      #
      # @return Language policy section string.
      #
@@ -87,14 +87,12 @@ class BasePromptBuilder:
         return (
             "Language Policy:\n"
             "1. User-facing replies and final deliverables (documents, reports) MAY use the user's language (e.g., Chinese).\n"
-            "2. INTERNAL ARTIFACTS MUST BE ENGLISH/ASCII ONLY, including: tool inputs for 'remember', 'forget' and 'update_state' "
-            "(name, description, tags, content, scope, target, todos, completed), global memory files under llm/memory/, "
-            "session memory files under .log/sess_*/memory/, the per-tier MEMORY.md indexes, "
-            "task_state.json under .log/sess_*/task_state.json, artifact filenames, and any intermediate storage.\n"
-            "3. Rationale: internal keyword retrieval splits on ASCII whitespace; non-ASCII (Chinese) text breaks matching. "
-            "If the user speaks Chinese, translate internal state/memory content into English before storing.\n"
-            "4. Tools enforce this strictly: if 'remember' or 'update_state' returns an ASCII-only error, "
-            "translate the offending values to English and re-submit."
+            "2. For 'remember' and 'forget', 'name' and 'scope' MUST be English/ASCII identifiers. "
+            "'description', 'tags', and 'content' MAY be submitted in the user's natural language (UTF-8, e.g., Chinese) when vector memory is active.\n"
+            "3. For 'update_state' (target, todos, completed), task_state.json under .log/sess_*/task_state.json, and artifact filenames, "
+            "values MUST remain English/ASCII only.\n"
+            "4. Fallback enforcement: if 'remember' or 'update_state' returns an error indicating vector memory is unavailable or requiring English/ASCII, "
+            "translate the offending fields to English/ASCII and re-submit."
         )
     # End-def
 

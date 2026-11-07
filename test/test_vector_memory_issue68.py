@@ -11,6 +11,7 @@ from src.core.utils.embedding import (
     OpenAICompatibleEmbeddingProvider, create_embedding_provider, validate_and_normalize_vector,
 )
 from src.core.agent.memory import MemoryManager
+from src.core.agent.sysprompt import BasePromptBuilder
 from src.core.tool.agent.memory_tool import MemoryTool, ForgetMemoryTool, MemorySearchTool
 from src.core.subagent.registry import TOOLSET_REGISTRY, resolve_toolset
 from src.remote.execution.agent import MAIN_DIRECT_TOOLS
@@ -163,6 +164,11 @@ class TestVectorMemoryIssue68(unittest.TestCase):
             self.assertIn("memory_search", MAIN_DIRECT_TOOLS)
             resolved = resolve_toolset("code_analysis", {"memory_search": ms})
             self.assertIn("memory_search", resolved)
+
+            # Language policy in sysprompt aligns with UTF-8 primary + ASCII fallback
+            lang_sec = BasePromptBuilder._build_language_section()
+            self.assertIn("'name' and 'scope' MUST be English/ASCII", lang_sec)
+            self.assertIn("UTF-8", lang_sec)
         # End-with
     # End-def
 # End-class
