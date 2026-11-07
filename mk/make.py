@@ -603,7 +603,7 @@ def _postprocess(cfg, name, version):
 
     # ----- @par 2. Create required workspace directories -----
     print("[*] Creating workspace layout...")
-    workspace_dirs = [".env", "llm/memory", "llm/skill", ".log"]
+    workspace_dirs = [".env", "llm/memory", "llm/skill", "llm/sysprompt", ".log"]
     for d in workspace_dirs:
         d_path = os.path.join(target_dir, d.replace("/", os.sep))
         os.makedirs(d_path, exist_ok=True)
@@ -613,6 +613,33 @@ def _postprocess(cfg, name, version):
         # End-with
     # End-for
     print("  [+] Created directories: .env, llm, .log")
+
+    # Copy bundled subdirectories under llm/ (e.g. skill/, sysprompt/) into the
+    # artifact while keeping runtime llm/memory/ empty.
+    src_llm_dir = os.path.join(ROOT_DIR, "llm")
+    dst_llm_dir = os.path.join(target_dir, "llm")
+    if os.path.isdir(src_llm_dir):
+        for entry in sorted(os.listdir(src_llm_dir)):
+            if entry == "memory" or entry.startswith("."):
+                continue
+            # End-if
+            src_sub = os.path.join(src_llm_dir, entry)
+            dst_sub = os.path.join(dst_llm_dir, entry)
+            if os.path.isdir(src_sub):
+                shutil.copytree(src_sub, dst_sub, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns("__pycache__", ".*"))
+                keep = os.path.join(dst_sub, ".keep")
+                if os.path.exists(keep) and len(os.listdir(dst_sub)) > 1:
+                    os.remove(keep)
+                # End-if
+                print("  [+] Copied: llm/" + entry + "/")
+            elif os.path.isfile(src_sub):
+                os.makedirs(dst_llm_dir, exist_ok=True)
+                shutil.copy2(src_sub, os.path.join(dst_llm_dir, entry))
+                print("  [+] Copied: llm/" + entry)
+            # End-if
+        # End-for
+    # End-if
 
     # Pre-fill cli.cfg from the example template if present.
     env_dir = os.path.join(target_dir, ".env")
