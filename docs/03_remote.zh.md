@@ -17,8 +17,7 @@ src/remote/
 ├── channels/    # 基于 MD5 ACCESS_KEY 校验的 HTTP 接口与 Telegram 长轮询收发
 ├── tool/        # Remote 专属工具（agent/task_tool.py、communication/message_tool.py、drive/drive_tool.py）
 ├── sysprompt.py # RemotePromptBuilder 全天候助手系统提示词
-├── cli.py       # 守护进程生命周期管理（init/start/stop/restart/status/logs/fg）
-├── service.py   # remote.cfg 加载、服务装配与平滑停机
+├── service.py   # 守护进程生命周期管理（init/start/stop/restart/status/logs/fg）与服务装配运行（serve）
 └── __main__.py  # python -m src.remote 薄入口
 ```
 

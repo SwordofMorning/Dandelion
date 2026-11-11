@@ -34,6 +34,7 @@ class JobExecutor:
         self.registry = ModelRegistry(
             config.get("ALL_MODELS", []),
             config.get("SUB_LIST", []),
+            enabled=int(config.get("SUB_DEPTH", 1)) > 0,
         )
     # End-def
 
@@ -69,6 +70,7 @@ class JobExecutor:
             sdk_type=self.config.get("SDK_TYPE", "Message"),
             all_models=self.config.get("ALL_MODELS", []),
             sub_list=self.config.get("SUB_LIST", []),
+            sub_depth=int(self.config.get("SUB_DEPTH", 1)),
             thinking=str(self.config.get("THINKING", "disabled")).strip().lower(),
             effort=str(self.config.get("EFFORT", "medium")).strip().lower(),
             compat=str(self.config.get("COMPAT", "auto")).strip().lower(),

@@ -146,6 +146,7 @@ class MyAgent:
             sdk_type=self.config.get("SDK_TYPE", "Message"),
             all_models=self.config.get("ALL_MODELS", []),
             sub_list=self.config.get("SUB_LIST", []),
+            sub_depth=int(self.config.get("SUB_DEPTH", 1)),
             thinking=self.thinking,
             effort=self.effort,
             compat=self.compat,

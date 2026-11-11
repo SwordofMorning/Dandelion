@@ -34,7 +34,12 @@ except ImportError:
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "remote":
-        from src.remote.cli import main as remote_main
+        try:
+            from src.remote.service import main as remote_main
+        except ImportError:
+            print("[-] FATAL: Dandelion Remote is server-only and not bundled in standalone CLI builds.")
+            sys.exit(1)
+        # End-try
         sys.exit(remote_main(args[1:]))
     # End-if
 

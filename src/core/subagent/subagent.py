@@ -49,7 +49,7 @@ class SubAgent(ISubAgent):
     def __init__(
         self, safe_client, logger, config,
         pool, role_prompt, tools, model_spec,
-        depth=1, max_depth=1, subagent_id=None, runtime=None
+        depth=1, max_depth=1, subagent_id=None, runtime=None, workspace_dir=None
     ):
         super().__init__(safe_client, logger, dict(tools), config)
         self.runtime = runtime if runtime is not None else Runtime()
@@ -58,6 +58,11 @@ class SubAgent(ISubAgent):
         self.depth = depth
         self.max_depth = max_depth
         self.subagent_id = subagent_id or f"subagent-{id(self):x}"
+        self.workspace_dir = (
+            workspace_dir
+            or getattr(pool, "workspace_dir", None)
+            or next((t.workspace_dir for t in self.tools.values() if getattr(t, "workspace_dir", None)), os.getcwd())
+        )
         self.sub_results = []
         self.artifacts = []
 
@@ -82,6 +87,7 @@ class SubAgent(ISubAgent):
 
             self.tools["plan_tool"] = PlanTool(
                 registry=registry,
+                workspace_dir=self.workspace_dir,
                 parent_tools=self.logical_tool_names,
                 caller_label=self.subagent_id,
             )

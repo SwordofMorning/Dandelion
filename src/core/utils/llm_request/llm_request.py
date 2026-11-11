@@ -49,7 +49,7 @@ class SafeLLMClient:
      # @return None.
      #
     def __init__(self, api_key, base_url, model_id, sdk_type="Message",
-                 all_models=None, sub_list=None,
+                 all_models=None, sub_list=None, sub_depth=1,
                  thinking="disabled", effort="medium",
                  compat=FLAVOR_AUTO,
                  logger=None, runtime=None):
@@ -69,7 +69,12 @@ class SafeLLMClient:
         # Setup ModelRegistry and cached providers for explicit SubAgent selection
         self._provider_cache = {}
         self._cache_lock = threading.Lock()
-        self.registry = ModelRegistry(all_models, sub_list)
+        try:
+            sub_enabled = int(sub_depth) > 0
+        except (TypeError, ValueError):
+            sub_enabled = False
+        # End-try
+        self.registry = ModelRegistry(all_models, sub_list, enabled=sub_enabled)
     # End-def
 
     ##

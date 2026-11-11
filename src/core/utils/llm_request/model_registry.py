@@ -84,11 +84,14 @@ class ModelRegistry:
      #
      # @param all_models Enriched model dictionaries from load_api_config.
      # @param sub_list Ordered model aliases allowed as SubAgents.
+     # @param enabled False when SubAgents are disabled (SUB_DEPTH == 0).
      #
-    def __init__(self, all_models=None, sub_list=None):
+    def __init__(self, all_models=None, sub_list=None, enabled: bool = True):
         self._specs = {}
         self._ordered_aliases = []
-        self._load(all_models or [], sub_list or [])
+        if enabled:
+            self._load(all_models or [], sub_list or [])
+        # End-if
     # End-def
 
     ##

@@ -29,7 +29,7 @@ MODEL_LIST = [
         },
         "basic": {
             "name": "gemini",
-            "conditions": ["media", "simple"],
+            "description": "Fast multimodal model supporting image/PDF inspection, file operations, and general background tasks.",
             "max_token": 128000,
             "max_context_tokens": 819200
         },
@@ -52,7 +52,7 @@ MODEL_LIST = [
         },
         "basic": {
             "name": "opus",
-            "conditions": ["complex", "review"],
+            "description": "Strong reasoning model for complex architecture design, multi-file refactoring, debugging, and code review.",
             "max_token": 128000,
             "max_context_tokens": 819200
         },

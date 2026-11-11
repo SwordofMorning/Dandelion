@@ -15,8 +15,7 @@ src/remote/
 ├── channels/    # HTTP API (MD5 ACCESS_KEY verification) and allowlisted Telegram polling/delivery
 ├── tool/        # Remote tools (agent/task_tool.py, communication/message_tool.py, drive/drive_tool.py)
 ├── sysprompt.py # RemotePromptBuilder for the 24/7 server assistant
-├── cli.py       # Daemon lifecycle manager (init/start/stop/restart/status/logs/fg)
-├── service.py   # remote.cfg loader and service lifecycle management
+├── service.py   # Daemon lifecycle manager (init/start/stop/restart/status/logs/fg) and service runner (serve)
 └── __main__.py  # Thin module entrypoint for python -m src.remote
 ```
 

@@ -140,6 +140,7 @@ def build_worker_pool(config, client, session_manager, workspace_dir, runtime, m
         all_tools=worker_tools,
         max_depth=int(config.get("SUB_DEPTH", 1)),
         runtime=runtime,
+        workspace_dir=workspace_dir,
     )
 # End-def
 
@@ -170,6 +171,7 @@ def build_tools(agent):
         all_tools=worker_tools,
         max_depth=int(agent.config.get("SUB_DEPTH", 1)),
         runtime=agent.runtime,
+        workspace_dir=agent.workspace_dir,
     )
 
     agent.sub_concurrency = max(int(agent.config.get("SUB_CONCURRENCY", 4)), 1)
@@ -185,7 +187,11 @@ def build_tools(agent):
         and bool(agent.client.registry.get_all_specs())
     )
     if has_subagents:
-        plan_tool = PlanTool(agent.client.registry, caller_label="MainAgent")
+        plan_tool = PlanTool(
+            agent.client.registry,
+            workspace_dir=agent.workspace_dir,
+            caller_label="MainAgent",
+        )
         spawn_subagent = SpawnSubagentTool(agent.pool)
         tools[plan_tool.get_name()] = plan_tool
         tools[spawn_subagent.get_name()] = spawn_subagent

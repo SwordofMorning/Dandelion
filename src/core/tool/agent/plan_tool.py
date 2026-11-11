@@ -9,6 +9,7 @@
  # write-conflict safety without making a separate context-blind LLM request.
  #
 
+import heapq
 import json
 import os
 from collections import deque
@@ -18,22 +19,6 @@ from ...subagent.registry import TOOLSET_REGISTRY
 
 VALID_STRATEGIES = ("parallel", "sequential", "mixed")
 MAX_PLAN_SUBTASKS = 20
-
-
-##
- # @brief Normalize a workspace file path into a canonical comparison key.
- #
-def _norm_file_key(raw_path: str) -> str:
-    cleaned = str(raw_path or "").strip().replace("\\", "/")
-    if not cleaned:
-        return ""
-    # End-if
-    normed = os.path.normpath(cleaned).replace("\\", "/")
-    if normed.startswith("./"):
-        normed = normed[2:]
-    # End-if
-    return "" if normed == "." else normed
-# End-def
 
 
 ##
@@ -86,6 +71,37 @@ def _analyze_dag(ordered_ids, deps_map):
 
 
 ##
+ # @brief Build single-subtask topological waves preserving declaration order.
+ #
+def _sequential_waves(ordered_ids, deps_map):
+    index_of = {sid: idx for idx, sid in enumerate(ordered_ids)}
+    in_degree = {sid: len(deps_map[sid]) for sid in ordered_ids}
+    children = {sid: [] for sid in ordered_ids}
+    for sid in ordered_ids:
+        for dep in deps_map[sid]:
+            children[dep].append(sid)
+        # End-for
+    # End-for
+
+    ready = [index_of[sid] for sid in ordered_ids if in_degree[sid] == 0]
+    heapq.heapify(ready)
+    waves = []
+    while ready:
+        idx = heapq.heappop(ready)
+        u = ordered_ids[idx]
+        waves.append([u])
+        for v in children[u]:
+            in_degree[v] -= 1
+            if in_degree[v] == 0:
+                heapq.heappush(ready, index_of[v])
+            # End-if
+        # End-for
+    # End-while
+    return waves
+# End-def
+
+
+##
  # @brief Structured TaskPlan validation tool ("Let LLM Decide" + strict invariants).
  #
 class PlanTool(BaseTool):
@@ -93,14 +109,43 @@ class PlanTool(BaseTool):
      # @brief Constructor.
      #
      # @param registry ModelRegistry providing allowed SUB_LIST aliases.
+     # @param workspace_dir Workspace root directory used to canonicalize target_files.
      # @param parent_tools Optional set of logical tool names bounding nested SubAgents.
      # @param caller_label Diagnostic label for runtime progress output.
      #
-    def __init__(self, registry, parent_tools=None, caller_label="MainAgent"):
-        super().__init__()
+    def __init__(self, registry, workspace_dir=None, parent_tools=None, caller_label="MainAgent"):
+        super().__init__(workspace_dir=workspace_dir)
         self.registry = registry
         self.parent_tools = set(parent_tools) if parent_tools is not None else None
         self.caller_label = caller_label
+    # End-def
+
+    ##
+     # @brief Resolve a declared target file path to its canonical realpath key and display path.
+     #
+    def _resolve_target_file(self, raw_path: str):
+        cleaned = str(raw_path or "").strip()
+        if not cleaned:
+            return "", ""
+        # End-if
+        ws_real = os.path.realpath(self.workspace_dir) if self.workspace_dir else os.path.realpath(os.getcwd())
+        candidate = cleaned if os.path.isabs(cleaned) else os.path.join(ws_real, cleaned)
+        real_abs = os.path.realpath(candidate)
+        canon_key = os.path.normcase(real_abs)
+        ws_key = os.path.normcase(ws_real)
+        if canon_key == ws_key:
+            return "", ""
+        # End-if
+        try:
+            if os.path.commonpath([ws_key, canon_key]) == ws_key:
+                shown = os.path.relpath(real_abs, ws_real).replace("\\", "/")
+            else:
+                shown = real_abs.replace("\\", "/")
+            # End-if
+        except ValueError:
+            shown = real_abs.replace("\\", "/")
+        # End-try
+        return canon_key, shown
     # End-def
 
     ##
@@ -223,6 +268,7 @@ class PlanTool(BaseTool):
         id_set = set()
         deps_map = {}
         files_map = {}
+        display_by_canon = {}
         normalized_subtasks = []
 
         for idx, item in enumerate(raw_subtasks):
@@ -284,24 +330,27 @@ class PlanTool(BaseTool):
             if not isinstance(raw_files, list) or not all(isinstance(f, str) for f in raw_files):
                 return False, f"Error: subtask '{sid}' field 'target_files' must be a list of file paths."
             # End-if
-            norm_files = []
+            canon_files = []
+            shown_files = []
             for fp in raw_files:
-                nf = _norm_file_key(fp)
-                if nf and nf not in norm_files:
-                    norm_files.append(nf)
+                canon_key, shown = self._resolve_target_file(fp)
+                if canon_key and canon_key not in canon_files:
+                    canon_files.append(canon_key)
+                    shown_files.append(shown)
+                    display_by_canon.setdefault(canon_key, shown)
                 # End-if
             # End-for
 
             ordered_ids.append(sid)
             id_set.add(sid)
             deps_map[sid] = deps
-            files_map[sid] = set(norm_files)
+            files_map[sid] = set(canon_files)
             normalized_subtasks.append({
                 "id": sid,
                 "model": model,
                 "toolset": toolset,
                 "depends_on": deps,
-                "target_files": norm_files,
+                "target_files": shown_files,
             })
         # End-for
 
@@ -319,35 +368,42 @@ class PlanTool(BaseTool):
             # End-for
         # End-for
 
-        waves, ancestors, cyclic = _analyze_dag(ordered_ids, deps_map)
+        dag_waves, ancestors, cyclic = _analyze_dag(ordered_ids, deps_map)
         if cyclic:
             return False, f"Error: dependency cycle detected among subtasks: {cyclic}."
         # End-if
 
-        if strategy == "parallel" and len(waves) > 1:
-            return False, (
-                "Error: 'execution_strategy' is 'parallel' but 'depends_on' defines multi-wave "
-                "dependencies. Use 'mixed' or 'sequential', or remove dependencies."
-            )
-        # End-if
+        if strategy == "sequential":
+            waves = _sequential_waves(ordered_ids, deps_map)
+        else:
+            if strategy == "parallel" and len(dag_waves) > 1:
+                return False, (
+                    "Error: 'execution_strategy' is 'parallel' but 'depends_on' defines multi-wave "
+                    "dependencies. Use 'mixed' or 'sequential', or remove dependencies."
+                )
+            # End-if
+            waves = dag_waves
 
-        # Check parallel shared-workspace file write conflicts across unordered subtask pairs.
-        for i in range(len(ordered_ids)):
-            for j in range(i + 1, len(ordered_ids)):
-                a_id, b_id = ordered_ids[i], ordered_ids[j]
-                ordered_pair = (a_id in ancestors[b_id]) or (b_id in ancestors[a_id])
-                if not ordered_pair:
-                    overlap = sorted(files_map[a_id] & files_map[b_id])
-                    if overlap:
-                        return False, (
-                            f"Error: subtasks '{a_id}' and '{b_id}' have no dependency ordering "
-                            f"(may run in parallel) but both target file(s): {overlap}. "
-                            f"Add 'depends_on' to serialize them or assign disjoint 'target_files'."
-                        )
+            # Check parallel shared-workspace file write conflicts across unordered subtask pairs.
+            for i in range(len(ordered_ids)):
+                for j in range(i + 1, len(ordered_ids)):
+                    a_id, b_id = ordered_ids[i], ordered_ids[j]
+                    ordered_pair = (a_id in ancestors[b_id]) or (b_id in ancestors[a_id])
+                    if not ordered_pair:
+                        overlap_keys = sorted(files_map[a_id] & files_map[b_id])
+                        if overlap_keys:
+                            overlap_shown = [display_by_canon.get(k, k) for k in overlap_keys]
+                            return False, (
+                                f"Error: subtasks '{a_id}' and '{b_id}' have no dependency ordering "
+                                f"(may run in parallel) but both target file(s): {overlap_shown}. "
+                                f"Add 'depends_on' to serialize them, use 'sequential' strategy, "
+                                f"or assign disjoint 'target_files'."
+                            )
+                        # End-if
                     # End-if
-                # End-if
+                # End-for
             # End-for
-        # End-for
+        # End-if
 
         self._emit(
             f"\n[+] [PlanTool:{self.caller_label}] Validated TaskPlan: "

@@ -8,6 +8,7 @@
  # construction or execution failures into structured results for the parent LLM.
  #
 
+import os
 import time
 import uuid
 from src.core.runtime import Runtime
@@ -23,12 +24,20 @@ class SubAgentPool:
     ##
      # @brief Constructor.
      #
-    def __init__(self, safe_client, logger, config, all_tools, max_depth=1, runtime=None):
+    def __init__(self, safe_client, logger, config, all_tools, max_depth=1, runtime=None, workspace_dir=None):
         self.safe_client = safe_client
         self.logger = logger
         self.config = config
         self.all_tools = all_tools
         self.runtime = runtime if runtime is not None else Runtime()
+        if workspace_dir:
+            self.workspace_dir = workspace_dir
+        else:
+            self.workspace_dir = next(
+                (t.workspace_dir for t in (all_tools or {}).values() if getattr(t, "workspace_dir", None)),
+                os.getcwd(),
+            )
+        # End-if
         try:
             self.max_depth = max(int(max_depth), 0)
         except (TypeError, ValueError):
@@ -142,6 +151,7 @@ class SubAgentPool:
                 max_depth=self.max_depth,
                 subagent_id=subagent_id,
                 runtime=self.runtime,
+                workspace_dir=self.workspace_dir,
             )
             return subagent.run(task_description)
         except Exception as e:
