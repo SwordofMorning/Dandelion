@@ -2,42 +2,54 @@
  # @file src/core/tool/agent/spawn_tool.py
  # @date 2026/08/13
  #
- # @brief Synchronous SubAgent delegation tools.
- # Defines root and recursive delegation calls that select worker toolsets,
- # enforce nesting limits and return structured results to the parent.
- #
- # @note Spawn call chain (1-based depth, max_depth = [Main] SUB_DEPTH):
- #   Root agent (src/core/agent/agent.py, registered only when SUB_DEPTH > 0)
- #     -> SpawnSubagentTool(pool)               # creates depth=1, no parent
- #       -> pool.create_and_run(role_prompt, toolset_name, task_description, depth=1)
- #         -> depth gate: 1 <= depth <= max_depth, else a "failed" result
- #         -> resolve_toolset(toolset_name, all_tools, parent_tools=None)
- #         -> SubAgent.run(task_description)    # subagent tool loop
- #           -> depth < max_depth: inject RestrictedSpawnTool
- #              (src/core/subagent/subagent.py)      # recursive delegation
- #             -> RestrictedSpawnTool.execute()
- #               -> pool.create_and_run(..., depth+1, parent_tools=parent toolset)
- #               -> parent.sub_results.append(result)
- #           -> SubAgentResult.to_context_string()  # tool result back to LLM
- #
- # @note Several spawn_subagent calls in ONE root response run in parallel
- #       (src/core/subagent/dispatch.py). The returned success flag is False when
- #       the child failed; the text always carries the full result.
+ # @brief Synchronous SubAgent delegation tools with LLM-driven model selection.
+ # Exposes configured SubAgent names and descriptions directly in the tool
+ # definition so the calling Agent LLM chooses the target model explicitly.
  #
 
 from ..base_tool import BaseTool
 from ...subagent.registry import TOOLSET_REGISTRY
 
+
 ##
- # @brief Fork Subagent Class.
+ # @brief Build the 'model' property schema from a ModelRegistry.
+ #
+def _build_model_property(registry):
+    aliases = registry.aliases() if registry else []
+    prop = {
+        "type": "string",
+        "description": (
+            "Name of the SubAgent model to execute this sub-task. "
+            "Select according to the model descriptions in this tool."
+        ),
+    }
+    if aliases:
+        prop["enum"] = aliases
+    # End-if
+    return prop
+# End-def
+
+
+##
+ # @brief Append configured SubAgent catalog lines to a base tool description.
+ #
+def _append_model_catalog(base_desc: str, registry) -> str:
+    catalog = registry.format_catalog() if registry else ""
+    if not catalog:
+        return base_desc
+    # End-if
+    return f"{base_desc}\nAvailable SubAgent models:\n{catalog}"
+# End-def
+
+
+##
+ # @brief Root SubAgent delegation tool (installed on Main Agent when SUB_DEPTH > 0).
  #
 class SpawnSubagentTool(BaseTool):
     ##
      # @brief Constructor.
      #
-     # @param pool Subagent pool
-     #
-     # @see src/core/subagent/pool.py
+     # @param pool SubAgentPool instance.
      #
     def __init__(self, pool):
         super().__init__()
@@ -45,104 +57,99 @@ class SpawnSubagentTool(BaseTool):
         self.runtime = getattr(pool, "runtime", None)
     # End-def
 
+    ##
+     # @brief Return tool's name.
+     #
     def get_name(self):
         return "spawn_subagent"
     # End-def
 
     ##
-     # @brief Return tool's description.
+     # @brief Return tool's description including configured SubAgent descriptions.
      #
     def get_description(self):
-        return (
-            "Spawn a dedicated SubAgent to handle a specific sub-task. "
-            "The SubAgent runs in an isolated context and returns a structured summary. "
-            "Use this for complex, self-contained sub-tasks to keep the main context clean. "
+        base = (
+            "Spawn a dedicated SubAgent using the selected 'model' to handle a specific "
+            "sub-task in an isolated context and return a structured summary. "
             "Several calls in the same response run in parallel; give parallel SubAgents "
             "independent tasks that do not modify the same files."
         )
+        registry = getattr(self.pool.safe_client, "registry", None)
+        return _append_model_catalog(base, registry)
     # End-def
 
     ##
-     # @brief Return tool's schema.
+     # @brief Return tool's JSON input schema.
      #
     def get_schema(self):
+        registry = getattr(self.pool.safe_client, "registry", None)
         return {
             "type": "object",
             "properties": {
+                "model": _build_model_property(registry),
                 "task_description": {
                     "type": "string",
-                    "description": "Detailed natural-language description of the sub-task."
+                    "description": "Detailed natural-language description of the sub-task.",
                 },
                 "toolset": {
                     "type": "string",
                     "enum": list(TOOLSET_REGISTRY.keys()),
-                    "description": "Name of the pre-defined toolset for this subagent."
+                    "description": "Name of the pre-defined toolset for this subagent.",
                 },
                 "role_prompt": {
                     "type": "string",
-                    "description": "Custom system prompt defining the subagent's role and behavior."
+                    "description": "Custom system prompt defining the subagent's role and behavior.",
                 },
                 "expected_output_format": {
                     "type": "string",
-                    "description": "Optional hint about the expected output format."
-                }
+                    "description": "Optional hint about the expected output format.",
+                },
             },
-            "required": ["task_description", "toolset", "role_prompt"]
+            "required": ["model", "task_description", "toolset", "role_prompt"],
         }
     # End-def
 
     ##
-     # @brief Execute spawn.
-     #
-     # @param kwargs schema properties: task_description, toolset,
-     # role_prompt, expected_output_format.
-     #
-     # @return (success_bool, result_string)
+     # @brief Execute SubAgent delegation at depth=1.
      #
     def execute(self, **kwargs):
+        model = str(kwargs.get("model") or "").strip()
         task_desc = kwargs.get("task_description", "")
         toolset = kwargs.get("toolset", "minimal")
         role_prompt = kwargs.get("role_prompt", "")
         expected_format = kwargs.get("expected_output_format", "")
-        
-        if not task_desc or not role_prompt:
-            return False, "Error: task_description and role_prompt are required."
-            
+
+        if not model or not task_desc or not role_prompt:
+            return False, "Error: model, task_description, and role_prompt are required."
+        # End-if
+
         if expected_format:
             task_desc += f"\n\nExpected Output Format:\n{expected_format}"
-            
-        self._emit(f"\n[+] [SpawnSubagentTool] Spawning SubAgent for: {task_desc[:60]}...")
-        
+        # End-if
+
+        self._emit(
+            f"\n[+] [SpawnSubagentTool] Spawning '{model}' for: {task_desc[:60]}..."
+        )
+
         result = self.pool.create_and_run(
             role_prompt=role_prompt,
             toolset_name=toolset,
             task_description=task_desc,
-            depth=1
+            model=model,
+            depth=1,
         )
-        
+
         return result.status != "failed", result.to_context_string()
     # End-def
+# End-class
+
 
 ##
- # @brief Restricted Fork Class (for recursive subagents).
- #
- # @note Two spawn classes exist by design:
- # - SpawnSubagentTool: installed in the ROOT agent (src/core/agent/agent.py),
- #   spawns depth-1 subagents without parent restrictions.
- # - RestrictedSpawnTool: installed in SUBAGENTS only when
- #   depth < max_depth (src/core/subagent/subagent.py), so recursive delegation
- #   is depth-limited and parent-aware.
- #
- # @see src/core/subagent/subagent.py (installer), src/core/subagent/pool.py
+ # @brief Restricted SubAgent delegation tool for nested SubAgents (depth < max_depth).
  #
 class RestrictedSpawnTool(BaseTool):
     ##
      # @brief Constructor.
-     #
-     # @param pool Subagent pool.
-     # @param parent_subagent Parent subagent instance (owner of this tool).
-     # @param current_depth Current recursion depth of the parent.
-     # @param max_depth Maximum allowed recursion depth.
      #
     def __init__(self, pool, parent_subagent, current_depth, max_depth):
         super().__init__()
@@ -161,56 +168,52 @@ class RestrictedSpawnTool(BaseTool):
     # End-def
 
     ##
-     # @brief Return tool's description.
+     # @brief Return tool's description including depth and SubAgent descriptions.
      #
     def get_description(self):
-        return (
-            f"Spawn a SubSubAgent to handle a specialized sub-task. "
-            f"Current depth: {self.current_depth}/{self.max_depth}. "
-            f"You may only delegate tasks that are narrower in scope than your own."
+        base = (
+            f"Spawn a nested SubAgent using the selected 'model' to handle a narrower "
+            f"sub-task (current depth: {self.current_depth}/{self.max_depth}). "
+            f"Consecutive calls in one response run in parallel when not already inside a "
+            f"parallel worker; assign disjoint files to parallel SubAgents."
         )
+        registry = getattr(self.pool.safe_client, "registry", None)
+        return _append_model_catalog(base, registry)
     # End-def
 
     ##
-     # @brief Return tool's schema.
+     # @brief Return tool's JSON input schema.
      #
     def get_schema(self):
+        registry = getattr(self.pool.safe_client, "registry", None)
         return {
             "type": "object",
             "properties": {
+                "model": _build_model_property(registry),
                 "task_description": {
                     "type": "string",
-                    "description": "Detailed natural-language description of the sub-task."
+                    "description": "Detailed natural-language description of the sub-task.",
                 },
                 "toolset": {
                     "type": "string",
                     "enum": list(TOOLSET_REGISTRY.keys()),
-                    "description": "Name of the pre-defined toolset for this subagent."
+                    "description": "Name of the pre-defined toolset for this nested subagent.",
                 },
                 "role_prompt": {
                     "type": "string",
-                    "description": "Custom system prompt defining the subagent's role and behavior."
+                    "description": "Custom system prompt defining the nested subagent's role.",
                 },
                 "expected_output_format": {
                     "type": "string",
-                    "description": "Optional hint about the expected output format."
-                }
+                    "description": "Optional hint about the expected output format.",
+                },
             },
-            "required": ["task_description", "toolset", "role_prompt"]
+            "required": ["model", "task_description", "toolset", "role_prompt"],
         }
     # End-def
 
     ##
-     # @brief Execute restricted spawn.
-     #
-     # @param kwargs schema properties: task_description, toolset,
-     # role_prompt, expected_output_format.
-     #
-     # @note Enforces the recursion depth limit (current_depth >= max_depth
-     # is rejected) and passes the parent's toolset as parent_tools so the
-     # child can only use a subset of the parent's tools.
-     #
-     # @return (success_bool, result_string)
+     # @brief Execute nested SubAgent delegation at depth = current_depth + 1.
      #
     def execute(self, **kwargs):
         if self.current_depth >= self.max_depth:
@@ -218,31 +221,42 @@ class RestrictedSpawnTool(BaseTool):
                 f"Error: Maximum recursion depth ({self.max_depth}) reached. "
                 f"You must complete this task yourself without further delegation."
             )
+        # End-if
 
+        model = str(kwargs.get("model") or "").strip()
         task_desc = kwargs.get("task_description", "")
         toolset = kwargs.get("toolset", "minimal")
         role_prompt = kwargs.get("role_prompt", "")
         expected_format = kwargs.get("expected_output_format", "")
-        
-        if not task_desc or not role_prompt:
-            return False, "Error: task_description and role_prompt are required."
-            
+
+        if not model or not task_desc or not role_prompt:
+            return False, "Error: model, task_description, and role_prompt are required."
+        # End-if
+
         if expected_format:
             task_desc += f"\n\nExpected Output Format:\n{expected_format}"
-            
-        parent_tools = set(self.parent.tools.keys())
-        
-        self._emit(f"\n[+] [RestrictedSpawnTool] Spawning SubSubAgent (depth {self.current_depth+1}) for: {task_desc[:60]}...")
-        
+        # End-if
+
+        parent_tools = set(getattr(self.parent, "logical_tool_names", self.parent.tools.keys()))
+
+        self._emit(
+            f"\n[+] [RestrictedSpawnTool] Spawning '{model}' (depth {self.current_depth + 1}) "
+            f"for: {task_desc[:60]}..."
+        )
+
         result = self.pool.create_and_run(
             role_prompt=role_prompt,
             toolset_name=toolset,
             task_description=task_desc,
+            model=model,
             depth=self.current_depth + 1,
-            parent_tools=parent_tools
+            parent_tools=parent_tools,
         )
-        
+
         if hasattr(self.parent, "sub_results"):
             self.parent.sub_results.append(result)
-            
+        # End-if
+
         return result.status != "failed", result.to_context_string()
+    # End-def
+# End-class

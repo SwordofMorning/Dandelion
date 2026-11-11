@@ -2,30 +2,23 @@
  # @file src/core/utils/llm_request/llm_request.py
  # @date 2026/08/05
  #
- # @brief LLM request normalization and routed provider calls.
+ # @brief LLM request normalization and explicit SubAgent model dispatch.
  # Wraps provider requests with shared logging and runtime output callbacks,
- # and routes SubAgent tasks through cached providers with retry and fallback.
+ # and dispatches SubAgent requests to the explicitly chosen model without
+ # hidden category guessing or cross-model fallback ("Let LLM Decide").
  #
- # @note Two LLM Request:
- # - Main Agent
- #      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
- # - Sub Agent
- #      PlanTool.execute()  -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
- #      SubAgent.run()      -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
- #
- # For main: Message normalization (_normalize_messages) 
- # and memory/task state injection both occur in the main agent path.
- #
- # For sub: Dynamically selects models based on task_description/toolset/depth,
- # with retries and fallbacks; no memory/task-state injection (main-agent path only).
- #
- # BTW, PlanTool is a bypass LLM call which does not go through the Main Agent.
+ # @note Request paths:
+ # - Main Agent:
+ #      MyAgent.step() -> SafeLLMClient.safe_stream_request() -> default provider
+ # - SubAgent:
+ #      SubAgent.run() -> SafeLLMClient.subagent_request(model_alias, payload) -> cached provider
  #
 
 import threading
 from src.core.runtime import Runtime
 from ..llm_provider import AnthropicProvider, OpenAIProvider
 from ..llm_provider.effort import FLAVOR_AUTO
+from .model_registry import ModelRegistry
 
 ##
  # @brief LLM request wrapper.
@@ -73,18 +66,10 @@ class SafeLLMClient:
             self.sdk_type, api_key, base_url, model_id, thinking, effort, compat
         )
 
-        # Setup Router Components for SubAgents
+        # Setup ModelRegistry and cached providers for explicit SubAgent selection
         self._provider_cache = {}
         self._cache_lock = threading.Lock()
-        self._registry = None
-        self._policy = None
-
-        if all_models and sub_list:
-            from ..routing import ModelRegistry, RoutingPolicy
-
-            self._registry = ModelRegistry(all_models, sub_list)
-            self._policy = RoutingPolicy(self._registry)
-        # End-if
+        self.registry = ModelRegistry(all_models, sub_list)
     # End-def
 
     ##
@@ -203,20 +188,17 @@ class SafeLLMClient:
 
     ##
      # ========================================
-     # @section III. Sub-agent routing
+     # @section III. Explicit SubAgent model dispatch
      # ========================================
      #
 
     ##
-     # @brief Get or create a cached provider for the given sub-agent alias.
-     #
-     # @note Reads thinking & effort from RegistryModelSpec so each sub-agent
-     # model receives its own thinking configuration.
+     # @brief Get or create a cached provider for the given SubAgent alias.
      #
     def _get_cached_provider(self, alias):
         with self._cache_lock:
             if alias not in self._provider_cache:
-                spec = self._registry.get_spec(alias)
+                spec = self.registry.get_spec(alias)
                 self._provider_cache[alias] = self._create_provider(
                     spec.provider, spec.api_key, spec.base_url, spec.model_id,
                     thinking=spec.thinking,
@@ -227,97 +209,59 @@ class SafeLLMClient:
     # End-def
 
     ##
-     # @brief Route a request through the sub-agent model pool.
+     # @brief Dispatch a request to the explicitly selected SubAgent model.
      #
-     # Selects a model from SUB_LIST via RoutingPolicy (condition match + rate
-     # limit), retries the selected model, then walks the fallback chain
-     # (get_fallback_chain) when it keeps failing. Used by PlanTool and
-     # SubAgent.run for all non-main-agent LLM calls; falls back to the main
-     # provider when no sub-agent pool is configured.
+     # Normalizes message alternation, enforces the SubAgent model's own
+     # max_tokens limit, and returns any provider error directly to the parent
+     # agent without silent cross-model fallback so the parent LLM decides next steps.
      #
-     # @param payload             Request payload (tools/messages/max_tokens/system).
-     # @param task_description    Sub-agent task text, feeds condition inference.
-     # @param toolset_name        Sub-agent toolset ("minimal"/"planning"/...).
-     # @param depth               Sub-agent recursion depth (>=2 forces "complex").
-     # @param stream              True -> safe_stream_request, False -> safe_request.
-     # @param echo                Print the stream (False for parallel SubAgents).
-     # @param route_info          Optional dict; receives "alias" of the model that answered.
+     # @param model_alias Selected SubAgent alias from SUB_LIST.
+     # @param payload Request payload (tools/messages/max_tokens/system).
+     # @param stream True -> safe_stream_request, False -> safe_request.
+     # @param echo Print the stream (False for parallel SubAgents).
+     # @param log_tag Optional audit tag written to api.log.
      #
      # @return (response, None) on success; (None, error_string) on failure.
      #
-     # @see PlanTool.execute()
-     # @see SubAgent.run()
-     #
-    def route_request(self, payload, task_description="", toolset_name="minimal",
-                      depth=0, stream=True, echo=None, route_info=None):
+    def subagent_request(self, model_alias, payload, stream=True, echo=None, log_tag=None):
         echo = self.runtime.echo if echo is None else echo
-        # 0. Fallback to main agent model if SUB_LIST is empty.
-        if not self._policy or not self._policy.specs:
-            return self.safe_stream_request(payload, echo=echo) if stream else self.safe_request(payload)
+        spec = self.registry.get_spec(model_alias)
+        if spec is None:
+            return None, (
+                f"Unknown SubAgent model '{model_alias}'. "
+                f"Available models: {self.registry.aliases()}"
+            )
+        # End-if
 
-        # 1. Get specified subagent model via conditions.
-        try:
-            alias = self._policy.select_model(task_description, toolset_name, depth)
-        except RuntimeError as e:
-            return None, str(e)
+        provider = self._get_cached_provider(spec.alias)
+        req_payload = self._with_normalized_messages(payload)
+        req_payload["model"] = spec.model_id
 
-        # 2. Get subagent model's RegistryModelSpec.
-        spec = self._registry.get_spec(alias)
-        inferred = self._policy.infer_conditions(task_description, toolset_name, depth)
+        raw_max = req_payload.get("max_tokens")
+        if raw_max is None:
+            req_payload["max_tokens"] = int(spec.max_tokens)
+        else:
+            try:
+                req_payload["max_tokens"] = min(max(int(raw_max), 1), int(spec.max_tokens))
+            except (TypeError, ValueError):
+                req_payload["max_tokens"] = int(spec.max_tokens)
+            # End-try
+        # End-if
 
-        self.runtime.emit(f"\n[Router] Task -> '{alias}' | Conditions: {sorted(list(inferred))}"
-              f" | thinking={spec.thinking} effort={spec.effort}")
+        tag = log_tag or f"SUBAGENT MODEL -> '{spec.alias}'"
+        if stream:
+            resp, err = provider.safe_stream_request(
+                req_payload, logger=self.logger, log_tag=tag, echo=echo
+            )
+        else:
+            resp, err = provider.safe_request(
+                req_payload, logger=self.logger, log_tag=tag
+            )
+        # End-if
 
-        max_retries = 2
-        current_alias = alias
-
-        # 3. Retry the selected model up to `max_retries + 1` times.
-        for attempt in range(max_retries + 1):
-            provider = self._get_cached_provider(current_alias)
-
-            # Use a copy to prevent payload mutation during retries
-            req_payload = payload.copy()
-            req_payload["model"] = spec.model_id
-
-            log_tag = f"SUBAGENT ROUTE -> '{current_alias}' (attempt {attempt+1})"
-            resp, err = provider.safe_stream_request(req_payload, logger=self.logger, log_tag=log_tag, echo=echo) if stream else provider.safe_request(req_payload, logger=self.logger, log_tag=log_tag)
-
-            if err is None:
-                if route_info is not None:
-                    route_info["alias"] = current_alias
-                return resp, None
-
-            self.runtime.emit(f"[Router] Model '{current_alias}' attempt {attempt+1} failed: {err}")
-
-            # 4. All retries failed, walk the fallback chain.
-            if attempt == max_retries:
-                # Iterate all models; candidates come from `get_fallback_chain`.
-                for fallback_alias in self._policy.get_fallback_chain(current_alias):
-                    # Try to copy payload and request.
-                    self.runtime.emit(f"[Router] Falling back to '{fallback_alias}'...")
-                    fb_provider = self._get_cached_provider(fallback_alias)
-                    fb_spec = self._registry.get_spec(fallback_alias)
-
-                    fb_payload = payload.copy()
-                    fb_payload["model"] = fb_spec.model_id
-
-                    fb_tag = f"SUBAGENT FALLBACK -> '{fallback_alias}'"
-                    resp, err = fb_provider.safe_stream_request(fb_payload, logger=self.logger, log_tag=fb_tag, echo=echo) if stream else fb_provider.safe_request(fb_payload, logger=self.logger, log_tag=fb_tag)
-
-                    # Request Success, return.
-                    if err is None:
-                        if route_info is not None:
-                            route_info["alias"] = fallback_alias
-                        return resp, None
-
-                    self.runtime.emit(f"[Router] Fallback '{fallback_alias}' also failed: {err}")
-                # End-for
-
-                # All fallback fail, throw error.
-                return None, f"All SubAgent models exhausted. Last error: {err}"
-            # End-if
-        # End-for
-
-        return None, "Unexpected fallback exit"
+        if err is not None:
+            return None, f"SubAgent model '{spec.alias}' ({spec.model_id}) failed: {err}"
+        # End-if
+        return resp, None
     # End-def
 # End-class

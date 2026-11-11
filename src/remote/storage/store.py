@@ -64,7 +64,8 @@ class Store:
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-                    workspace TEXT NOT NULL, task_description TEXT NOT NULL,
+                    workspace TEXT NOT NULL, model TEXT NOT NULL,
+                    task_description TEXT NOT NULL,
                     role_prompt TEXT NOT NULL, toolset TEXT NOT NULL,
                     context TEXT NOT NULL, status TEXT NOT NULL,
                     result TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL
@@ -81,7 +82,16 @@ class Store:
                     active INTEGER NOT NULL DEFAULT 1
                 );
             """)
+            job_cols = {
+                row["name"] for row in self.conn.execute("PRAGMA table_info(jobs)").fetchall()
+            }
         # End-with
+        if "model" not in job_cols:
+            self.conn.close()
+            raise RuntimeError(
+                f"Outdated SQLite schema in '{path}': table 'jobs' is missing required column 'model'."
+            )
+        # End-if
     # End-def
 
     ##
@@ -325,24 +335,16 @@ class Store:
     # End-def
 
     ##
-     # @brief Save a queued job with its fixed submission context.
+     # @brief Save a queued job with its selected SubAgent model and submission context.
      #
-     # @param session_id Conversation identifier used to scope persisted records.
-     # @param workspace Resolved workspace directory assigned to the job.
-     # @param task_description Nonempty natural-language task description.
-     # @param role_prompt System role for the delegated worker.
-     # @param toolset Registered worker toolset name.
-     # @param context Immutable submission context snapshot.
-     #
-     # @return Persisted job dictionary.
-     #
-    def create_job(self, session_id, workspace, task_description, role_prompt, toolset, context):
+    def create_job(self, session_id, workspace, model, task_description, role_prompt, toolset, context):
         job_id = "job_" + uuid.uuid4().hex
         now = time.time()
         with self.lock, self.conn:
             self.conn.execute(
-                "INSERT INTO jobs VALUES(?,?,?,?,?,?,?,'queued',NULL,?,?)",
-                (job_id, str(session_id), workspace, task_description, role_prompt, toolset, context, now, now),
+                "INSERT INTO jobs(id,session_id,workspace,model,task_description,role_prompt,toolset,context,status,result,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,'queued',NULL,?,?)",
+                (job_id, str(session_id), workspace, str(model), task_description, role_prompt, toolset, context, now, now),
             )
         # End-with
         return self.get_job(job_id)
@@ -410,6 +412,7 @@ class Store:
         )
         self._event("job_done", row["session_id"], {
             "job_id": row["id"],
+            "model": row["model"],
             "status": status,
             "task_description": row["task_description"],
             "result": result,

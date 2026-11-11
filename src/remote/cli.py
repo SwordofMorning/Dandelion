@@ -26,7 +26,7 @@ STOP_POLL_SEC = 0.5
 _FALLBACK_CFG_TEMPLATE = """[Main]
 MAIN_AGENT = gemini
 SUB_LIST = ["gemini"]
-SUB_DEPTH = 1
+SUB_DEPTH = 2
 SUB_CONCURRENCY = 4
 TAVILY_API_KEY =
 
@@ -42,7 +42,7 @@ MODEL_LIST = [
         },
         "basic": {
             "name": "gemini",
-            "conditions": ["media", "simple"],
+            "description": "Fast multimodal model supporting image/PDF inspection, file operations, and general background tasks.",
             "max_token": 128000,
             "max_context_tokens": 819200
         },

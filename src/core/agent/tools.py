@@ -4,7 +4,8 @@
  #
  # @brief Agent tool construction and delegation catalog assembly.
  # Creates filesystem, shell, memory, context-pruning, skill and media tools
- # for one agent or isolated worker pool.
+ # for one agent or isolated worker pool, decoupling Main Agent media support
+ # from per-SubAgent media capabilities.
  #
 
 import os
@@ -23,16 +24,13 @@ from src.core.tool import (
 
 
 ##
- # @brief Build the worker tool catalog for a SubAgentPool without a full MyAgent.
+ # @brief Build worker and main-agent base tool catalogs.
  #
- # @param workspace_dir Workspace root directory.
- # @param config Loaded model and routing configuration.
- # @param skill_manager SkillManager instance.
- # @param session_manager SessionManager instance for media/session paths.
- # @param runtime Runtime callbacks bound to each tool.
- # @param host Optional media host object.
+ # Worker catalog always includes ReadPdfTool and ReadImageTool templates so
+ # SubAgent._rehost_media_tools() can enable or prune them per selected SubAgent
+ # model_spec, even when the Main Agent itself is text-only.
  #
- # @return Dictionary of worker-eligible tool instances and list of media tools.
+ # @return (worker_tools, main_base_tools) tuple.
  #
 def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager, runtime, host=None, memory_manager=None):
     bash = BashTool(workspace_dir=workspace_dir)
@@ -49,7 +47,7 @@ def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager,
     time_tool = TimeTool(workspace_dir=workspace_dir, config=config)
     ssh_tool = SSHTool(workspace_dir=workspace_dir)
 
-    all_tools = {
+    common_tools = {
         bash.get_name(): bash,
         skill_loader.get_name(): skill_loader,
         md_editor.get_name(): md_editor,
@@ -66,65 +64,67 @@ def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager,
     }
     if memory_manager is not None:
         ms_tool = MemorySearchTool(memory_manager)
-        all_tools[ms_tool.get_name()] = ms_tool
+        common_tools[ms_tool.get_name()] = ms_tool
     # End-if
 
+    session_dir_fn = lambda: session_manager.current_session_dir
     media_exts = config.get("MEDIA_EXTS", []) or []
     media_limits = config.get("MEDIA_LIMITS", {}) or {}
-    media_tools = []
+
+    worker_tools = dict(common_tools)
+    main_tools = dict(common_tools)
+
+    worker_pdf = ReadPdfTool(
+        workspace_dir=workspace_dir,
+        host=host,
+        session_dir_fn=session_dir_fn,
+        media_limits=media_limits,
+        file_exts=media_exts or None,
+    )
+    worker_image = ReadImageTool(
+        workspace_dir=workspace_dir,
+        host=host,
+        session_dir_fn=session_dir_fn,
+        media_limits=media_limits,
+        file_exts=media_exts or None,
+    )
+    worker_tools[worker_pdf.get_name()] = worker_pdf
+    worker_tools[worker_image.get_name()] = worker_image
 
     if ".pdf" in media_exts:
-        read_pdf_tool = ReadPdfTool(
-            workspace_dir=workspace_dir,
-            host=host,
-            session_dir_fn=lambda: session_manager.current_session_dir,
-            media_limits=media_limits,
-            file_exts=media_exts,
-        )
-        media_tools.append(read_pdf_tool)
-        all_tools[read_pdf_tool.get_name()] = read_pdf_tool
+        main_tools[worker_pdf.get_name()] = worker_pdf
     # End-if
-
     if any(ext != ".pdf" for ext in media_exts):
-        read_image_tool = ReadImageTool(
-            workspace_dir=workspace_dir,
-            host=host,
-            session_dir_fn=lambda: session_manager.current_session_dir,
-            media_limits=media_limits,
-            file_exts=media_exts,
-        )
-        media_tools.append(read_image_tool)
-        all_tools[read_image_tool.get_name()] = read_image_tool
+        main_tools[worker_image.get_name()] = worker_image
     # End-if
 
-    for tool in all_tools.values():
+    for tool in worker_tools.values():
         tool.runtime = runtime
     # End-for
-    return all_tools, media_tools
+    return worker_tools, main_tools
 # End-def
 
 
 ##
  # @brief Build an isolated SubAgentPool for a background job without constructing MyAgent.
  #
- # @param config Loaded model configuration.
- # @param client SafeLLMClient instance.
- # @param session_manager Isolated SessionManager for the worker job.
- # @param workspace_dir Target workspace directory.
- # @param runtime Worker-owned Runtime callbacks.
- #
- # @return Configured SubAgentPool instance.
- #
 def build_worker_pool(config, client, session_manager, workspace_dir, runtime, memory_manager=None):
     from src.core.agent.memory import MemoryManager
     if memory_manager is None:
-        memory_manager = MemoryManager(os.path.join(workspace_dir, "llm", "memory"), session_manager=session_manager, safe_client=client, logger=session_manager, runtime=runtime, memory_config=config.get("MEMORY"))
+        memory_manager = MemoryManager(
+            os.path.join(workspace_dir, "llm", "memory"),
+            session_manager=session_manager,
+            safe_client=client,
+            logger=session_manager,
+            runtime=runtime,
+            memory_config=config.get("MEMORY"),
+        )
     # End-if
     skill_mgr = SkillManager(
         skill_dir=os.path.join(workspace_dir, "llm", "skill"),
         runtime=runtime,
     )
-    all_tools, _ = _build_worker_catalog(
+    worker_tools, _ = _build_worker_catalog(
         workspace_dir=workspace_dir,
         config=config,
         skill_manager=skill_mgr,
@@ -137,7 +137,7 @@ def build_worker_pool(config, client, session_manager, workspace_dir, runtime, m
         safe_client=client,
         logger=session_manager,
         config=config,
-        all_tools=all_tools,
+        all_tools=worker_tools,
         max_depth=int(config.get("SUB_DEPTH", 1)),
         runtime=runtime,
     )
@@ -147,12 +147,8 @@ def build_worker_pool(config, client, session_manager, workspace_dir, runtime, m
 ##
  # @brief Build the full main-agent toolset and mount its synchronous SubAgentPool.
  #
- # @param agent MyAgent instance whose runtime, session and history are used.
- #
- # @return Main-agent tool dictionary; also assigns agent.pool.
- #
 def build_tools(agent):
-    all_tools, _ = _build_worker_catalog(
+    worker_tools, main_tools = _build_worker_catalog(
         workspace_dir=agent.workspace_dir,
         config=agent.config,
         skill_manager=agent.skill,
@@ -171,20 +167,27 @@ def build_tools(agent):
         safe_client=agent.client,
         logger=agent.session,
         config=agent.config,
-        all_tools=all_tools,
+        all_tools=worker_tools,
         max_depth=int(agent.config.get("SUB_DEPTH", 1)),
         runtime=agent.runtime,
     )
 
-    plan_tool = PlanTool(agent.client, agent.config)
-    spawn_subagent = SpawnSubagentTool(agent.pool) if agent.pool.max_depth > 0 else None
     agent.sub_concurrency = max(int(agent.config.get("SUB_CONCURRENCY", 4)), 1)
 
-    tools = dict(all_tools)
-    for extra in (plan_tool, state_tool, memory_tool, forget_tool, prune_tool):
+    tools = dict(main_tools)
+    for extra in (state_tool, memory_tool, forget_tool, prune_tool):
         tools[extra.get_name()] = extra
     # End-for
-    if spawn_subagent is not None:
+
+    has_subagents = (
+        agent.pool.max_depth > 0
+        and getattr(agent.client, "registry", None) is not None
+        and bool(agent.client.registry.get_all_specs())
+    )
+    if has_subagents:
+        plan_tool = PlanTool(agent.client.registry, caller_label="MainAgent")
+        spawn_subagent = SpawnSubagentTool(agent.pool)
+        tools[plan_tool.get_name()] = plan_tool
         tools[spawn_subagent.get_name()] = spawn_subagent
     # End-if
 

@@ -199,8 +199,8 @@ After understanding how the Agent Loop is implemented in the [CLI Section](#46-c
 ├── __init__.py
 ├── llm_provider        # Dynamic API SDK configuration
 ├── logging             # Logging / Session Management
-├── routing             # Model Routing
-└── llm_request         # LLM Request implementation
+├── embedding.py        # Pluggable text embedding providers
+└── llm_request         # LLM Request & SubAgent ModelRegistry
 ```
 
 ### 4.1 Config Loading (`config`)
@@ -258,14 +258,11 @@ For the Anthropic API, the Reasoning Effort (Think Level) utilized by DeepSeek a
 
 For OpenAI, basic frameworks and contents are implemented, but they need future updates for Response API (TODO). Note: Google/Gemini is now integrated exclusively via OpenAI-compatible endpoints, removing native Google SDK dependencies.
 
-### 4.4 Model Routing (`routing`)
+### 4.4 SubAgent Model Registry (`model_registry`)
 
-`src/core/utils/routing` aims to solve two issues:
+`src/core/utils/llm_request/model_registry.py` (`ModelRegistry` and `RegistryModelSpec`) follows the "Let LLM Decide" principle: instead of guessing categories via programmatic regex keywords, it preserves the ordered `[Main] SUB_LIST` specifications including `name`, `description` (`basic.description`), per-model `max_tokens`, reasoning settings, and multimodal capabilities (`media_exts` / `media_limits`).
 
-1. Auto-selection of SubAgent models: High reasoning capability models handle complex tasks, while lower capability ones execute simple tool-calling tasks.
-2. Handling TPM/RPM access limits enforced by some LLM providers through local rate control to avoid 429 Too Many Requests errors.
-
-Note that this Rate Limit currently does not implement a global, dynamic control logic. It only implements per-launch counting based on a sliding window. This needs future refinement (marked as `@todo Future: global real-time limit checking` in code).
+Each SubAgent's `name` and `description` are exposed directly in the delegation tools (`spawn_subagent` and Remote's `submit_task`) alongside an explicit `model` enum schema so the calling Agent LLM selects the appropriate worker model using its full live context.
 
 ### 4.5 LLM Requests (`llm_request`)
 
@@ -275,21 +272,17 @@ Note that this Rate Limit currently does not implement a global, dynamic control
 # - Main Agent
 #      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
 # - Sub Agent
-#      PlanTool.execute()  -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
-#      SubAgent.run()      -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
+#      SubAgent.run() -> SafeLLMClient.subagent_request(model_alias, payload) -> cached provider -> request to LLM
 ```
 
 Details:
 
 1. The Main Agent requests directly via `safe_stream_request()` within its own Tool iterate loop.
-2. SubAgents must go through `route_request()`:
-    - First, it selects a suitable LLM based on its attributes (`task_description/toolset/depth`), configured in `SUB_LIST`, via `RoutingPolicy` matching + Rate Limits.
-    - Second, it verifies that the Rate Limit is not exceeded.
-    - Lastly, it dispatches the request.
-3. Regardless of the path, message normalization (`_normalize_messages()`) occurs before sending: adjacent messages of the same role are merged (e.g., consecutive user messages generated from compression summaries) to satisfy Anthropic/Gemini's strict role-alternating requirements.
-4. Retry Strategies:
-    - Main Agent: 1 initial attempt + `_LLM_RETRY_COUNT=3` retries, using exponential backoff `(2, 4, 8)` seconds, unifying handling for 400/401/429/500/Connection errors.
-    - SubAgent Routing: Chosen model gets 1 initial attempt + 2 retries. If it still fails, it traverses the `get_fallback_chain()` (in `SUB_LIST` order, excluding the current alias) one by one. An error is returned only if all fallbacks fail.
+2. SubAgents dispatch explicitly to the parent-selected model via `subagent_request(model_alias, payload)`, bounded by that model's own `spec.max_tokens`.
+3. Regardless of the path, message normalization (`_normalize_messages()`) occurs before sending: adjacent messages of the same role are merged to satisfy strict role-alternating requirements.
+4. Error Handling:
+    - Main Agent: 1 initial attempt + `_LLM_RETRY_COUNT=3` retries with exponential backoff `(2, 4, 8)` seconds.
+    - SubAgent: No silent cross-model fallback. Any provider failure is returned directly to the parent Agent (via `SubAgentResult` or Remote's `job_done` interrupt) so the parent LLM decides whether to retry, switch models, or handle the work directly.
 
 ### 4.6 CLI
 
@@ -417,37 +410,35 @@ The SubAgent design is structured as follows:
 
 `i_subagent` exists to reserve identical calling interfaces for specialized SubAgents (e.g., a specialized SubAgent specifically engineered to write report documents). Inside `subagent.py`, mechanisms like sysprompt and agent-loop exist similarly to the Main Agent, but complex context and memory management are stripped out:
 
-1. Every SubAgent completes all its work within `run()` (capped at 30 tool iterations), then wraps the outcome in `SubAgentResult` and returns.
-2. Depth is 1-based: Main Agent = 0, direct SubAgent = 1, sub-subagent = 2. The limit is `[Main] SUB_DEPTH` in `api.cfg` (default 1; 0 disables SubAgents). `RestrictedSpawnTool` is injected only when `depth < max_depth`, and the prompt wording follows the tool actually registered. `SubAgentPool.create_and_run()` rejects any spawn outside `1..SUB_DEPTH` with a failed result, as the final non-bypassable gate.
+1. Every SubAgent completes all its work within `run()` (capped at 100 tool iterations), then wraps the outcome in `SubAgentResult` and returns.
+2. Depth is 1-based: Main Agent = 0, direct SubAgent = 1, sub-subagent = 2. The limit is `[Main] SUB_DEPTH` (default 1 in CLI, 2 in Remote; 0 disables SubAgents). Both `PlanTool` and `RestrictedSpawnTool` are injected when `depth < max_depth` and `SUB_LIST` is non-empty. `SubAgentPool.create_and_run()` rejects any spawn outside `1..SUB_DEPTH` or with an unknown `model` as the final non-bypassable gate.
 3. Each SubAgent has an exclusive ID (`sa-<hex>`) enabling the pool to manage them and boundary-defining outputs/logs for the parent.
-4. SubAgent system prompts combine `role_prompt` + depth information (may delegate / may not delegate) + security rules + a shared-workspace note.
-5. LLM requests go through `route_request()`, routed by four categories `media`/`review`/`complex`/`simple` (priority media > review > complex > simple; within a category, `SUB_LIST` order), rather than reusing the Main Agent's model.
-6. Concurrency: consecutive `spawn_subagent` calls in one Main Agent response run in parallel via `src/core/subagent/dispatch.py` (bounded by `[Main] SUB_CONCURRENCY`, default 4); any other tool is a barrier run alone and in order, and every tool_use gets exactly one result. Tool calls inside a SubAgent (including nested spawns) stay serial. Parallel SubAgents share the workspace with no file-level isolation, so the Main Agent must give them different files. On Ctrl+C, SubAgents stop at their next turn boundary and `step()` returns only after all of them finished.
+4. Media tools (`read_pdf`, `read_image`) are bound or pruned per SubAgent according to its own `model_spec` (`media_exts` / `media_limits`), while preserving logical toolset capabilities so a text-only parent SubAgent can still delegate media tasks to a multimodal nested SubSubAgent.
+5. LLM requests go through `subagent_request(model_alias, payload)` using the `model` explicitly chosen by the parent LLM based on `basic.description`. Multi-step decompositions are validated upfront via `plan_tool` (model, toolset, acyclic `depends_on` DAG, and disjoint parallel `target_files`) without making a separate context-blind LLM call.
+6. Concurrency: consecutive `spawn_subagent` calls in one response run in parallel via `src/core/subagent/dispatch.py` (bounded by `[Main] SUB_CONCURRENCY`, default 4), while top-level SubAgents not already inside a `subagent-worker` thread (such as Remote background jobs) can also run nested `spawn_subagent` waves in parallel.
 
 `pool.py` creates an agent pool (`SubAgentPool`, a singleton held by `MyAgent`) to manage SubAgents. The `registry.py` predefined five classes of toolsets (`minimal`/`filesystem`/`code_analysis`/`data_processing`/`full`) which the LLM refers to by name. The execution flow typically looks like:
 
 ```sh
 Main Agent (Root)
-    # Does not spawn sub-subagents
-    -> plan_tool:                               # Creates various tasks and assigns to SubAgents
-    -> SpawnSubagentTool:                       # Invokes Agent Pool
-        -> pool.create_and_run:                 # Pool invokes the creation target
-            -> resolve_toolset:                 # Acquires Toolset
+    # Single-level delegation
+    -> plan_tool:                               # Main Agent submits & validates structured TaskPlan
+    -> SpawnSubagentTool(model=...):            # Invokes Agent Pool with chosen model
+        -> pool.create_and_run:                 # Validates depth / model / toolset
+            -> resolve_toolset:                 # Resolves toolset & adapts per-model media tools
             -> SubAgent.run:                    # SubAgent-Loop
-        <- parent.sub_results.append(result)    # Returns result (injected back into Parent via to_context_string)
+        <- parent.sub_results.append(result)    # Returns result (errors returned directly to parent)
     
-    # Spawns sub-subagents
+    # Nested delegation (SUB_DEPTH >= 2, e.g. Remote background SubAgent)
     -> plan_tool:
-    -> SpawnSubagentTool:
+    -> SpawnSubagentTool / SubmitTaskTool(model=...):
         -> pool.create_and_run:
-            -> resolve_toolset:
-            -> SubAgent.run:
-                -> RestrictedSpawnTool:                     # Spawns sub-subagent (depth+1, restricted toolset)
+            -> SubAgent.run (depth=1):
+                -> plan_tool:                               # Nested strict TaskPlan validation
+                -> RestrictedSpawnTool(model=...):          # Spawns sub-subagent (depth=2)
                     -> pool.create_and_run:                 # SubSubAgent-Loop
-                    # ...
-                    <- parent.sub_results.append(result)    # Returns result
-            # ...
-        <- parent.sub_results.append(result)                # Returns result
+                    <- parent.sub_results.append(result)
+        <- parent.sub_results.append(result)
 ```
 
 For detailed design, refer to the inline comments in the corresponding source files.
