@@ -27,7 +27,7 @@ from src.core.tool.media import (MediaToolBase, estimate_messages_tokens,
                             attach_media_blocks, DEFAULT_MEDIA_LIMITS)
 from src.core.runtime import Runtime
 
-MAX_TURNS = 30
+MAX_TURNS = 100
 
 # Tools whose successful calls produce files reported back as artifacts.
 WRITE_TOOLS = ("write_file", "edit_file", "write_excel")

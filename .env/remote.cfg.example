@@ -8,7 +8,7 @@ SUB_LIST=[
     "opus",
     "gemini"
     ]
-SUB_DEPTH=1
+SUB_DEPTH=2
 SUB_CONCURRENCY=4
 ; Search Tool
 TAVILY_API_KEY=tvly-
