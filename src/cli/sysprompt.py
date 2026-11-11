@@ -3,7 +3,7 @@
  # @date 2026/10/28
  #
  # @brief Terminal CLI system-prompt builder subclass.
- # Specializes BasePromptBuilder with local workspace sandbox rules, synchronous
+ # Specializes BasePromptBuilder with local workspace sandbox rules, LLM-driven
  # SubAgent orchestration, and terminal-friendly plain-text formatting.
  #
 
@@ -34,18 +34,18 @@ class CLIPromptBuilder(BasePromptBuilder):
                 f"SubAgents may delegate down to depth {sub_depth} (SUB_DEPTH={sub_depth}).\n"
             )
             sections.append(
-                "## SubAgent Orchestration (MANDATORY FOR COMPLEX TASKS)\n"
-                "You have access to a SubAgent cluster system for handling complex, multi-step tasks.\n"
-                "### When to Use SubAgents:\n"
-                "- Tasks that involve 3+ independent sub-problems\n"
-                "- Tasks that require different expertise (media reading, code review, complex design)\n"
-                "### How to Use SubAgents:\n"
-                "1. You MUST call 'plan_tool' first to break the complex task into a TaskPlan.\n"
-                "2. For each SubTask, call 'spawn_subagent' with task_description, toolset, and role_prompt.\n"
-                "3. Independent SubTasks: call 'spawn_subagent' several times in ONE response; they run in parallel. "
-                "Parallel SubAgents share the workspace, so give each one different files to modify.\n"
-                "4. Dependent SubTasks: spawn them in a later response, after the results they need.\n"
-                "5. Synthesize the final answer from all SubAgentResults.\n"
+                "## SubAgent Orchestration (Let LLM Decide)\n"
+                "You have access to a SubAgent cluster for delegating isolated or parallel sub-tasks.\n"
+                "### When to Delegate:\n"
+                "- Handle quick checks and cohesive single-focus edits directly in the Main Agent.\n"
+                "- Spawn a single SubAgent directly via 'spawn_subagent' for an isolated narrow task (e.g., reading an oversized PDF/image with a multimodal model).\n"
+                "- For complex multi-step tasks involving multiple independent sub-problems or mixed model expertise, call 'plan_tool' FIRST.\n"
+                "### How to Orchestrate Multi-Step Tasks:\n"
+                "1. Call 'plan_tool' to submit and validate a structured TaskPlan ('overall_goal', 'execution_strategy', and 'subtasks' specifying 'id', 'model', 'toolset', 'depends_on', and 'target_files').\n"
+                "2. Select each SubAgent's 'model' explicitly according to the model names and descriptions listed in 'spawn_subagent'.\n"
+                "3. Dispatch each wave of independent subtasks by calling 'spawn_subagent' multiple times in ONE response; parallel SubAgents share the workspace, so assign disjoint 'target_files'.\n"
+                "4. Dispatch dependent subtasks in later responses after inspecting prerequisite outputs.\n"
+                "5. If a SubAgent fails, inspect its returned error message and decide whether to retry, switch to another configured 'model', or complete the work directly.\n"
                 + nesting +
                 "### Available Toolsets:\n"
                 "- 'minimal': read_file, write_file, list_directory, get_time\n"

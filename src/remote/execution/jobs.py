@@ -27,8 +27,15 @@ class JobExecutor:
      # @return None.
      #
     def __init__(self, config, data_dir):
+        from src.core.utils import ModelRegistry
+
         self.config = config
         self.data_dir = Path(data_dir)
+        self.registry = ModelRegistry(
+            config.get("ALL_MODELS", []),
+            config.get("SUB_LIST", []),
+            enabled=int(config.get("SUB_DEPTH", 1)) > 0,
+        )
     # End-def
 
     ##
@@ -63,6 +70,7 @@ class JobExecutor:
             sdk_type=self.config.get("SDK_TYPE", "Message"),
             all_models=self.config.get("ALL_MODELS", []),
             sub_list=self.config.get("SUB_LIST", []),
+            sub_depth=int(self.config.get("SUB_DEPTH", 1)),
             thinking=str(self.config.get("THINKING", "disabled")).strip().lower(),
             effort=str(self.config.get("EFFORT", "medium")).strip().lower(),
             compat=str(self.config.get("COMPAT", "auto")).strip().lower(),
@@ -85,6 +93,7 @@ class JobExecutor:
             role_prompt=job["role_prompt"] or "Complete the assigned task and return a concise result.",
             toolset_name=job["toolset"],
             task_description=task,
+            model=job["model"],
             depth=1,
         ))
     # End-def
@@ -104,12 +113,13 @@ class JobManager:
      #
      # @return None.
      #
-    def __init__(self, store, executor, max_workers=4):
+    def __init__(self, store, executor, max_workers=4, registry=None):
         if isinstance(max_workers, bool) or int(max_workers) < 1:
             raise ValueError("max_workers must be positive")
         # End-if
         self.store = store
         self.executor = executor
+        self.registry = registry if registry is not None else getattr(executor, "registry", None)
         self.pool = ThreadPoolExecutor(max_workers=int(max_workers), thread_name_prefix="remote-job")
         self._lock = threading.RLock()
         self._cancel = {}
@@ -146,18 +156,18 @@ class JobManager:
     # End-def
 
     ##
-     # @brief Validate and persist a task before scheduling it.
+     # @brief Validate and persist a background task with its selected SubAgent model.
      #
-     # @param session_id Conversation identifier used to scope persisted records.
-     # @param workspace Workspace assigned to the task or remote session.
-     # @param task_description Nonempty natural-language task description.
-     # @param role_prompt System role for the delegated worker.
-     # @param toolset Registered worker toolset name.
-     # @param context Immutable submission context for reference.
-     #
-     # @return Persisted job dictionary.
-     #
-    def submit(self, session_id, workspace, task_description, role_prompt="", toolset="full", context=""):
+    def submit(self, session_id, workspace, model, task_description, role_prompt="", toolset="full", context=""):
+        model = str(model or "").strip() if isinstance(model, str) else ""
+        if not model:
+            raise ValueError("model must be a non-empty SubAgent model alias")
+        # End-if
+        if self.registry is not None and self.registry.get_spec(model) is None:
+            raise ValueError(
+                f"Unknown SubAgent model '{model}'. Available models: {self.registry.aliases()}"
+            )
+        # End-if
         if not isinstance(task_description, str) or not task_description.strip():
             raise ValueError("task_description must be non-empty text")
         # End-if
@@ -177,7 +187,9 @@ class JobManager:
                 raise RuntimeError("JobManager is closed")
             # End-if
             self.start()
-            job = self.store.create_job(session_id, workspace, task_description, role_prompt, toolset, context)
+            job = self.store.create_job(
+                session_id, workspace, model, task_description, role_prompt, toolset, context
+            )
             self._schedule(job)
             return job
         # End-with

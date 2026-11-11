@@ -199,8 +199,8 @@ CLI 和 Remote 分别依赖 Core，Core 不导入它们。Nuitka 仅显式包含
 ├── __init__.py
 ├── llm_provider        # API SDK 动态配置
 ├── logging             # 日志/会话管理
-├── routing             # 模型路由
-└── llm_request         # LLM request 实现
+├── embedding.py        # 向量嵌入接口
+└── llm_request         # LLM request 与 SubAgent 模型注册表
 ```
 
 ### 4.1 配置加载 config
@@ -258,14 +258,11 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 
 对于 OpenAI 来说，其实现了基本的框架与内容，后续需要更新为 Response API（TODO）。注：Google/Gemini 已全部通过 OpenAI-compatible 规范接入，移除了原生 Google SDK。
 
-### 4.4 模型路由 routing
+### 4.4 SubAgent 模型注册表 model_registry
 
-`src/core/utils/routing` 旨在解决两个问题：
+`src/core/utils/llm_request/model_registry.py`（`ModelRegistry` 与 `RegistryModelSpec`）遵循 Let LLM Decide 设计原则：不再通过程序侧的关键词正则猜测模型类别，而是按 `[Main] SUB_LIST` 顺序保存每个可用子模型的 `name`、`description`（`basic.description`）、输出上限 `max_tokens`、思考模式以及多模态能力配置（`media_exts` / `media_limits`）。
 
-1. SubAgent 的模型自动选择：高推理能力的模型执行复杂任务、低推理能力的模型执行简单的工具调用任务。
-2. 部分 LLM 服务商存在 TPM、RPM 等访问限制，需要实现一个本地的速率控制，避免 429 too many requests。
-
-注意，这里的 Rate Limit 并没有实现一个全局的、动态的控制逻辑，只是基于滑动窗口实现了单次启用程序的计数统计。这里需要后期完善（代码中标注 `@todo Future: global real-time limit checking`）。
+子模型的名称与 `description` 会像工具/Skill 目录一样直接注入到委派工具（`spawn_subagent` 与 Remote 的 `submit_task`）的描述与 `model` 枚举 Schema 中，由调用方 Agent LLM 结合当前完整上下文自主决定调用哪一个子模型。
 
 ### 4.5 LLM 请求 llm_request
 
@@ -275,21 +272,17 @@ Agent/SubAgent -> log_api_call() -> `.log/`
 # - Main Agent
 #      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
 # - Sub Agent
-#      PlanTool.execute()  -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
-#      SubAgent.run()      -> SafeLLMClient.route_request() -> Model by Routing -> cached provider -> request to LLM
+#      SubAgent.run() -> SafeLLMClient.subagent_request(model_alias, payload) -> cached provider -> request to LLM
 ```
 
 其中：
 
 1. Main Agent 将在它自身的 Tool iterate 中直接通过 `safe_stream_request()` 向 LLM 发起 request 请求；
-2. SubAgent 则需要通过 `route_request`：
-    - 首先，根据它（类）的属性（成员：task_description/toolset/depth），选择合适的 LLM（在 `SUB_LIST` 中配置，经 `RoutingPolicy` 条件匹配 + 速率限制）；
-    - 然后，确认没有超过 Rate Limit；
-    - 最后，发送请求。
-3. 无论哪条路径，发送前都会做消息归一化 `_normalize_messages()`：将相邻的同 role 消息合并（例如压缩摘要产生的连续 user 消息），满足 Anthropic/Gemini 对严格角色交替的要求。
-4. 重试策略：
-    - Main Agent：1 次初始 + `_LLM_RETRY_COUNT=3` 次重试，指数退避 `(2, 4, 8)` 秒，对 400/401/429/500/连接错误统一处理；
-    - SubAgent 路由：选中模型 1 次初始 + 2 次重试，仍失败则沿 `get_fallback_chain()`（SUB_LIST 顺序、排除当前 alias）逐个尝试，全部失败才返回错误。
+2. SubAgent 则通过 `subagent_request(model_alias, payload)` 精确调用父 Agent 选定的目标模型，自动限制在该子模型自身的 `spec.max_tokens` 范围内；
+3. 无论哪条路径，发送前都会做消息归一化 `_normalize_messages()`：将相邻的同 role 消息合并（例如压缩摘要产生的连续 user 消息），满足 Anthropic/Gemini 对严格角色交替的要求；
+4. 错误处理策略：
+    - Main Agent：1 次初始 + `_LLM_RETRY_COUNT=3` 次重试，指数退避 `(2, 4, 8)` 秒；
+    - SubAgent：不做跨模型静默 fallback。若选定的子模型请求失败，直接将包含模型名与原因的错误消息原样返回给父级 Agent（CLI/子代理工具结果或 Remote 的 `job_done` 事件），由上级 LLM 自主决定重试、切换其他子模型或自行处理。
 
 ### 4.6 CLI
 
@@ -417,36 +410,34 @@ soft_limit = MAX_CONTEXT_TOKENS - MAX_TOKENS - 固定开销(sysprompt + tool sch
 
 `i_subagent` 旨在为特化 subagent 保留相同的调用接口，例如，我们期望通过特化的 subagent 来撰写相应的报告文档。在 `subagent.py` 内部，同样与 Main Agent 一样有 sysprompt、agent-loop 等机制，但是省去了复杂的上下文、记忆管理：
 
-1. 每一个 subagent 都在 `run()` 中完成它的全部工作（上限 30 轮工具迭代），然后将结果封装为 `SubAgentResult`返回；
-2. 深度采用 1-based 语义：Main Agent 为 0，直接子代理为 1，subsubagent 为 2；上限由 `api.cfg` 的 `[Main] SUB_DEPTH` 配置（默认 1，0 表示禁用子代理）。只有 `depth < max_depth` 时才会注入受限的 `RestrictedSpawnTool`，提示词措辞与实际注册的工具一致；`SubAgentPool.create_and_run()` 对超出 `1..SUB_DEPTH` 的派生一律返回失败结果，作为不可绕过的最后防线；
+1. 每一个 subagent 都在 `run()` 中完成它的全部工作（上限 100 轮工具迭代），然后将结果封装为 `SubAgentResult` 返回；
+2. 深度采用 1-based 语义：Main Agent 为 0，直接子代理为 1，subsubagent 为 2；上限由配置文件的 `[Main] SUB_DEPTH` 指定（默认 1，Remote 默认 2，0 表示禁用子代理）。只有 `depth < max_depth` 且 `SUB_LIST` 非空时才会同时注入 `PlanTool` 与受限的 `RestrictedSpawnTool`；`SubAgentPool.create_and_run()` 对超出 `1..SUB_DEPTH` 或未知 `model` 的派生一律返回失败结果，作为不可绕过的最后防线；
 3. 每个 subagent 有一个专属的 ID（`sa-<hex>`），以便于 pool 进行管理、为 parent 界定返回值与日志记录；
-4. 子代理的系统提示词由 `role_prompt` + 深度信息（可委派 / 不可委派两种措辞）+ 安全规则 + 共享工作区提示拼接；
-5. LLM 请求走 `route_request()`，按 `media`/`review`/`complex`/`simple` 四类路由（优先级 media > review > complex > simple，同类按 `SUB_LIST` 顺序），而不是复用 Main Agent 的模型；
-6. 并发：Main Agent 同一轮响应中连续的多个 `spawn_subagent` 由 `src/core/subagent/dispatch.py` 并行执行（上限 `[Main] SUB_CONCURRENCY`，默认 4），其他工具作为屏障按原顺序串行执行，每个 tool_use 恰好得到一个结果。子代理内部的工具调用（含嵌套派生）保持串行。并行子代理共享工作区，不提供文件级隔离，需由 Main Agent 为其分配不同文件；Ctrl+C 时子代理在下一轮边界停止，`step()` 等待所有子代理结束后才返回。
+4. 子代理按所选 `model_spec` 的多模态能力（`media_exts` / `media_limits`）独立挂载或裁剪 `read_pdf` 与 `read_image`，同时保留逻辑工具集以便纯文本父级子代理仍可将多模态子任务继续委派给多模态下级子代理；
+5. LLM 请求走 `subagent_request(model_alias, payload)`，模型由父级 Agent 根据 `SUB_LIST` 各模型的 `basic.description` 显式选定，复杂拆解由调用方 Agent 先经 `plan_tool` 完成模型、工具集、DAG 无环依赖以及并行写文件冲突校验；
+6. 并发：同一轮响应中连续的多个 `spawn_subagent` 由 `src/core/subagent/dispatch.py` 并行执行（上限 `[Main] SUB_CONCURRENCY`，默认 4），其他工具作为屏障按原顺序串行执行。若当前子代理未运行在并行 worker 线程内（如 Remote 后台任务），其派生的下一层子代理同样支持有界并发；已在并行 worker 线程内的嵌套调用则自动降为串行以防线程膨胀。
 
 `pool.py` 创建了一个 agent 池（`SubAgentPool`，`MyAgent` 持有的单例）来管理 subagents。工具集注册表 `registry.py` 预定义了五类（`minimal`/`filesystem`/`code_analysis`/`data_processing`/`full`），LLM 通过名称引用。通常来说，subagent 的调用方式为：
 
 ```sh
 Main Agent (Root)
     # 不生成 subsubagent
-    -> plan_tool:                               # 创建多少个不同的任务，并分配给 subagent
-    -> SpawnSubagentTool:                       # 创建 agent 池
-        -> pool.create_and_run:                 # agent 池创建调用对象
-            -> resolve_toolset:                 # 获取工具集
+    -> plan_tool:                               # 主 Agent 基于完整上下文提交计划并完成严格校验
+    -> SpawnSubagentTool(model=...):            # 显式指定子模型并调用 agent 池
+        -> pool.create_and_run:                 # 校验 depth / model / toolset
+            -> resolve_toolset:                 # 获取工具集并按子模型裁剪媒体工具
             -> SubAgent.run:                    # SubAgent-Loop
-        <- parent.sub_results.append(result)    # 返回结果（to_context_string 回灌父代理）
-    # 生成 subsubagent
+        <- parent.sub_results.append(result)    # 返回结果（失败亦原样回灌供上级决策）
+    # 生成 subsubagent (SUB_DEPTH >= 2，如 Remote 后台子代理)
     -> plan_tool:
-    -> SpawnSubagentTool:
+    -> SpawnSubagentTool / SubmitTaskTool(model=...):
         -> pool.create_and_run:
-            -> resolve_toolset:
-            -> SubAgent.run:
-                -> RestrictedSpawnTool:                     # 生成 subsubagent（depth+1，工具集受限）
+            -> SubAgent.run (depth=1):
+                -> plan_tool:                               # 二级编排严格校验
+                -> RestrictedSpawnTool(model=...):          # 生成 subsubagent（depth=2）
                     -> pool.create_and_run:                 # SubSubAgent-Loop
-                    # ...
-                    <- parent.sub_results.append(result)    # 返回结果
-            # ...
-        <- parent.sub_results.append(result)                # 返回结果
+                    <- parent.sub_results.append(result)
+        <- parent.sub_results.append(result)
 ```
 
 详细设计可以参考相应代码中的注释部分。

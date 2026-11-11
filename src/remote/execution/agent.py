@@ -35,6 +35,7 @@ MAIN_DIRECT_TOOLS = (
     "memory_search",
     "update_state",
     "prune_context",
+    "plan_tool",
 )
 
 
@@ -221,7 +222,11 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
                 for name in MAIN_DIRECT_TOOLS
                 if name in shared
             }
-            result["submit_task"] = SubmitTaskTool(jobs, str(session_id), workspace, context)
+            if agent.pool.max_depth > 0 and agent.client.registry.get_all_specs():
+                result["submit_task"] = SubmitTaskTool(
+                    jobs, str(session_id), workspace, context, registry=agent.client.registry
+                )
+            # End-if
             result["task_control"] = TaskControlTool(jobs, str(session_id))
             result["google_drive"] = GoogleDriveTool(config, workspace, backups=backups)
             if hub is not None:

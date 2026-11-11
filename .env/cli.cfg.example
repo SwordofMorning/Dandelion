@@ -35,7 +35,7 @@ MODEL_LIST = [
         },
         "basic": {
             "name": "gemini",
-            "conditions": ["media", "simple"],
+            "description": "Fast multimodal model supporting image/PDF inspection, routine file operations, and quick lookups.",
             "max_token": 128000,
             "max_context_tokens": 819200
         },
@@ -58,7 +58,7 @@ MODEL_LIST = [
         },
         "basic": {
             "name": "opus",
-            "conditions": ["complex", "review"],
+            "description": "Strong reasoning model for complex architecture design, multi-file refactoring, debugging, and code review.",
             "max_token": 128000,
             "max_context_tokens": 819200
         },
@@ -88,7 +88,7 @@ MODEL_LIST = [
         },
         "basic": {
             "name": "gpt",
-            "conditions": ["complex", "review"],
+            "description": "High-reasoning general coding model suitable for algorithm design, verification, and code review.",
             "max_token": 128000,
             "max_context_tokens": 819200
         },
@@ -118,7 +118,7 @@ MODEL_LIST = [
         },
         "basic": {
             "name": "deepseek-v4",
-            "conditions": ["media", "simple"],
+            "description": "Fast cost-effective model for routine file inspection, text processing, and lightweight coding tasks.",
             "max_token": 160000,
             "max_context_tokens": 819200
         },

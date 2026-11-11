@@ -14,7 +14,7 @@
  #     },
  #     "basic": {
  #         "name": "deepseek-v4-pro",
- #         "conditions": ["complex", "review"],
+ #         "description": "Strong reasoning model for architecture design, debugging, and code review.",
  #         "max_token": 819200,
  #         "max_context_tokens": 819200
  #     },
@@ -55,10 +55,6 @@ from ..llm_provider.effort import FLAVOR_AUTO, VALID_FLAVORS
  # ========================================
  #
 
-# Routing categories accepted in basic.conditions (breaking change: the former
-# reasoning / tool_heavy / long_context / default labels are rejected).
-VALID_CONDITIONS = ("media", "review", "complex", "simple")
-
 DEFAULT_SUB_DEPTH = 1
 DEFAULT_SUB_CONCURRENCY = 4
 
@@ -87,34 +83,35 @@ def _parse_non_negative_int(config, key, default):
 # End-def
 
 ##
- # @brief Normalise basic.conditions to the four routing categories.
+ # @brief Validate and normalise basic.description for LLM-driven SubAgent selection.
  #
- # @param raw Raw "conditions" value from model metadata.
- # @param model_name Model alias, used by the warning message.
+ # @param raw Raw "description" value from model metadata.
+ # @param model_name Model alias used in error messages.
+ # @param required True when a non-empty description is mandatory.
  #
- # @return De-duplicated list of lowercase categories (order preserved).
+ # @return Stripped description string.
  #
-def normalize_conditions(raw, model_name=""):
-    if not isinstance(raw, list):
-        if raw not in (None, []):
-            print(f"[!] Model '{model_name}': 'conditions' must be a list. Ignoring it.")
+def normalize_description(raw, model_name="", required=False):
+    if raw is None:
+        if required:
+            raise ValueError(
+                f"Model '{model_name}': 'basic.description' is required and must be a non-empty string."
+            )
         # End-if
-        return []
+        return ""
     # End-if
-
-    out = []
-    for item in raw:
-        value = str(item).strip().lower() if isinstance(item, str) else ""
-        if value not in VALID_CONDITIONS:
-            print(f"[!] Model '{model_name}': unknown condition {item!r} ignored. "
-                  f"Expected one of {list(VALID_CONDITIONS)}.")
-            continue
-        # End-if
-        if value not in out:
-            out.append(value)
-        # End-if
-    # End-for
-    return out
+    if not isinstance(raw, str):
+        raise ValueError(
+            f"Model '{model_name}': 'basic.description' must be a string, got {type(raw).__name__}."
+        )
+    # End-if
+    desc = raw.strip()
+    if required and not desc:
+        raise ValueError(
+            f"Model '{model_name}': 'basic.description' must not be empty."
+        )
+    # End-if
+    return desc
 # End-def
 
 ##
@@ -375,7 +372,7 @@ def _parse_media_limits(model_data, model_id=""):
  # Expected structure:
  # {
  #     "provider": {"model_id": "...", "compat": "auto"},
- #     "basic": {"name": "...", "conditions": [...], "max_token": N, "max_context_tokens": M},
+ #     "basic": {"name": "...", "description": "...", "max_token": N, "max_context_tokens": M},
  #     "reasoning": {"thinking": "...", "effort": "..."},
  #     "media": {"file": [...], "max_image_bytes": ...}
  # }
@@ -428,7 +425,14 @@ def _parse_model_entry(model_data: dict, section: str = ""):
         return None
     # End-if
 
-    conditions = normalize_conditions(basic_node.get("conditions", []), name)
+    if "conditions" in basic_node:
+        raise ValueError(
+            f"Section '[{section}]': model '{name}' uses removed 'basic.conditions'. "
+            f"Replace it with 'basic.description' (string)."
+        )
+    # End-if
+
+    description = normalize_description(basic_node.get("description"), name)
 
     try:
         max_token = int(basic_node.get("max_token", 8192))
@@ -469,7 +473,7 @@ def _parse_model_entry(model_data: dict, section: str = ""):
         "name": name,
         "model_id": model_id,
         "compat": compat,
-        "conditions": conditions,
+        "description": description,
         "max_token": max_token,
         "max_context_tokens": max_context_tokens,
         "thinking": thinking,
@@ -719,16 +723,25 @@ def load_api_config(file_path):
         return None
     # End-if
 
-    # Parse SUB_LIST
+    # Parse SUB_LIST strictly (no silent fallback on malformed entries)
     raw_sub_list = config.get("Main", "SUB_LIST", fallback="[]")
     try:
-        sub_list = json.loads(raw_sub_list)
-        # Verify it is a list and all elements are strings
-        if not isinstance(sub_list, list) or not all(isinstance(item, str) for item in sub_list):
-            sub_list = []
-    except json.JSONDecodeError:
-        sub_list = []
+        parsed_sub_list = json.loads(raw_sub_list)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"In [Main] SUB_LIST, invalid JSON: {e}") from e
     # End-try
+    if not isinstance(parsed_sub_list, list) or not all(
+        isinstance(item, str) and item.strip() for item in parsed_sub_list
+    ):
+        raise ValueError("In [Main] SUB_LIST, value must be a JSON list of non-empty model alias strings.")
+    # End-if
+    sub_list = []
+    for item in parsed_sub_list:
+        alias = item.strip()
+        if alias not in sub_list:
+            sub_list.append(alias)
+        # End-if
+    # End-for
 
     # SubAgent recursion depth and parallelism (see _parse_non_negative_int)
     sub_depth = _parse_non_negative_int(config, "SUB_DEPTH", DEFAULT_SUB_DEPTH)
@@ -804,6 +817,19 @@ def load_api_config(file_path):
         print(f"[-] FATAL: Main Agent '{main_agent_name}' not found in any MODEL_LIST.")
         return None
     # End-if
+
+    # Validate SUB_LIST aliases and enforce non-empty descriptions when SubAgents are enabled.
+    model_by_name = {m["name"]: m for m in all_models}
+    for alias in sub_list:
+        if alias not in model_by_name:
+            raise ValueError(f"In [Main] SUB_LIST, model '{alias}' is not defined in any MODEL_LIST.")
+        # End-if
+        if sub_depth > 0 and not model_by_name[alias].get("description"):
+            raise ValueError(
+                f"SubAgent model '{alias}' in SUB_LIST must define a non-empty 'basic.description'."
+            )
+        # End-if
+    # End-for
 
     server_cfg, telegram_cfg, drive_cfg = _parse_remote_server_sections(config)
 

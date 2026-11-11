@@ -3,18 +3,9 @@
  # @date 2026/08/07
  #
  # @brief Synchronous delegated-agent execution with bounded recursion.
- # Runs a private conversation through model routing and serial tool dispatch,
- # collecting media payloads, file artifacts and structured completion results.
- #
- # @note Depth model (1-based): root agent = 0, direct SubAgent = 1,
- #       SubSubAgent = 2. max_depth comes from [Main] SUB_DEPTH. A SubAgent
- #       only receives 'spawn_subagent' when depth < max_depth, and the pool
- #       rejects any spawn beyond max_depth regardless of what the model asks.
- #
- # @note Concurrency: the ROOT agent may run several SubAgents in parallel
- #       (src/core/subagent/dispatch.py). Inside a SubAgent, tool calls (including
- #       nested spawns) stay serial, which bounds the number of threads and
- #       avoids pool starvation between parents and children.
+ # Runs a private conversation on an explicitly chosen SubAgent model, adapts
+ # media capabilities per model specification, injects PlanTool + RestrictedSpawnTool
+ # when depth < max_depth, and returns structured completion results.
  #
 
 import copy
@@ -22,12 +13,13 @@ import os
 import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
+from .registry import TOOLSET_REGISTRY
 from .dispatch import dispatch_tool_calls, in_worker_thread
 from src.core.tool.media import (MediaToolBase, estimate_messages_tokens,
                             attach_media_blocks, DEFAULT_MEDIA_LIMITS)
 from src.core.runtime import Runtime
 
-MAX_TURNS = 30
+MAX_TURNS = 100
 
 # Tools whose successful calls produce files reported back as artifacts.
 WRITE_TOOLS = ("write_file", "edit_file", "write_excel")
@@ -49,47 +41,66 @@ class SubAgent(ISubAgent):
      # @param depth this SubAgent's depth (direct child of the root = 1).
      # @param max_depth maximum depth allowed ([Main] SUB_DEPTH).
      # @param subagent_id ID, used to manage in pool.
-     # @param routing_context used to dynamic choose LLM models.
+     # @param model_spec RegistryModelSpec of the selected SubAgent model.
      # @param runtime Optional Runtime callbacks for output, cancellation and approval.
      #
      # @return None.
      #
     def __init__(
         self, safe_client, logger, config,
-        pool, role_prompt, tools,
-        depth=1, max_depth=1, subagent_id=None, routing_context=None, runtime=None
+        pool, role_prompt, tools, model_spec,
+        depth=1, max_depth=1, subagent_id=None, runtime=None, workspace_dir=None
     ):
-        super().__init__(safe_client, logger, tools, config)
+        super().__init__(safe_client, logger, dict(tools), config)
         self.runtime = runtime if runtime is not None else Runtime()
         self.pool = pool
+        self.model_spec = model_spec
         self.depth = depth
         self.max_depth = max_depth
         self.subagent_id = subagent_id or f"subagent-{id(self):x}"
+        self.workspace_dir = (
+            workspace_dir
+            or getattr(pool, "workspace_dir", None)
+            or next((t.workspace_dir for t in self.tools.values() if getattr(t, "workspace_dir", None)), os.getcwd())
+        )
         self.sub_results = []
         self.artifacts = []
-        self.routing_context = routing_context or {}
+
+        self.tools.pop("spawn_subagent", None)
+        self.tools.pop("plan_tool", None)
+        # Preserve logical toolset capabilities before per-model media pruning so
+        # a text-only parent SubAgent can still delegate media reading to a
+        # multimodal nested SubSubAgent when depth < max_depth.
+        self.logical_tool_names = set(self.tools.keys())
 
         # Media payloads read by this SubAgent: hydrated as SIBLING parts of the
-        # tool_result for every request of the loop, never nested inside it
-        # (nested inline parts are dropped by the gateway).
+        # tool_result for every request of the loop, never nested inside it.
         self._pending_media_blocks = []
-        # Media tools arrive as the MAIN agent's shared instances; this SubAgent
-        # takes private copies so slot/budget checks measure its own request.
         self._rehost_media_tools()
 
-        # Delegation capability is decided here, once, and the schema is always
-        # rebuilt afterwards so tools and tool_schemas can never disagree.
-        self.tools.pop("spawn_subagent", None)
-        if self.depth < self.max_depth:
-            # Lazy import to prevent circular dependency
+        # Delegation capability (PlanTool + RestrictedSpawnTool) is injected only
+        # when depth < max_depth and configured SubAgent models exist.
+        registry = getattr(self.client, "registry", None)
+        if self.depth < self.max_depth and registry is not None and registry.get_all_specs():
+            from ..tool.agent.plan_tool import PlanTool
             from ..tool.agent.spawn_tool import RestrictedSpawnTool
+
+            self.tools["plan_tool"] = PlanTool(
+                registry=registry,
+                workspace_dir=self.workspace_dir,
+                parent_tools=self.logical_tool_names,
+                caller_label=self.subagent_id,
+            )
             self.tools["spawn_subagent"] = RestrictedSpawnTool(
                 pool=pool,
                 parent_subagent=self,
                 current_depth=self.depth,
-                max_depth=self.max_depth
+                max_depth=self.max_depth,
             )
         # End-if
+        for tool in self.tools.values():
+            tool.runtime = self.runtime
+        # End-for
         self._refresh_tool_schemas()
 
         self.system_prompt = self._build_system_prompt(role_prompt)
@@ -101,60 +112,76 @@ class SubAgent(ISubAgent):
      # @return int slots (>= 0).
      #
     def available_media_slots(self):
-        # A SubAgent has a FRESH, private message list, so the only media that
-        # counts against the per-request cap is what IT has loaded: exactly the
-        # blocks its next request carries. Counting the parent's history (or a
-        # pointer count) would spend the allowance on media this request does not
-        # even contain, which used to make every SubAgent media read fail with
-        # "maximum number of media blocks" even on the first call.
-        limit = int(self.config.get("MEDIA_LIMITS", {}).get(
+        limits = self.model_spec.media_limits if self.model_spec else {}
+        limit = int((limits or {}).get(
             "max_media_per_request", DEFAULT_MEDIA_LIMITS["max_media_per_request"]))
         return max(limit - len(self._pending_media_blocks), 0)
     # End-def
 
     ##
-     # @brief Re-bind private copies of the media tools to this SubAgent.
-     #
-     # @note resolve_toolset() hands over the SAME instances the main agent
-     #       registered (built once with host=<main agent>), so without this copy
-     #       a SubAgent media read asks the PARENT for media slots and for the
-     #       remaining token budget - the parent's numbers, not this SubAgent's
-     #       request. Media tools hold no per-call state, so a shallow copy plus
-     #       the new host is enough. The dict is copied defensively; the parent's
-     #       dict is never mutated either way.
+     # @brief Bind or prune media tools according to this SubAgent model's media capabilities.
      #
     def _rehost_media_tools(self):
         self.tools = dict(self.tools)
+        allowed_exts = set(self.model_spec.media_exts or []) if self.model_spec else set()
+        per_model_limits = dict(DEFAULT_MEDIA_LIMITS)
+        if self.model_spec and self.model_spec.media_limits:
+            for k, v in self.model_spec.media_limits.items():
+                if v is not None:
+                    per_model_limits[k] = v
+                # End-if
+            # End-for
+        # End-if
+
         for name, tool in list(self.tools.items()):
             if not isinstance(tool, MediaToolBase):
                 continue
             # End-if
+            if not (tool.supported_extensions() & allowed_exts):
+                self.tools.pop(name, None)
+                continue
+            # End-if
             clone = copy.copy(tool)
             clone.host = self
+            clone.file_exts = set(allowed_exts)
+            clone.media_limits = dict(per_model_limits)
             self.tools[name] = clone
         # End-for
     # End-def
 
     ##
      # @brief Generate subagent's system prompt.
-     # Role + Recursion depth + Security rules.
-     #
-     # @param role_prompt subagent's system prompt, generated from parentAgent ('s plan tool).
      #
     def _build_system_prompt(self, role_prompt):
-        # Recursion depth: the wording follows the tool actually registered.
         if "spawn_subagent" in self.tools:
             remaining = self.max_depth - self.depth
+            toolset_lines = []
+            for ts_name, ts_tools in TOOLSET_REGISTRY.items():
+                avail = [t for t in ts_tools if t in self.logical_tool_names]
+                if avail:
+                    toolset_lines.append(f"- '{ts_name}': {', '.join(avail)}")
+                # End-if
+            # End-for
+            toolsets_block = "\n".join(toolset_lines)
             depth_info = (
-                f"You are a SubAgent at depth {self.depth}/{self.max_depth}. "
-                "Complete the sub-task using available tools. "
-                f"You may delegate narrow sub-tasks using 'spawn_subagent' "
-                f"({remaining} level(s) remaining). "
-                "Always return a concise, well-structured summary of your findings."
+                f"You are a SubAgent at depth {self.depth}/{self.max_depth} "
+                f"(model: {self.model_spec.alias}, {remaining} delegation level(s) remaining).\n"
+                "Nested SubAgent Orchestration (Let LLM Decide):\n"
+                "1. Execute narrow or straightforward steps directly using your own tools.\n"
+                "2. For a single isolated narrow sub-task (e.g., reading a media/PDF file with a multimodal model), "
+                "you may call 'spawn_subagent' directly.\n"
+                "3. When decomposing a complex task into multiple or parallel sub-tasks, you MUST call 'plan_tool' "
+                "first to validate 'model', 'toolset', 'depends_on', and disjoint 'target_files', then dispatch "
+                "'spawn_subagent' wave by wave.\n"
+                "4. Select 'model' explicitly based on the SubAgent model descriptions shown in 'spawn_subagent'. "
+                "If a nested SubAgent fails, inspect its error message and decide whether to retry, switch models, "
+                "or handle the task yourself.\n"
+                "5. Always return a concise, well-structured summary of your final findings.\n"
+                f"Available Nested Toolsets:\n{toolsets_block}"
             )
         else:
             depth_info = (
-                f"You are a dedicated SubAgent (depth {self.depth}/{self.max_depth}). "
+                f"You are a dedicated SubAgent (depth {self.depth}/{self.max_depth}, model: {self.model_spec.alias}). "
                 "You MUST complete the sub-task yourself using the available tools. "
                 "Delegation is not available: do NOT attempt to call 'spawn_subagent'. "
                 "Always return a concise, well-structured summary of your findings."
@@ -282,13 +309,20 @@ class SubAgent(ISubAgent):
     def run(self, task_description) -> SubAgentResult:
         start_time = time.time()
         tool_calls_made = 0
-        model_alias = ""
+        model_alias = self.model_spec.alias
         finished = False
         # Parallel siblings stream silently; their tokens would interleave.
         echo = self.runtime.echo and not in_worker_thread()
+        # Allow bounded parallel nested SubSubAgents when this SubAgent is not
+        # already executing inside a subagent-worker thread (e.g., Remote jobs).
+        sub_workers = 1 if in_worker_thread() else max(int(self.config.get("SUB_CONCURRENCY", 4)), 1)
 
-        self.runtime.emit(f"\n[*] [SubAgent:{self.subagent_id}] Spawned (depth={self.depth}/{self.max_depth})"
-              f" Task: {task_description[:80]}...")
+        self.runtime.emit(
+            f"\n[*] [SubAgent:{self.subagent_id}] Spawned "
+            f"(depth={self.depth}/{self.max_depth}, model='{model_alias}', "
+            f"thinking={self.model_spec.thinking}, effort={self.model_spec.effort})"
+            f" Task: {task_description[:80]}..."
+        )
 
         messages = [{"role": "user", "content": task_description}]
 
@@ -309,28 +343,24 @@ class SubAgent(ISubAgent):
                 payload = {
                     "tools": self.tool_schemas,
                     "messages": attach_media_blocks(messages, self._pending_media_blocks),
-                    "max_tokens": int(self.config.get("MAX_TOKENS", 8000)),
+                    "max_tokens": int(self.model_spec.max_tokens),
                     "system": self.system_prompt
                 }
 
                 self.logger.log_api_call(
-                    f"SUBAGENT:{self.subagent_id} PRE-CALL (Turn {turn+1}, depth={self.depth})",
+                    f"SUBAGENT:{self.subagent_id} PRE-CALL (Turn {turn+1}, depth={self.depth}, model={model_alias})",
                     payload
                 )
 
                 # ----- @par 2. LLM Request -----
 
-                route_info = {}
-                resp, err = self.client.route_request(
+                resp, err = self.client.subagent_request(
+                    model_alias=model_alias,
                     payload=payload,
-                    task_description=self.routing_context.get("task_description", task_description),
-                    toolset_name=self.routing_context.get("toolset_name", "minimal"),
-                    depth=self.routing_context.get("depth", self.depth),
                     stream=True,
                     echo=echo,
-                    route_info=route_info,
+                    log_tag=f"SUBAGENT:{self.subagent_id} -> '{model_alias}' (Turn {turn+1}, depth={self.depth})",
                 )
-                model_alias = route_info.get("alias", model_alias)
 
                 if err:
                     return self._result(task_description, "failed", "", start_time,
@@ -338,7 +368,7 @@ class SubAgent(ISubAgent):
                 # End-if
 
                 self.logger.log_api_call(
-                    f"SUBAGENT:{self.subagent_id} POST-CALL (Turn {turn+1}, depth={self.depth})",
+                    f"SUBAGENT:{self.subagent_id} POST-CALL (Turn {turn+1}, depth={self.depth}, model={model_alias})",
                     resp
                 )
 
@@ -350,10 +380,10 @@ class SubAgent(ISubAgent):
                     break
                 # End-if
 
-                # ----- @par 3. Tool calls (serial inside a SubAgent) -----
+                # ----- @par 3. Tool calls (bounded parallel for top-level SubAgent spawns) -----
 
                 results = []
-                for block, success, output in dispatch_tool_calls(self.tools, resp.content, max_workers=1):
+                for block, success, output in dispatch_tool_calls(self.tools, resp.content, max_workers=sub_workers):
                     tool_calls_made += 1
                     self._record_artifact(block, success)
                     self.runtime.emit(f"    [>] [{self.subagent_id}] tool {block.name}: {'Success' if success else 'Failed'}")

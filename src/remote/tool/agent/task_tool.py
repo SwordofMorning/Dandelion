@@ -26,9 +26,10 @@ class SubmitTaskTool(BaseTool):
      #
      # @return None.
      #
-    def __init__(self, jobs, session_id, workspace, context):
+    def __init__(self, jobs, session_id, workspace, context, registry=None):
         super().__init__(workspace_dir=workspace)
         self.jobs, self.session_id, self.context = jobs, session_id, context
+        self.registry = registry if registry is not None else getattr(jobs, "registry", None)
     # End-def
 
     ##
@@ -41,15 +42,21 @@ class SubmitTaskTool(BaseTool):
     # End-def
 
     ##
-     # @brief Describe the tool capability to the model.
+     # @brief Describe the tool capability and configured SubAgent models to the model.
      #
      # @return Human-readable tool description.
      #
     def get_description(self):
-        return (
-            "Submit background SubAgent work and immediately receive a job_id so the main agent "
-            "stays responsive for live conversation. Completion arrives as a later interrupt event."
+        base = (
+            "Submit background SubAgent work on the selected 'model' and immediately receive a job_id "
+            "so the foreground agent stays responsive for live conversation. Completion or failure "
+            "arrives as a later interrupt event."
         )
+        catalog = self.registry.format_catalog() if self.registry else ""
+        if not catalog:
+            return base
+        # End-if
+        return f"{base}\nAvailable SubAgent models:\n{catalog}"
     # End-def
 
     ##
@@ -58,37 +65,41 @@ class SubmitTaskTool(BaseTool):
      # @return JSON schema dictionary.
      #
     def get_schema(self):
+        aliases = self.registry.aliases() if self.registry else []
+        model_prop = {
+            "type": "string",
+            "description": "Name of the SubAgent model to run this background job.",
+        }
+        if aliases:
+            model_prop["enum"] = aliases
+        # End-if
         return {
             "type": "object",
             "properties": {
+                "model": model_prop,
                 "task_description": {"type": "string"},
                 "role_prompt": {"type": "string"},
                 "toolset": {"type": "string", "enum": list(TOOLSET_REGISTRY)},
             },
-            "required": ["task_description"],
+            "required": ["model", "task_description"],
         }
     # End-def
 
     ##
      # @brief Execute one validated tool action and return its structured outcome.
      #
-     # @param task_description Nonempty natural-language task description.
-     # @param role_prompt System role for the delegated worker.
-     # @param toolset Registered worker toolset name.
-     #
-     # @return (success, payload_or_error) tuple.
-     #
-    def execute(self, task_description, role_prompt="", toolset="full"):
+    def execute(self, model, task_description, role_prompt="", toolset="full"):
         try:
             job = self.jobs.submit(
                 self.session_id,
                 self.workspace_dir,
+                model,
                 task_description,
                 role_prompt,
                 toolset,
                 self.context(),
             )
-            return True, json.dumps({"accepted": True, "job_id": job["id"]})
+            return True, json.dumps({"accepted": True, "job_id": job["id"], "model": job["model"]})
         except (ValueError, RuntimeError) as exc:
             return False, str(exc)
         # End-try
@@ -184,7 +195,7 @@ class TaskControlTool(BaseTool):
         try:
             if action == "list":
                 result = [
-                    {key: job[key] for key in ("id", "status", "task_description", "created_at")}
+                    {key: job[key] for key in ("id", "model", "status", "task_description", "created_at")}
                     for job in self.jobs.store.list_jobs(self.session_id)[:50]
                 ]
             elif action == "get":

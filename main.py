@@ -2,9 +2,10 @@
  # @file main.py
  # @date 2026/08/07
  #
- # @brief Dandelion CLI application entry point.
- # Loads model configuration and workspace sessions, composes Core with terminal
- # runtime callbacks, and starts the interactive command loop.
+ # @brief Dandelion CLI and Remote application entry point.
+ # Dispatches `python main.py remote ...` to the Dandelion Remote lifecycle
+ # manager; otherwise loads local CLI configuration and starts the interactive
+ # command loop.
  #
 
 import sys
@@ -25,10 +26,23 @@ except ImportError:
 # End-try
 
 ##
- # @brief Initialize the shared Core and run the terminal frontend.
+ # @brief Initialize the shared Core and run the terminal frontend, or dispatch
+ # `python main.py remote ...` to the Dandelion Remote lifecycle manager.
+ # @param argv Optional command arguments; None reads sys.argv[1:].
  # @return None.
  #
-def main():
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "remote":
+        try:
+            from src.remote.service import main as remote_main
+        except ImportError:
+            print("[-] FATAL: Dandelion Remote is server-only and not bundled in standalone CLI builds.")
+            sys.exit(1)
+        # End-try
+        sys.exit(remote_main(args[1:]))
+    # End-if
+
     ver = _build_info.VERSION if _build_info else "dev"
     print(f"[>] Initializing Dandelion Project (v{ver})...")
 
