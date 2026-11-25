@@ -342,10 +342,11 @@ class ContextPruner:
      #
      # @param candidate_units List of atomic unit descriptors eligible for pruning.
      # @param focus_hint Optional caller hint describing what can be discarded.
+     # @param model_alias Optional configured SubAgent alias; defaults to main client.
      #
      # @return Mapping of unit_id -> {"action": str, "summary": str}, or None on failure.
      #
-    def _query_prune_subagent(self, candidate_units, focus_hint=""):
+    def _query_prune_subagent(self, candidate_units, focus_hint="", model_alias=None):
         digest_lines = []
         for u in candidate_units:
             tools_str = f" tools={u['tools']}" if u["tools"] else ""
@@ -363,7 +364,17 @@ class ContextPruner:
             "system": PRUNE_SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_prompt}],
         }
-        resp, err = self.client.safe_request(payload, log_tag="CONTEXT PRUNE SUBAGENT")
+        if model_alias:
+            resp, err = self.client.subagent_request(
+                model_alias,
+                payload,
+                stream=False,
+                echo=False,
+                log_tag=f"CONTEXT PRUNE SUBAGENT -> '{model_alias}'",
+            )
+        else:
+            resp, err = self.client.safe_request(payload, log_tag="CONTEXT PRUNE SUBAGENT")
+        # End-if
         if err or resp is None:
             return None
         # End-if
@@ -397,10 +408,12 @@ class ContextPruner:
      # @param keep_recent_units Number of newest closed atomic units to protect.
      # @param in_flight_tail True when the last message is an open assistant tool_use.
      # @param tag Backup archive tag ("prune" or "rollover").
+     # @param model_alias Optional configured SubAgent alias for the pruning call.
      #
      # @return (new_history, stats_dict) tuple.
      #
-    def prune(self, history, focus_hint="", keep_recent_units=4, in_flight_tail=False, tag="prune"):
+    def prune(self, history, focus_hint="", keep_recent_units=4, in_flight_tail=False,
+              tag="prune", model_alias=None):
         if not isinstance(history, list) or len(history) < 4:
             return history, {"status": "skipped", "reason": "History too short to prune."}
         # End-if
@@ -421,7 +434,9 @@ class ContextPruner:
 
         candidates = units[:-keep_recent_units]
         protected = units[-keep_recent_units:]
-        decisions = self._query_prune_subagent(candidates, focus_hint=focus_hint)
+        decisions = self._query_prune_subagent(
+            candidates, focus_hint=focus_hint, model_alias=model_alias
+        )
         if not decisions:
             return history, {
                 "status": "llm_failed",

@@ -33,8 +33,9 @@ You run inside a single blocking event loop woken by four types of interrupts:
   - Use direct tools for quick inspections, fast shell/SSH checks, web searches, media viewing, and memory updates so live conversation stays instant.
   - Delegate heavy or long-running tasks (multi-file code edits, test suites, git/PR workflows, long builds, deep research) via 'submit_task', explicitly selecting 'model' according to the SubAgent model descriptions in 'submit_task'.
   - When orchestrating multiple background tasks, call 'plan_tool' first to validate 'model', 'toolset', 'depends_on', and disjoint 'target_files'. Background SubAgents (when 'SUB_DEPTH >= 2') also carry 'plan_tool' and 'spawn_subagent' to decompose and execute nested sub-tasks autonomously.
-4. Context Hygiene:
+4. Context Hygiene & Session Rollover (Let LLM Decide):
   - Never dump massive raw logs, minified bundles, or giant HTML/binary payloads directly into the Main Agent context. Isolate heavy data processing inside 'submit_task' or scripts, and call 'prune_context' after large inspections.
+  - Session rotation is never forced on message arrival: decide when to call 'prune_context(focus_hint=..., rollover=true, model=...)' yourself (for example during a scheduled maintenance wakeup or after completing a major milestone).
 5. Background Job & Task Control:
   - 'submit_task' returns a job_id immediately and emits [Interrupt: Background Job Finished] upon completion or failure.
   - Use 'task_control' to inspect status, cancel jobs, or schedule future wakeups (using timezone-aware ISO8601 'due_at').
