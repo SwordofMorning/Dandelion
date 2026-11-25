@@ -2,20 +2,16 @@
  # @file src/remote/execution/loop.py
  # @date 2026/10/27
  #
- # @brief Single blocking interrupt loop and daily session rollover for Dandelion Remote.
+ # @brief Single blocking interrupt loop for Dandelion Remote.
  # Blocks on a condition variable until woken by user messages, CLI session syncs,
- # completed background jobs, or due schedule timers, and performs daily session
- # rotation with SubAgent-pruned context inheritance.
+ # completed background jobs, or due schedule timers, leaving session pruning and
+ # rollover timing to the LLM via explicit tool calls ("Let LLM Decide").
  #
 
-import copy
 import datetime as dt
 import json
-import os
-import shutil
 import threading
 
-from src.core.agent.prune import ContextPruner
 from src.core.utils.logging.backup import SessionBackup
 
 
@@ -42,7 +38,6 @@ class RemoteLoop:
         self.backups = backups
         self._stop = threading.Event()
         self._agents = {}
-        self._session_dates = {}
         self._active_session = None
         self._active_kind = None
         self._active_event_id = None
@@ -138,69 +133,9 @@ class RemoteLoop:
             if agent is None:
                 agent = self.agent_factory(session_id)
                 self._agents[session_id] = agent
-                meta = agent.session.get_current_meta() if agent.session.current_session_dir else {}
-                created_day = str(meta.get("created_at", ""))[:10]
-                self._session_dates[session_id] = created_day or dt.date.today().isoformat()
             # End-if
             return agent
         # End-with
-    # End-def
-
-    ##
-     # @brief Perform daily session rollover with SubAgent-pruned history inheritance.
-     #
-     # @param agent Active conversation MyAgent instance.
-     # @param session_id Conversation identifier.
-     #
-     # @return None.
-     #
-    def _check_daily_rollover(self, agent, session_id):
-        today = dt.date.today().isoformat()
-        last_day = self._session_dates.get(session_id, today)
-        if last_day == today:
-            return
-        # End-if
-        if not agent.history:
-            self._session_dates[session_id] = today
-            return
-        # End-if
-
-        old_dir = agent.session.current_session_dir
-        old_history = copy.deepcopy(agent.history)
-        old_state_file = os.path.join(old_dir, "task_state.json") if old_dir else None
-
-        # Prepare pruned history BEFORE creating today's session so an interrupted
-        # model call never leaves an empty new session behind.
-        pruner = ContextPruner(
-            safe_client=agent.client,
-            session_manager=agent.session,
-            runtime=agent.runtime,
-            config=agent.config,
-        )
-        pruned_history, _ = pruner.prune(
-            old_history,
-            focus_hint=(
-                f"Daily session rollover ({last_day} -> {today}): fold verbose tool outputs "
-                "and drop completed transient turns while preserving active context and tasks."
-            ),
-            keep_recent_units=6,
-            in_flight_tail=False,
-            tag="daily_rollover",
-        )
-
-        # Create today's new session branch and immediately populate history + task_state.
-        agent.session.create_session(name=f"dr_{today}")
-        new_dir = agent.session.current_session_dir
-        if old_state_file and os.path.exists(old_state_file) and new_dir:
-            try:
-                shutil.copy2(old_state_file, os.path.join(new_dir, "task_state.json"))
-            except OSError:
-                pass
-            # End-try
-        # End-if
-        agent.session.save_history(pruned_history)
-        agent.reload_history()
-        self._session_dates[session_id] = today
     # End-def
 
     ##
@@ -307,7 +242,6 @@ class RemoteLoop:
         tg = getattr(getattr(self.notify, "__self__", None), "telegram", None)
         chat_id = session_id.split(":", 1)[1] if session_id.startswith("telegram:") else ""
         try:
-            self._check_daily_rollover(agent, session_id)
             repair_interrupted_tools(agent)
 
             backup = SessionBackup(agent.session.current_session_dir)
