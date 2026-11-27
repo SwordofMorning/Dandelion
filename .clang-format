@@ -1,0 +1,82 @@
+# Basic settings
+Language: Cpp
+BasedOnStyle: Microsoft
+IndentWidth: 4
+ColumnLimit: 180
+UseTab: Never
+
+# Brace settings
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  IndentBraces: false
+  AfterExternBlock: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+# Constructor initializer list settings
+BreakConstructorInitializersBeforeComma: false
+BreakConstructorInitializers: BeforeComma
+ConstructorInitializerIndentWidth: 4
+AllowAllConstructorInitializersOnNextLine: true
+ConstructorInitializerAllOnOneLineOrOnePerLine: false
+
+# Comment settings
+SpacesBeforeTrailingComments: 1
+SpacesInLineCommentPrefix:
+  Minimum: 1
+  Maximum: 1
+
+# Include settings
+SortIncludes: false
+
+# Extern "C" settings
+IndentExternBlock: NoIndent
+
+# Single-line if statement settings (multiple styles allowed; kept disabled)
+# AllowShortIfStatementsOnASingleLine: true
+# AllowShortBlocksOnASingleLine: true
+# AllowShortCaseLabelsOnASingleLine: false
+
+# Other settings
+AlignAfterOpenBracket: Align
+AllowShortFunctionsOnASingleLine: None
+BinPackParameters: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+PointerAlignment: Left
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInCStyleCastParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+AlwaysBreakBeforeMultilineStrings: true
+AllowAllParametersOfDeclarationOnNextLine: false
+
+# Doxygen comment settings
+CommentPragmas: '^ IWYU pragma:'
+
+# Preserve spacing after asterisks in Doxygen comments
+DerivePointerAlignment: false
+ReflowComments: false
+
+# Access modifier alignment
+AccessModifierOffset: -4
+
+# Ternary operator settings
+BreakBeforeTernaryOperators: false
+AlignOperands: DontAlign
+
+# Preserve conditional lambda formatting
+AllowShortLambdasOnASingleLine: Empty

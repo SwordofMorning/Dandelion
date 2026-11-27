@@ -11,11 +11,8 @@ from .printer import CLIPrinter
 from .cli import InteractiveCLI
 from .sysprompt import CLIPromptBuilder
 
-cli_printer = CLIPrinter()
-
 __all__ = [
     "CLIPrinter",
     "InteractiveCLI",
     "CLIPromptBuilder",
-    "cli_printer",
 ]

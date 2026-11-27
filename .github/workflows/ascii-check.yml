@@ -13,8 +13,8 @@ permissions:
 
 jobs:
   # 1. ASCII Check Job: gate all PRs and pushes targeting master.
-  #    Master must stay ASCII-Only: any non-ASCII character found under
-  #    src/ fails this job and blocks the merge / push.
+  #    Master must stay ASCII-Only across all Python and C/C++ sources
+  #    (src/, packages/dandelion-core/src/, mk/, main.py).
   ascii-check:
     name: ASCII-Only Check
     runs-on: ubuntu-latest
@@ -29,7 +29,6 @@ jobs:
       - name: ASCII-Only Check
         shell: bash
         run: |
-          # test/ascii_check.py prints findings in clang-format style
-          # (<path>:<line>:<col>: non-ASCII 'x' (U+XXXX)) and exits 1
-          # when any is found; a non-zero exit fails this job.
-          python3 test/ascii_check.py src/
+          # mk/make.py ascii invokes mk.lib.ascii_check across .py/.cpp/.hpp/.h
+          # and exits 1 when any non-ASCII character is detected.
+          python3 mk/make.py ascii

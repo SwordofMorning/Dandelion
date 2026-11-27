@@ -19,7 +19,7 @@ import uuid
 from urllib.parse import quote
 
 import requests
-from src.core.tool.base_tool import BaseTool
+from dandelion_core.tool.base_tool import BaseTool
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 DOC_MIME = "application/vnd.google-apps.document"

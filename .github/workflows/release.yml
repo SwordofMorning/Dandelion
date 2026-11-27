@@ -14,16 +14,18 @@ permissions:
   contents: read
 
 jobs:
-  # 1. Meta Job: Calculate version number and tag information
+  # 1. Meta Job: Calculate release tag and PEP 440 package version
   meta:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.set_tag.outputs.tag }}
+      pep440_version: ${{ steps.set_tag.outputs.pep440_version }}
       is_release: ${{ steps.set_tag.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - id: set_tag
         env:
           # Pass untrusted ref through env to avoid shell injection via
@@ -38,126 +40,354 @@ jobs:
             tag="v0.0.0-dev-$(date +%y%m%d)-$(git rev-parse --short HEAD)"
           fi
 
-          # If it is not triggered by a formal release, add the ci suffix.
+          # Normalize PEP 440 version for dandelion-core wheels/sdist.
           if [ "$is_release" != "true" ]; then
-             tag="${tag}-ci"
+            tag="${tag}-ci"
+            pep440="0.0.0.dev$(date +%Y%m%d%H%M)"
+          else
+            pep440="$(TAG_RAW="$tag" python3 -c '
+          import os, re
+          raw = os.environ["TAG_RAW"].lstrip("v")
+          m = re.match(r"^(\d+\.\d+\.\d+)(?:[-.]?(a|alpha|b|beta|rc)\.?(\d+))?$", raw, re.I)
+          if m:
+              base, pre, num = m.groups()
+              if pre:
+                  pre_map = {"a": "a", "alpha": "a", "b": "b", "beta": "b", "rc": "rc"}
+                  print(f"{base}{pre_map[pre.lower()]}{num}")
+              else:
+                  print(base)
+          else:
+              print(raw)
+          ')"
           fi
 
           echo "Computed Tag: $tag"
+          echo "Computed PEP 440 Version: $pep440"
           echo "Is Release: $is_release"
 
-          echo "tag=$tag" >> $GITHUB_OUTPUT
-          echo "is_release=$is_release" >> $GITHUB_OUTPUT
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "pep440_version=$pep440" >> "$GITHUB_OUTPUT"
+          echo "is_release=$is_release" >> "$GITHUB_OUTPUT"
 
-  # 2. Build Job: Build Matrix
-  #    - Windows x86_64      : native host runner (unchanged behavior)
-  #    - Linux x86_64        : per-distro Docker builds (glibc compatibility)
-  #    - Linux arm64 (aarch64): same Docker flow on the arm64 runner
-  #
-  # WHY DOCKER PER DISTRO: a Nuitka standalone binary links against the
-  # build machine's glibc. Building on a newer distro bakes in newer
-  # GLIBC_x.y symbols, so the artifact fails on older distros with
-  # "version `GLIBC_x.y' not found". Building inside the target distro's
-  # own container guarantees the artifact only needs that distro's glibc.
-  #
-  # GitHub-hosted runner images only cover 22.04/24.04/(26.04 preview), so
-  # older targets (18.04/20.04) MUST be built in Docker containers anyway.
-  # Using Docker for ALL Linux targets keeps the pipeline deterministic.
-  # BOTH architectures get the full 18.04-26.04 distro list; the runner
-  # provides the architecture (x86_64 vs arm64 hardware), the container
-  # provides the distro version.
-  build:
+  # 2a. Build precompiled dandelion-core wheels (Linux manylinux2014 x64/arm64 + Windows AMD64)
+  build-core-wheels:
     needs: meta
-    name: Build ${{ matrix.os_name }} ${{ matrix.arch }}${{ matrix.distro_label }}
+    name: Wheel dandelion-core (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Windows x86_64 (host runner, Nuitka + MSVC/clcache)
+          - label: linux-x86_64
+            os: ubuntu-latest
+            cibw_archs: x86_64
+          - label: linux-aarch64
+            os: ubuntu-24.04-arm
+            cibw_archs: aarch64
+          - label: win-amd64
+            os: windows-latest
+            cibw_archs: AMD64
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache compiled static zlib + OpenSSL 3.0 + minimal HTTP/HTTPS libcurl 8.11
+      - name: Cache static OpenSSL/libcurl (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: .wheel-deps-cache
+          key: static-curl-v1-${{ matrix.cibw_archs }}-${{ hashFiles('mk/scripts/build_curl_static.sh') }}
+
+      - name: Configure Linux Docker mounts for cibuildwheel
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "${{ github.workspace }}/.wheel-deps-cache"
+          echo "CIBW_CONTAINER_ENGINE=name: docker; create_args: -v ${{ github.workspace }}:/repo:ro -v ${{ github.workspace }}/.wheel-deps-cache:/opt/dandelion-deps" >> "$GITHUB_ENV"
+
+      - name: Sync dandelion-core version with release tag (PEP 440)
+        if: needs.meta.outputs.is_release == 'true'
+        shell: bash
+        env:
+          PEP440_VER: ${{ needs.meta.outputs.pep440_version }}
+        run: |
+          python3 -c '
+          import os, pathlib, re
+          p = pathlib.Path("packages/dandelion-core/pyproject.toml")
+          ver = os.environ["PEP440_VER"]
+          text = p.read_text(encoding="utf-8")
+          updated = re.sub(r"(?m)^version\s*=\s*\"[^\"]+\"", f"version = \"{ver}\"", text, count=1)
+          p.write_text(updated, encoding="utf-8")
+          '
+
+      - name: Build wheels with cibuildwheel
+        uses: pypa/cibuildwheel@v3
+        with:
+          package-dir: packages/dandelion-core
+          output-dir: dist-wheels
+        env:
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+
+      # Verify Linux wheels inside Ubuntu 18.04, AlmaLinux 8 (CentOS 8), and Ubuntu 24.04.
+      # uv is downloaded on the HOST runner and bind-mounted into each container so
+      # `apt-get install curl` is NEVER executed and libcurl4 stays genuinely absent!
+      - name: Verify Linux wheels on Ubuntu 18.04, AlmaLinux 8, and Ubuntu 24.04
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.11.16"
+          UV_ARCH="$(uname -m)"
+          case "$UV_ARCH" in
+            x86_64)  UV_TARGET="x86_64-unknown-linux-gnu" ;;
+            aarch64) UV_TARGET="aarch64-unknown-linux-musl" ;;
+            *) echo "[-] Unsupported arch: $UV_ARCH"; exit 1 ;;
+          esac
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"
+          rm -rf /tmp/uv-host
+          mkdir -p /tmp/uv-host
+          curl -fsSL --max-time 300 -o /tmp/uv-host/uv.tar.gz "$UV_URL"
+          curl -fsSL --max-time 60 -o /tmp/uv-host/uv.tar.gz.sha256 "${UV_URL}.sha256"
+          EXPECTED="$(awk '{print $1}' /tmp/uv-host/uv.tar.gz.sha256)"
+          ACTUAL="$(sha256sum /tmp/uv-host/uv.tar.gz | awk '{print $1}')"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "[-] uv checksum mismatch: expected $EXPECTED, got $ACTUAL"
+            exit 1
+          fi
+          tar -xzf /tmp/uv-host/uv.tar.gz -C /tmp/uv-host
+          UV_BIN="$(find /tmp/uv-host -type f -name uv | head -1)"
+          install -m 755 "$UV_BIN" /tmp/uv-host/uv-bin
+
+          VERIFY_PY=$(cat <<'PYEOF'
+          import os, subprocess, sys, tempfile
+          import dandelion_core
+          from dandelion_core.agent.sysprompt import BasePromptBuilder
+          from dandelion_core.tool.shell.ssh_tool import SSHTool
+          from dandelion_core.utils.llm_provider import _native, create_provider
+
+          so_path = os.path.abspath(_native.__file__)
+          assert so_path.startswith(os.path.abspath(sys.prefix)), f"_native outside venv: {so_path}"
+
+          # Verify zero dynamic link to libcurl/libssl/libcrypto/libnss
+          ldd_out = subprocess.check_output(["ldd", so_path], text=True)
+          for forbidden in ("libcurl", "libssl", "libcrypto", "libnss"):
+              assert forbidden not in ldd_out, f"Unexpected dynamic link {forbidden}: {ldd_out}"
+
+          # Verify packaged remote.md loads via importlib.resources outside repo
+          class _ProbePrompt(BasePromptBuilder):
+              def build(self):
+                  return self._load_sysprompt_file("remote.md")
+
+          with tempfile.TemporaryDirectory() as tmp:
+              old_cwd = os.getcwd()
+              os.chdir(tmp)
+              try:
+                  text = _ProbePrompt(None, None, {}, workspace_dir=tmp).build()
+                  assert text and "Dandelion Remote" in text, "remote.md resource missing"
+                  ssh = SSHTool(workspace_dir=tmp)
+                  kh = ssh._known_hosts_file()
+                  assert os.path.abspath(kh).startswith(os.path.abspath(os.path.join(tmp, ".env"))), kh
+              finally:
+                  os.chdir(old_cwd)
+
+          # Verify all 5 protocols instantiate cleanly
+          for sdk in ("Message", "Chat Completions", "Responses", "Generate Content", "Interactions"):
+              p = create_provider(sdk, api_key="sk-test", base_url="https://example.com", model_id="test-model")
+              assert p is not None
+
+          # Verify TLS CA auto-detection works without SSL_CERT_FILE
+          for k in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
+              os.environ.pop(k, None)
+          p = create_provider("Chat Completions", api_key="sk-test", base_url="https://pypi.org", model_id="test")
+          _, err = p.safe_request({"messages": [{"role": "user", "content": "ping"}], "max_tokens": 1})
+          err_s = str(err or "").lower()
+          for tls_bad in ("ca cert", "certificate verify failed", "peer failed verification", "cacert"):
+              assert tls_bad not in err_s, f"TLS CA verification failed: {err_s}"
+
+          img_name = os.environ.get("VERIFY_IMAGE", "")
+          print(f"[+] PASS Python {sys.version_info.major}.{sys.version_info.minor} on {img_name}: {so_path}")
+          PYEOF
+          )
+          export VERIFY_PY
+
+          for img in ubuntu:18.04 almalinux:8 ubuntu:24.04; do
+            echo "=== Verifying manylinux2014 wheel inside ${img} (${UV_ARCH}) ==="
+            docker run --rm \
+              -v "${{ github.workspace }}/dist-wheels:/wheels:ro" \
+              -v "/tmp/uv-host/uv-bin:/usr/local/bin/uv:ro" \
+              -e "VERIFY_IMAGE=${img}" \
+              -e VERIFY_PY \
+              "$img" bash -euo pipefail -c '
+                if [[ "$VERIFY_IMAGE" == ubuntu:* ]]; then
+                  export DEBIAN_FRONTEND=noninteractive
+                  if ! apt-get update -qq; then
+                    sed -i "s|http://archive.ubuntu.com|http://old-releases.ubuntu.com|g; s|http://security.ubuntu.com|http://old-releases.ubuntu.com|g; s|https://archive.ubuntu.com|https://old-releases.ubuntu.com|g; s|https://security.ubuntu.com|https://old-releases.ubuntu.com|g; s|http://ports.ubuntu.com|http://old-releases.ports.ubuntu.com|g; s|https://ports.ubuntu.com|https://old-releases.ports.ubuntu.com|g" /etc/apt/sources.list
+                    apt-get update -qq
+                  fi
+                  # Install ONLY ca-certificates; libcurl4 must remain absent!
+                  apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null
+                  if dpkg -s libcurl4 >/dev/null 2>&1 || dpkg -s libcurl4t64 >/dev/null 2>&1; then
+                    echo "[-] FATAL: libcurl4 is installed in $VERIFY_IMAGE; container test is invalid"
+                    exit 1
+                  fi
+                  echo "[+] Confirmed libcurl4/libcurl4t64 is NOT installed in $VERIFY_IMAGE"
+                fi
+
+                export UV_PYTHON_INSTALL_DIR=/tmp/uv-py
+                # Test cp311 wheel on Python 3.11 AND cp312-abi3 wheel on Python 3.13!
+                uv python install 3.11 3.13
+                for pyver in 3.11 3.13; do
+                  echo "--- Testing wheel under Python ${pyver} in ${VERIFY_IMAGE} ---"
+                  uv venv "/tmp/venv-${pyver}" --python "${pyver}"
+                  uv pip install --python "/tmp/venv-${pyver}/bin/python" \
+                    --find-links /wheels --only-binary=dandelion-core dandelion-core
+                  "/tmp/venv-${pyver}/bin/python" -I -c "$VERIFY_PY"
+                done
+              '
+          done
+
+      - name: Set up Python for Windows wheel verification
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify Windows wheel in isolated venv
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/win-wheel-verify
+          /tmp/win-wheel-verify/Scripts/python.exe -m pip install --find-links dist-wheels --only-binary=dandelion-core dandelion-core
+          /tmp/win-wheel-verify/Scripts/python.exe -I -c '
+          import os, sys, tempfile
+          from dandelion_core.agent.sysprompt import BasePromptBuilder
+          from dandelion_core.tool.shell.ssh_tool import SSHTool
+          from dandelion_core.utils.llm_provider import _native, create_provider
+
+          pyd_path = os.path.abspath(_native.__file__)
+          assert pyd_path.startswith(os.path.abspath(sys.prefix)), pyd_path
+
+          class _ProbePrompt(BasePromptBuilder):
+              def build(self):
+                  return self._load_sysprompt_file("remote.md")
+
+          with tempfile.TemporaryDirectory() as tmp:
+              text = _ProbePrompt(None, None, {}, workspace_dir=tmp).build()
+              assert text and "Dandelion Remote" in text
+              ssh = SSHTool(workspace_dir=tmp)
+              assert os.path.abspath(ssh._known_hosts_file()).startswith(os.path.abspath(os.path.join(tmp, ".env")))
+
+          for sdk in ("Message", "Chat Completions", "Responses", "Generate Content", "Interactions"):
+              assert create_provider(sdk, api_key="sk-test", base_url="https://example.com", model_id="test") is not None
+          print("[+] Windows wheel verification PASS:", pyd_path)
+          '
+
+      - name: Upload dandelion-core wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-wheels-${{ matrix.label }}
+          path: dist-wheels/*.whl
+
+  # 2b. Build dandelion-core source distribution (sdist)
+  build-core-sdist:
+    needs: meta
+    name: Sdist dandelion-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Sync dandelion-core version with release tag (PEP 440)
+        if: needs.meta.outputs.is_release == 'true'
+        env:
+          PEP440_VER: ${{ needs.meta.outputs.pep440_version }}
+        run: |
+          python3 -c '
+          import os, pathlib, re
+          p = pathlib.Path("packages/dandelion-core/pyproject.toml")
+          ver = os.environ["PEP440_VER"]
+          text = p.read_text(encoding="utf-8")
+          updated = re.sub(r"(?m)^version\s*=\s*\"[^\"]+\"", f"version = \"{ver}\"", text, count=1)
+          p.write_text(updated, encoding="utf-8")
+          '
+
+      - name: Build sdist
+        run: |
+          python -m pip install --upgrade build
+          python -m build --sdist --outdir dist-sdist packages/dandelion-core
+
+      - name: Upload dandelion-core sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-sdist
+          path: dist-sdist/*.tar.gz
+
+  # 3. Publish dandelion-core to PyPI via OIDC Trusted Publishing on v* tags
+  publish-pypi:
+    needs: [meta, build-core-wheels, build-core-sdist]
+    if: needs.meta.outputs.is_release == 'true'
+    name: Publish dandelion-core to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/dandelion-core
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all dandelion-core distributions
+        uses: actions/download-artifact@v4
+        with:
+          pattern: core-*
+          path: dist-all
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-all/
+          verify-metadata: true
+          skip-existing: false
+
+  # 4. Streamlined 3-Artifact Nuitka Standalone Build Matrix:
+  #    - dandelion-win-x86_64     (windows-latest host runner)
+  #    - dandelion-linux-x86_64   (manylinux2014_x86_64: Ubuntu 18.04-26.04 + CentOS 8+)
+  #    - dandelion-linux-aarch64  (manylinux2014_aarch64: Ubuntu 18.04-26.04 + CentOS 8+)
+  build:
+    needs: [meta, build-core-wheels]
+    name: Build dandelion-${{ matrix.os_name }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - os: windows-latest
             os_name: win
             arch: x86_64
             build_mode: host
-            distro: ""
-            distro_label: ""
-          # Linux x86_64: one Docker build per supported Ubuntu version.
-          # ubuntu:18.04/20.04 are EOL but their containers still work;
-          # docker-build.sh falls back to old-releases.ubuntu.com for apt.
+            docker_image: ""
+            wheel_artifact: core-wheels-win-amd64
           - os: ubuntu-latest
             os_name: linux
             arch: x86_64
             build_mode: docker
-            distro: "18.04"
-            distro_label: "-ubuntu18"
-          - os: ubuntu-latest
-            os_name: linux
-            arch: x86_64
-            build_mode: docker
-            distro: "20.04"
-            distro_label: "-ubuntu20"
-          - os: ubuntu-latest
-            os_name: linux
-            arch: x86_64
-            build_mode: docker
-            distro: "22.04"
-            distro_label: "-ubuntu22"
-          - os: ubuntu-latest
-            os_name: linux
-            arch: x86_64
-            build_mode: docker
-            distro: "24.04"
-            distro_label: "-ubuntu24"
-          - os: ubuntu-latest
-            os_name: linux
-            arch: x86_64
-            build_mode: docker
-            distro: "26.04"
-            distro_label: "-ubuntu26"
-          # Linux arm64: same Docker flow, native arm64 image on the arm
-          # runner (docker pulls the arm64v8 variant automatically). Same
-          # full 18.04-26.04 distro list as x86_64.
+            docker_image: quay.io/pypa/manylinux2014_x86_64
+            wheel_artifact: core-wheels-linux-x86_64
           - os: ubuntu-24.04-arm
             os_name: linux
             arch: aarch64
             build_mode: docker
-            distro: "18.04"
-            distro_label: "-ubuntu18"
-          - os: ubuntu-24.04-arm
-            os_name: linux
-            arch: aarch64
-            build_mode: docker
-            distro: "20.04"
-            distro_label: "-ubuntu20"
-          - os: ubuntu-24.04-arm
-            os_name: linux
-            arch: aarch64
-            build_mode: docker
-            distro: "22.04"
-            distro_label: "-ubuntu22"
-          - os: ubuntu-24.04-arm
-            os_name: linux
-            arch: aarch64
-            build_mode: docker
-            distro: "24.04"
-            distro_label: "-ubuntu24"
-          - os: ubuntu-24.04-arm
-            os_name: linux
-            arch: aarch64
-            build_mode: docker
-            distro: "26.04"
-            distro_label: "-ubuntu26"
-
-    # Nuitka C compilation cache:
-    #   - Windows: Nuitka's built-in clcache (MSVC).
-    #   - Linux  : ccache installed inside the container (.nuitka-cache/ccache).
-    #
-    # IMPORTANT: the Nuitka cache must be keyed PER DISTRO. Compiled objects
-    # carry glibc requirements from their build container; sharing cache
-    # entries across distros would poison the artifacts.
-
+            docker_image: quay.io/pypa/manylinux2014_aarch64
+            wheel_artifact: core-wheels-linux-aarch64
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download prebuilt dandelion-core wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.wheel_artifact }}
+          path: dist-wheels
 
       - name: Set up Python (host mode only)
         if: matrix.build_mode == 'host'
@@ -165,83 +395,73 @@ jobs:
         with:
           python-version: '3.11'
 
-      # === Cache Mechanism for Python Dependencies ===
-      # Exact key (no restore-keys): when pyproject.toml changes, the venv is
-      # rebuilt cleanly so removed packages (e.g. pandas/numpy) never linger.
       - name: Cache Virtual Environment
         id: cache-venv
         uses: actions/cache@v4
         with:
           path: venv
-          key: venv-v2-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}-${{ hashFiles('pyproject.toml') }}
+          key: venv-v3-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'packages/dandelion-core/pyproject.toml') }}
 
-      # Cache standalone Python (docker mode only; separate step so the
-      # Windows host job never touches a missing .uv-python path)
       - name: Cache Standalone Python (uv)
         if: matrix.build_mode == 'docker'
         uses: actions/cache@v4
         with:
           path: .uv-python
-          key: uv-python-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}-3.11
+          key: uv-python-v2-${{ matrix.os_name }}-${{ matrix.arch }}-manylinux2014-3.11
 
-      # Host mode: create (when not restored) and install deps.
+      # Host mode (Windows): install prebuilt cp311 wheel + root deps (preserving prompt-toolkit!)
       - name: Install Dependencies (host runner)
         if: matrix.build_mode == 'host'
         shell: bash
         run: |
+          set -euo pipefail
           if [ ! -x venv/Scripts/python.exe ]; then
             rm -rf venv
             python -m venv venv
           fi
           echo "${{ github.workspace }}/venv/Scripts" >> "$GITHUB_PATH"
           venv/Scripts/python.exe -m pip install --upgrade pip
-          venv/Scripts/python.exe -m pip install -e ".[dev]"
+          WHEEL_FILE="$(ls dist-wheels/dandelion_core-*cp311*.whl | head -1)"
+          echo "[+] Installing prebuilt wheel: $WHEEL_FILE"
+          venv/Scripts/python.exe -m pip install --find-links dist-wheels --only-binary=dandelion-core "$WHEEL_FILE" -e ".[dev]"
+          venv/Scripts/python.exe -c "import prompt_toolkit, dandelion_core; from dandelion_core.utils.llm_provider import _native; print('[+] Verified env:', _native.__file__)"
 
-      # === Cache Nuitka artifacts (analysis + ccache/clcache objects) ===
       - name: Cache Nuitka Artifacts
         uses: actions/cache@v4
         with:
           path: .nuitka-cache
-          key: build-cache-v6-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: build-cache-v7-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'packages/dandelion-core/pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            build-cache-v6-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}-${{ hashFiles('pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
-            build-cache-v6-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}-
+            build-cache-v7-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'packages/dandelion-core/pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-
+            build-cache-v7-${{ matrix.os_name }}-${{ matrix.arch }}-
 
-      # === Make (host mode) ===
       - name: Build with Nuitka (host runner)
         if: matrix.build_mode == 'host'
         shell: bash
         env:
-          # Full computed tag (with dev/ci suffix) becomes the build version:
-          # binary build_info, version.txt and artifact naming all use it.
           DANDELION_VERSION: ${{ needs.meta.outputs.tag }}
         run: |
           python mk/make.py all
 
-      # === Make (docker mode): build inside the target distro container ===
-      - name: Build with Nuitka (Docker ${{ matrix.distro_label }})
+      - name: Build with Nuitka (manylinux2014 Docker)
         if: matrix.build_mode == 'docker'
         env:
-          # Pass the computed tag through env, not shell interpolation:
-          # tag names may legally contain shell metacharacters ($(), ``, ;).
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/work" \
             -e DANDELION_VERSION="$RELEASE_TAG" \
-            -e DANDELION_TARGET="${{ matrix.distro }}" \
+            -e DANDELION_TARGET="manylinux2014" \
             -w /work \
-            "ubuntu:${{ matrix.distro }}" \
-            bash .github/scripts/docker-build.sh
+            "${{ matrix.docker_image }}" \
+            bash mk/scripts/docker_build.sh
 
-      # === Prepare Artifact (name includes the distro suffix) ===
       - name: Prepare Artifact
         shell: bash
         run: |
-          ARTIFACT_NAME="dandelion-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}"
+          ARTIFACT_NAME="dandelion-${{ matrix.os_name }}-${{ matrix.arch }}"
           mkdir -p upload_stage
 
-          # Copy build artifact to upload directory
           if [ -d "build/dandelion" ]; then
             cp -r build/dandelion "upload_stage/$ARTIFACT_NAME"
           else
@@ -250,101 +470,100 @@ jobs:
             exit 1
           fi
 
-          # version.txt is written by mk/make.py with the DANDELION_VERSION tag.
-
-          # Verify top-level layout (hidden dirs and fake entry must survive)
           echo "=== Top-level layout ==="
           ls -la "upload_stage/$ARTIFACT_NAME"
           echo "=== bin/ ==="
           ls "upload_stage/$ARTIFACT_NAME/bin"
 
-      # === Smoke Test (host runner: Windows) ===
-      # PYTHONFAULTHANDLER=1: if the binary crashes (SIGSEGV/SIGABRT), dump
-      # the Python stack so the crashing import is visible in the log.
-      - name: Smoke Test (host runner)
+      - name: Smoke Test (Windows host runner)
         if: matrix.build_mode == 'host'
         shell: bash
         env:
           PYTHONFAULTHANDLER: "1"
         run: |
-          cd "upload_stage/dandelion-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}"
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            OUT=$(timeout 60 cmd //c dandelion.cmd < /dev/null 2>&1 || true)
-          else
-            # Unset LD_LIBRARY_PATH etc.: a foreign libpython from the runner
-            # environment would be loaded before the bundled one and crash.
-            OUT=$(env -u LD_LIBRARY_PATH -u PYTHONHOME -u PYTHONPATH timeout 60 ./dandelion.sh < /dev/null 2>&1 || true)
-          fi
-          echo "$OUT" | head -5
+          rm -rf /tmp/dandelion-smoke
+          cp -r "upload_stage/dandelion-${{ matrix.os_name }}-${{ matrix.arch }}" /tmp/dandelion-smoke
+          cd /tmp/dandelion-smoke
+          OUT=$(timeout 60 cmd //c dandelion.cmd < /dev/null 2>&1 || true)
+          echo "$OUT" | head -8
           echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed: entry did not start"; echo "$OUT"; exit 1; }
           echo "$OUT" | grep -qE "Agent Initialization Successful|Failed to load config" || { echo "[-] Smoke failed: unexpected runtime output"; echo "$OUT"; exit 1; }
-          echo "[+] Smoke OK: fake entry works, runtime path resolved"
+          echo "[+] Smoke OK on Windows"
 
-      # === Smoke Test (docker mode: run INSIDE the target distro) ===
-      # The real proof that the artifact runs on the distro it was built
-      # for. Host runner glibc is newer, so a host-side run would NOT catch
-      # a "GLIBC_x.y not found" regression.
-      - name: Smoke Test (in target container)
+      # Run the SAME single Linux binary inside Ubuntu 18.04, AlmaLinux 8 (CentOS 8),
+      # and Ubuntu 24.04 containers to prove universal glibc >= 2.17 portability.
+      - name: Smoke Test (Ubuntu 18.04, AlmaLinux 8, Ubuntu 24.04 containers)
         if: matrix.build_mode == 'docker'
         env:
           PYTHONFAULTHANDLER: "1"
         run: |
-          cd "upload_stage/dandelion-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}"
-          OUT=$(timeout 120 docker run --rm \
-            -v "$PWD:/app" -w /app \
-            -e PYTHONFAULTHANDLER=1 -e LD_LIBRARY_PATH= -e PYTHONHOME= -e PYTHONPATH= \
-            "ubuntu:${{ matrix.distro }}" ./dandelion.sh < /dev/null 2>&1 || true)
-          echo "$OUT" | head -5
-          echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed on ${{ matrix.distro_label }}"; echo "$OUT"; exit 1; }
-          echo "$OUT" | grep -qE "Agent Initialization Successful|Failed to load config" || { echo "[-] Smoke failed: unexpected runtime output"; echo "$OUT"; exit 1; }
-          echo "[+] Smoke OK on ubuntu:${{ matrix.distro }} (max GLIBC_ verified by execution)"
+          set -euo pipefail
+          SRC_APP="$PWD/upload_stage/dandelion-${{ matrix.os_name }}-${{ matrix.arch }}"
+          for img in ubuntu:18.04 almalinux:8 ubuntu:24.04; do
+            echo "=== Smoke testing dandelion-${{ matrix.os_name }}-${{ matrix.arch }} inside ${img} ==="
+            rm -rf /tmp/dandelion-smoke
+            cp -a "$SRC_APP" /tmp/dandelion-smoke
+            OUT=$(timeout 120 docker run --rm \
+              -v "/tmp/dandelion-smoke:/app" -w /app \
+              -e PYTHONFAULTHANDLER=1 -e LD_LIBRARY_PATH= -e PYTHONHOME= -e PYTHONPATH= \
+              "$img" ./dandelion.sh < /dev/null 2>&1 || true)
+            echo "$OUT" | head -8
+            echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed on ${img}"; echo "$OUT"; exit 1; }
+            echo "$OUT" | grep -qE "Agent Initialization Successful|Failed to load config" || { echo "[-] Smoke failed on ${img}: unexpected runtime output"; echo "$OUT"; exit 1; }
+            echo "[+] Smoke OK on ${img}"
+          done
 
-      - name: Upload Artifact
+      - name: Upload Standalone Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dandelion-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.distro_label }}
+          name: dandelion-${{ matrix.os_name }}-${{ matrix.arch }}
           path: upload_stage
           include-hidden-files: true
 
-  # 3. Release Job: Release And Upload Assets
+  # 5. Release Job: Upload 3 standalone zips + dandelion-core wheels/sdist to GitHub Releases
   release:
-    needs: [meta, build]
+    needs: [meta, build, build-core-wheels, build-core-sdist]
     if: needs.meta.outputs.is_release == 'true'
+    name: Create GitHub Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download All Artifacts
+      - name: Download Standalone Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: dandelion-*
+          path: artifacts/standalone
 
-      - name: Zip Artifacts
+      - name: Download Core Wheels and Sdist
+        uses: actions/download-artifact@v4
+        with:
+          pattern: core-*
+          path: artifacts/dists
+          merge-multiple: true
+
+      - name: Package Release Assets
         env:
-          # Same pattern as the build step: tag via env, not interpolation.
           RELEASE_TAG: ${{ needs.meta.outputs.tag }}
         run: |
+          set -euo pipefail
           RELEASE_DIR="$GITHUB_WORKSPACE/release_assets"
           mkdir -p "$RELEASE_DIR"
-          cd artifacts
 
-          # Iterate through each downloaded artifact directory
+          cd "$GITHUB_WORKSPACE/artifacts/standalone"
           for dir in */; do
-            dir=${dir%*/} # remove trailing slash
-            echo "Processing $dir..."
-
-            # Restore Linux executable bits stripped by upload-artifact
+            dir=${dir%*/}
+            echo "Processing standalone artifact: $dir..."
             chmod +x "$dir"/*/dandelion.sh "$dir"/*/bin/dandelion "$dir/dandelion.sh" "$dir/bin/dandelion" 2>/dev/null || true
-
-            # Construct the final zip name: name-os-arch-version.zip
             zip_name="${dir}-${RELEASE_TAG}.zip"
-
-            # Enter directory and zip content (-y preserves symlinks)
             (cd "$dir" && zip -r -y "$RELEASE_DIR/$zip_name" .)
           done
 
+          cp "$GITHUB_WORKSPACE/artifacts/dists/"*.whl "$RELEASE_DIR/" 2>/dev/null || true
+          cp "$GITHUB_WORKSPACE/artifacts/dists/"*.tar.gz "$RELEASE_DIR/" 2>/dev/null || true
+
           echo "Assets to upload:"
-          ls -l "$RELEASE_DIR"
+          ls -lh "$RELEASE_DIR"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

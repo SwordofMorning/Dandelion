@@ -22,7 +22,7 @@ import threading
 import time
 
 from mk.lib.paths import base_dir, remote_config_path
-from src.core.utils.config import load_remote_config
+from dandelion_core.utils.config import load_remote_config
 from .channels.telegram import Telegram
 from .storage.replies import ChannelHub
 from .storage.backups import BackupStore

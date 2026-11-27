@@ -9,20 +9,9 @@ description = "A shared agent core with CLI and remote assistant interfaces."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Core LLM Providers
-    "anthropic>=0.25.0,<1.0.0",
-    "openai>=2.0.0,<3.0.0",
-    # Utilities
-    "python-dotenv>=1.0.0,<2.0.0",
-    "pyyaml>=6.0,<7.0",
+    "dandelion-core>=0.1.0,<0.2.0",
     "prompt-toolkit>=3.0.0,<4.0.0",
     "requests>=2.31.0,<3.0.0",
-    # Remote Devices (SSH)
-    "paramiko>=3.4.0,<4.0.0",
-    # Excel/Table Processing (openpyxl reads/writes cells, tabulate renders
-    # Markdown; pandas/numpy were removed to shrink every artifact)
-    "openpyxl>=3.0.0,<4.0.0",
-    "tabulate>=0.9.0,<1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -34,10 +23,10 @@ dev = [
     "tzdata",
 ]
 
-# Keep the src.* and mk.* namespaces in wheels.
-# Explicit discovery avoids setuptools treating src/ as an implicit src layout.
+# Keep only the active src.cli*, src.remote*, and mk.* namespaces in wheels.
+# Explicit discovery prevents stale legacy directories under src/ from leaking.
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src", "src.*", "mk", "mk.*"]
+include = ["src", "src.cli*", "src.remote*", "mk", "mk.*"]
 exclude = ["*.egg-info", "*.__pycache__"]
 namespaces = true

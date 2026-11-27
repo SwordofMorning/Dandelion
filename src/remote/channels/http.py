@@ -8,13 +8,14 @@
  # triggers sync_received interrupts.
  #
 
-import hashlib
 import hmac
 import json
 import logging
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+
+from dandelion_core.sync_protocol import key_digest
 
 from ..storage.backups import BackupStore
 
@@ -29,7 +30,7 @@ MAX_BODY = 1024 * 1024
  # @return 32-byte lowercase ASCII hex MD5 digest.
  #
 def _md5_digest_bytes(value):
-    return hashlib.md5(str(value).strip().encode("utf-8")).hexdigest().encode("ascii")
+    return key_digest(value).encode("ascii")
 # End-def
 
 

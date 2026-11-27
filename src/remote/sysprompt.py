@@ -8,7 +8,7 @@
  # tools, pure-filesystem synced session digestion, and self-organizing memory.
  #
 
-from src.core.agent.sysprompt import BasePromptBuilder
+from dandelion_core.agent.sysprompt import BasePromptBuilder
 
 
 ##

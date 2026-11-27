@@ -9,7 +9,7 @@
  #
 
 import json
-from src.core.tool.base_tool import BaseTool
+from dandelion_core.tool.base_tool import BaseTool
 
 
 ##

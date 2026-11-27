@@ -27,7 +27,7 @@ class JobExecutor:
      # @return None.
      #
     def __init__(self, config, data_dir):
-        from src.core.utils import ModelRegistry
+        from dandelion_core.utils import ModelRegistry
 
         self.config = config
         self.data_dir = Path(data_dir)
@@ -47,11 +47,11 @@ class JobExecutor:
      # @return Serialized subagent result dictionary.
      #
     def __call__(self, job, cancel_event):
-        from src.core.agent.memory import MemoryManager
-        from src.core.agent.tools import build_worker_pool
-        from src.core.runtime import Runtime
-        from src.core.utils import SafeLLMClient
-        from src.core.utils.logging.session import SessionManager
+        from dandelion_core.agent.memory import MemoryManager
+        from dandelion_core.agent.tools import build_worker_pool
+        from dandelion_core.runtime import Runtime
+        from dandelion_core.utils import SafeLLMClient
+        from dandelion_core.utils.logging.session import SessionManager
 
         root = self.data_dir / "jobs" / job["id"]
         root.mkdir(parents=True, exist_ok=True)
@@ -174,7 +174,7 @@ class JobManager:
         if not all(isinstance(value, str) for value in (role_prompt, toolset, context)):
             raise ValueError("role_prompt, toolset and context must be text")
         # End-if
-        from src.core.subagent.registry import TOOLSET_REGISTRY
+        from dandelion_core.subagent.registry import TOOLSET_REGISTRY
         if toolset not in TOOLSET_REGISTRY:
             raise ValueError("Unknown worker toolset")
         # End-if

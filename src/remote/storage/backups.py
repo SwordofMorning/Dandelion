@@ -19,10 +19,9 @@ import shutil
 import threading
 import time
 
-REQUIRED_FILES = ("history.log", "meta.log")
-OPTIONAL_FILES = ("task_state.json",)
-ALLOWED_FILES = REQUIRED_FILES + OPTIONAL_FILES
-CHUNK_SIZE = 256 * 1024
+from dandelion_core.sync_protocol import (
+    ALLOWED_FILES, CHUNK_SIZE, OPTIONAL_FILES, REQUIRED_FILES, snapshot_id as _snapshot_id,
+)
 
 
 ##
@@ -93,8 +92,7 @@ class BackupStore:
             checked[name] = {"size": size, "sha256": digest}
         # End-for
         manifest["files"] = checked
-        encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-        snapshot_id = hashlib.sha256(encoded).hexdigest()
+        snapshot_id = _snapshot_id(manifest)
         if payload.get("snapshot_id") != snapshot_id:
             raise ValueError("Backup snapshot digest does not match its manifest")
         # End-if

@@ -8,14 +8,16 @@
  #
 
 import json
-from src.core.tool.base_tool import BaseTool
-from src.core.subagent.registry import TOOLSET_REGISTRY
+
+from dandelion_core.subagent.registry import TOOLSET_REGISTRY
+from dandelion_core.tool.agent.base_delegation_tool import BaseDelegationTool
+from dandelion_core.tool.base_tool import BaseTool
 
 
 ##
  # @brief Submit non-blocking background work from the remote main agent.
  #
-class SubmitTaskTool(BaseTool):
+class SubmitTaskTool(BaseDelegationTool):
     ##
      # @brief Bind the tool to its remote conversation and job manager.
      #
@@ -23,13 +25,14 @@ class SubmitTaskTool(BaseTool):
      # @param session_id Conversation identifier used to scope persisted records.
      # @param workspace Workspace assigned to the task or remote session.
      # @param context Callable returning an immutable snapshot of recent history.
+     # @param registry Optional ModelRegistry for SubAgent model discovery.
      #
      # @return None.
      #
     def __init__(self, jobs, session_id, workspace, context, registry=None):
-        super().__init__(workspace_dir=workspace)
+        resolved_registry = registry if registry is not None else getattr(jobs, "registry", None)
+        super().__init__(workspace_dir=workspace, registry=resolved_registry)
         self.jobs, self.session_id, self.context = jobs, session_id, context
-        self.registry = registry if registry is not None else getattr(jobs, "registry", None)
     # End-def
 
     ##
@@ -52,11 +55,7 @@ class SubmitTaskTool(BaseTool):
             "so the foreground agent stays responsive for live conversation. Completion or failure "
             "arrives as a later interrupt event."
         )
-        catalog = self.registry.format_catalog() if self.registry else ""
-        if not catalog:
-            return base
-        # End-if
-        return f"{base}\nAvailable SubAgent models:\n{catalog}"
+        return self._format_model_catalog(base)
     # End-def
 
     ##
@@ -65,18 +64,12 @@ class SubmitTaskTool(BaseTool):
      # @return JSON schema dictionary.
      #
     def get_schema(self):
-        aliases = self.registry.aliases() if self.registry else []
-        model_prop = {
-            "type": "string",
-            "description": "Name of the SubAgent model to run this background job.",
-        }
-        if aliases:
-            model_prop["enum"] = aliases
-        # End-if
         return {
             "type": "object",
             "properties": {
-                "model": model_prop,
+                "model": self._build_model_property(
+                    "Name of the SubAgent model to run this background job."
+                ),
                 "task_description": {"type": "string"},
                 "role_prompt": {"type": "string"},
                 "toolset": {"type": "string", "enum": list(TOOLSET_REGISTRY)},
@@ -88,7 +81,20 @@ class SubmitTaskTool(BaseTool):
     ##
      # @brief Execute one validated tool action and return its structured outcome.
      #
+     # @param model Target SubAgent model alias.
+     # @param task_description Task description text for the background worker.
+     # @param role_prompt Optional worker system prompt override.
+     # @param toolset Worker toolset name from TOOLSET_REGISTRY.
+     #
+     # @return (success, payload_or_error) tuple.
+     #
     def execute(self, model, task_description, role_prompt="", toolset="full"):
+        if self.registry is not None:
+            ok, err = self._validate_model(model)
+            if not ok:
+                return False, err
+            # End-if
+        # End-if
         try:
             job = self.jobs.submit(
                 self.session_id,

@@ -12,13 +12,14 @@ import datetime as dt
 import json
 import threading
 
-from src.core.utils.logging.backup import SessionBackup
+from dandelion_core.host import BaseAgentHost
+from dandelion_core.utils.logging.backup import SessionBackup
 
 
 ##
  # @brief Single blocking interrupt loop serializing main-agent execution.
  #
-class RemoteLoop:
+class RemoteLoop(BaseAgentHost):
     ##
      # @brief Bind lifecycle storage, worker execution, agent construction and notifications.
      #
@@ -31,6 +32,7 @@ class RemoteLoop:
      # @return None.
      #
     def __init__(self, store, jobs, agent_factory, notify, backups=None):
+        super().__init__()
         self.store = store
         self.jobs = jobs
         self.agent_factory = agent_factory
@@ -42,6 +44,26 @@ class RemoteLoop:
         self._active_kind = None
         self._active_event_id = None
         self._agents_lock = threading.RLock()
+    # End-def
+
+    ##
+     # @brief Resolve the TurnInterrupt controller owned by a conversation agent's runtime.
+     #
+     # @param agent Conversation agent instance or None.
+     #
+     # @return TurnInterrupt controller or None.
+     #
+    @staticmethod
+    def _get_interrupt(agent):
+        if agent is None:
+            return None
+        # End-if
+        runtime = getattr(agent, "runtime", None)
+        interrupt = getattr(runtime, "interrupt", None)
+        if interrupt is not None:
+            return interrupt
+        # End-if
+        return getattr(agent, "_remote_cancel_event", None)
     # End-def
 
     ##
@@ -85,7 +107,7 @@ class RemoteLoop:
                 if (kind == "message" and self._active_kind in ("message", "sync_received")) or (
                         kind == "sync_received" and self._active_kind == "sync_received"):
                     agent = self._agents.get(target)
-                    cancel = getattr(agent, "_remote_cancel_event", None)
+                    cancel = self._get_interrupt(agent)
                     if cancel is not None and hasattr(cancel, "request"):
                         cancel.request("user_preempt", mode="stop")
                     # End-if
@@ -107,7 +129,7 @@ class RemoteLoop:
         with self.store.changed, self._agents_lock:
             cancelled_pending = self.store.cancel_pending_events(str(session_id)) > 0
             agent = self._agents.get(str(session_id))
-            cancel_event = getattr(agent, "_remote_cancel_event", None)
+            cancel_event = self._get_interrupt(agent)
             if cancel_event is not None:
                 if hasattr(cancel_event, "request"):
                     cancel_event.request("user_cancel", mode="rollback")
@@ -215,8 +237,7 @@ class RemoteLoop:
      # @return (completed_turn, error_notice_or_none) tuple.
      #
     def _handle(self, event):
-        from src.core.agent.runner import run_agent_loop
-        from .agent import repair_interrupted_tools
+        from dandelion_core.agent.runner import run_agent_loop
 
         if event["kind"] == "job_done" and event["payload"].get("status") in ("cancelled", "interrupted"):
             payload = event["payload"]
@@ -230,7 +251,7 @@ class RemoteLoop:
         session_id = str(event["session_id"])
         with self._agents_lock:
             agent = self._agent(session_id)
-            cancel = getattr(agent, "_remote_cancel_event", None)
+            cancel = self._get_interrupt(agent)
             if self._active_event_id != event.get("id") and cancel is not None:
                 cancel.clear()
             # End-if
@@ -242,7 +263,7 @@ class RemoteLoop:
         tg = getattr(getattr(self.notify, "__self__", None), "telegram", None)
         chat_id = session_id.split(":", 1)[1] if session_id.startswith("telegram:") else ""
         try:
-            repair_interrupted_tools(agent)
+            self.repair_interrupted_tools(agent)
 
             backup = SessionBackup(agent.session.current_session_dir)
             backup_ok, _ = backup.create("remote_turn", history_messages=len(agent.history))
@@ -295,7 +316,7 @@ class RemoteLoop:
         if not ok:
             mode = cancel.mode() if cancel is not None and hasattr(cancel, "mode") else "rollback"
             if mode == "stop":
-                agent.stop_turn("[Turn paused at step boundary: preempted by newer event.]")
+                self.stop_active_turn("[Turn paused at step boundary: preempted by newer event.]", agent=agent)
                 with self.store.changed, self._agents_lock:
                     cur_mode = cancel.mode() if cancel is not None and hasattr(cancel, "mode") else "rollback"
                     if cur_mode == "stop":
@@ -308,7 +329,7 @@ class RemoteLoop:
                 # End-with
             # End-if
             if backup_ok:
-                agent.rollback_turn(backup=backup, trigger="remote_cancel")
+                self.rollback_active_turn(backup, "remote_cancel", agent=agent)
             # End-if
             if self.backups is not None:
                 for s_id, snap_id in sync_entries:
@@ -346,7 +367,7 @@ class RemoteLoop:
                 with self._agents_lock:
                     sess = str(event["session_id"])
                     existing = self._agents.get(sess)
-                    cancel = getattr(existing, "_remote_cancel_event", None)
+                    cancel = self._get_interrupt(existing)
                     if cancel is not None:
                         cancel.clear()
                     # End-if
@@ -390,7 +411,7 @@ class RemoteLoop:
         self._stop.set()
         with self._agents_lock:
             for agent in self._agents.values():
-                cancel = getattr(agent, "_remote_cancel_event", None)
+                cancel = self._get_interrupt(agent)
                 if cancel is not None:
                     cancel.set()
                 # End-if

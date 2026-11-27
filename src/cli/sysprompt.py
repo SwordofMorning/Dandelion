@@ -7,7 +7,7 @@
  # SubAgent orchestration, and terminal-friendly plain-text formatting.
  #
 
-from src.core.agent.sysprompt import BasePromptBuilder
+from dandelion_core.agent.sysprompt import BasePromptBuilder
 
 
 ##

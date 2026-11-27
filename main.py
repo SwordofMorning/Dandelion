@@ -12,10 +12,10 @@ import sys
 
 from mk.lib.paths import base_dir, config_path, log_dir
 
-from src.core.utils.config import load_api_config
-from src.core.utils.logging import SessionManager
+from dandelion_core.utils.config import load_api_config
+from dandelion_core.utils.logging import SessionManager
 from src.cli import InteractiveCLI, CLIPromptBuilder
-from src.core.agent import MyAgent
+from dandelion_core.agent import MyAgent
 from src.cli.runtime import cli_runtime
 
 # Build metadata
