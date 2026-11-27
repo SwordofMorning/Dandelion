@@ -65,9 +65,15 @@ class SessionBackup:
      # @brief Constructor.
      #
      # @param session_dir Current session directory (.log/sess_xx), may be None.
+     # @param session_id Optional session identifier; defaults to basename(session_dir).
      #
-    def __init__(self, session_dir):
+    def __init__(self, session_dir, session_id=None):
         self.session_dir = session_dir
+        self.session_id = (
+            session_id
+            if session_id is not None
+            else (os.path.basename(os.path.normpath(session_dir)) if session_dir else None)
+        )
         self.backup_dir = os.path.join(session_dir, BACKUP_DIRNAME) if session_dir else None
     # End-def
 
@@ -95,6 +101,7 @@ class SessionBackup:
         try:
             with open(marker, "r", encoding="utf-8") as f:
                 meta = json.load(f)
+            # End-with
         except Exception:
             return False
         # End-try
@@ -162,6 +169,7 @@ class SessionBackup:
             # Marker LAST: it is the only completeness witness (see is_valid).
             meta = {
                 "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                "session_id": self.session_id,
                 "note": note,
                 "items": items,
                 "history_messages": history_messages,

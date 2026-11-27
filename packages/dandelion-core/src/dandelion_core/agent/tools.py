@@ -32,9 +32,10 @@ from ..tool import (
  #
  # @return (worker_tools, main_base_tools) tuple.
  #
-def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager, runtime, host=None, memory_manager=None):
+def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager, runtime,
+                          host=None, memory_manager=None, config_dir=None):
     bash = BashTool(workspace_dir=workspace_dir)
-    skill_loader = LoadSkillTool(skill_manager)
+    skill_loader = LoadSkillTool(skill_manager, workspace_dir=workspace_dir)
     md_editor = MarkdownTool(workspace_dir=workspace_dir)
     read_excel_tool = ReadExcelTool(workspace_dir=workspace_dir)
     write_excel_tool = WriteExcelTool(workspace_dir=workspace_dir)
@@ -45,7 +46,7 @@ def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager,
     edit_tool = EditFileTool(workspace_dir=workspace_dir)
     web_search_tool = WebSearchTool(workspace_dir=workspace_dir, config=config)
     time_tool = TimeTool(workspace_dir=workspace_dir, config=config)
-    ssh_tool = SSHTool(workspace_dir=workspace_dir)
+    ssh_tool = SSHTool(workspace_dir=workspace_dir, config_dir=config_dir)
 
     common_tools = {
         bash.get_name(): bash,
@@ -108,7 +109,8 @@ def _build_worker_catalog(workspace_dir, config, skill_manager, session_manager,
 ##
  # @brief Build an isolated SubAgentPool for a background job without constructing MyAgent.
  #
-def build_worker_pool(config, client, session_manager, workspace_dir, runtime, memory_manager=None):
+def build_worker_pool(config, client, session_manager, workspace_dir, runtime,
+                      memory_manager=None, config_dir=None):
     from .memory import MemoryManager
     if memory_manager is None:
         memory_manager = MemoryManager(
@@ -132,6 +134,7 @@ def build_worker_pool(config, client, session_manager, workspace_dir, runtime, m
         runtime=runtime,
         host=None,
         memory_manager=memory_manager,
+        config_dir=config_dir,
     )
     return SubAgentPool(
         safe_client=client,
@@ -148,7 +151,8 @@ def build_worker_pool(config, client, session_manager, workspace_dir, runtime, m
 ##
  # @brief Build the full main-agent toolset and mount its synchronous SubAgentPool.
  #
-def build_tools(agent):
+def build_tools(agent, config_dir=None):
+    effective_config_dir = config_dir if config_dir is not None else getattr(agent, "config_dir", None)
     worker_tools, main_tools = _build_worker_catalog(
         workspace_dir=agent.workspace_dir,
         config=agent.config,
@@ -157,6 +161,7 @@ def build_tools(agent):
         runtime=agent.runtime,
         host=agent,
         memory_manager=agent.memory,
+        config_dir=effective_config_dir,
     )
 
     state_tool = StateTool(workspace_dir=agent.workspace_dir, session_manager=agent.session)

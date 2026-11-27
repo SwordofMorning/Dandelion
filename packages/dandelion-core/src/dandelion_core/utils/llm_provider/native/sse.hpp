@@ -10,6 +10,7 @@
  */
 
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 
 namespace dandelion
@@ -40,9 +41,15 @@ public:
     static constexpr size_t kMaxRawPrefix = 8192;
 
     /**
+     * @brief Safety ceiling for a single logical SSE line to prevent unbounded memory growth.
+     */
+    static constexpr size_t kMaxLineBytes = 64 * 1024 * 1024;
+
+    /**
      * @brief Feed an incoming chunk of bytes and emit completed SSE events via on_event.
      */
-    template <class F> void Feed(const char* p, size_t n, F&& on_event)
+    template <class F>
+    void Feed(const char* p, size_t n, F&& on_event)
     {
         if (!p || n == 0)
         {
@@ -88,7 +95,8 @@ public:
     /**
      * @brief Flush any buffered trailing line and open event at stream EOF.
      */
-    template <class F> void Finish(F&& on_event)
+    template <class F>
+    void Finish(F&& on_event)
     {
         if (!m_bom_buf.empty())
         {
@@ -100,9 +108,8 @@ public:
         m_pending_cr = false;
         if (!m_line_buf.empty())
         {
-            std::string rest;
-            rest.swap(m_line_buf);
-            ProcessLine(rest, on_event);
+            ProcessLine(m_line_buf, on_event);
+            m_line_buf.clear();
         }
         ProcessLine(std::string(), on_event);
     }
@@ -127,7 +134,8 @@ private:
     /**
      * @brief Split bytes on LF, CRLF, or standalone CR without breaking split CRLF pairs.
      */
-    template <class F> void ProcessBytes(const char* p, size_t n, F&& on_event)
+    template <class F>
+    void ProcessBytes(const char* p, size_t n, F&& on_event)
     {
         if (!m_saw_sse_field && m_raw_prefix.size() < kMaxRawPrefix)
         {
@@ -154,16 +162,14 @@ private:
             char c = p[i];
             if (c == '\n')
             {
-                std::string current;
-                current.swap(m_line_buf);
-                ProcessLine(current, on_event);
+                ProcessLine(m_line_buf, on_event);
+                m_line_buf.clear();
                 ++i;
             }
             else if (c == '\r')
             {
-                std::string current;
-                current.swap(m_line_buf);
-                ProcessLine(current, on_event);
+                ProcessLine(m_line_buf, on_event);
+                m_line_buf.clear();
                 ++i;
                 if (i < n)
                 {
@@ -184,7 +190,12 @@ private:
                 {
                     ++i;
                 }
-                m_line_buf.append(p + start, i - start);
+                size_t add = i - start;
+                if (m_line_buf.size() + add > kMaxLineBytes)
+                {
+                    throw std::runtime_error("SSE line exceeded maximum allowed size.");
+                }
+                m_line_buf.append(p + start, add);
             }
         }
     }
@@ -192,15 +203,16 @@ private:
     /**
      * @brief Parse one logical SSE line and dispatch on blank line separators.
      */
-    template <class F> void ProcessLine(const std::string& line, F&& on_event)
+    template <class F>
+    void ProcessLine(const std::string& line, F&& on_event)
     {
         if (line.empty())
         {
             if (m_has_data)
             {
-                SseEvent ev{m_event, m_data};
-                m_event.clear();
-                m_data.clear();
+                SseEvent ev;
+                ev.event.swap(m_event);
+                ev.data.swap(m_data);
                 m_has_data = false;
                 ++m_event_count;
                 on_event(ev);
@@ -222,7 +234,7 @@ private:
         if (name == "event")
         {
             m_saw_sse_field = true;
-            m_event = value;
+            m_event = std::move(value);
         }
         else if (name == "data")
         {

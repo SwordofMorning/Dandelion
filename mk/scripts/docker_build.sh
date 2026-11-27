@@ -13,9 +13,8 @@
 #     18.04-26.04 AND CentOS 8.2 / AlmaLinux 8+.
 #   - Python 3.11 comes from python-build-standalone (astral/uv), which ships a
 #     glibc 2.17 baseline AND shared libpython3.11.so (--static-libpython=no).
-#   - dandelion-core is installed strictly from the prebuilt cp311 wheel
-#     (static OpenSSL 3.0 + minimal HTTP/HTTPS libcurl 8.11, zero SCons and
-#     zero C++ recompilation inside the Nuitka job).
+#   - dandelion-core is installed strictly from the prebuilt cp311 wheel with
+#     --reinstall-package dandelion-core so cached venvs never keep stale code.
 #   - Installs `-e ".[dev]"` WITHOUT `--no-deps` so root-only dependencies
 #     such as prompt-toolkit are preserved in the standalone artifact.
 #
@@ -28,7 +27,8 @@ restore_ownership() {
   local owner
   owner="$(stat -c '%u:%g' /work)"
   chown -R "$owner" \
-    /work/venv /work/.uv-python /work/.nuitka-cache /work/build /work/mk/lib/build_info.py \
+    /work/venv /work/.uv-python /work/.nuitka-cache /work/build \
+    /work/mk/lib/build_info.py /work/*.egg-info \
     2>/dev/null || true
 }
 trap restore_ownership EXIT
@@ -101,6 +101,7 @@ if [ -n "$WHEEL_FILE" ]; then
   uv pip install --python /work/venv/bin/python \
     --find-links /work/dist-wheels \
     --only-binary=dandelion-core \
+    --reinstall-package dandelion-core \
     "$WHEEL_FILE" \
     -e ".[dev]"
 else

@@ -19,18 +19,20 @@ from pathlib import Path
  #
 class JobExecutor:
     ##
-     # @brief Retain worker configuration and its private data root.
+     # @brief Retain worker configuration, private data root, and operator config dir.
      #
      # @param config Loaded model and routing configuration.
      # @param data_dir Private remote-service data directory.
+     # @param config_dir Optional operator config directory (.env) for SSH devices.yaml/known_hosts.
      #
      # @return None.
      #
-    def __init__(self, config, data_dir):
+    def __init__(self, config, data_dir, config_dir=None):
         from dandelion_core.utils import ModelRegistry
 
         self.config = config
         self.data_dir = Path(data_dir)
+        self.config_dir = config_dir
         self.registry = ModelRegistry(
             config.get("ALL_MODELS", []),
             config.get("SUB_LIST", []),
@@ -47,21 +49,14 @@ class JobExecutor:
      # @return Serialized subagent result dictionary.
      #
     def __call__(self, job, cancel_event):
-        from dandelion_core.agent.memory import MemoryManager
         from dandelion_core.agent.tools import build_worker_pool
-        from dandelion_core.runtime import Runtime
         from dandelion_core.utils import SafeLLMClient
         from dandelion_core.utils.logging.session import SessionManager
+        from ..runtime import RemoteRuntime
 
         root = self.data_dir / "jobs" / job["id"]
         root.mkdir(parents=True, exist_ok=True)
-        runtime = Runtime(
-            output=lambda text: None,
-            cancelled=cancel_event.is_set,
-            approve=lambda action, target, workspace: True,
-            echo=False,
-            sandbox=False,
-        )
+        runtime = RemoteRuntime(cancel_event=cancel_event)
         session = SessionManager(log_dir=str(root))
         client = SafeLLMClient(
             api_key=self.config["ANTHROPIC_API_KEY"],
@@ -83,7 +78,7 @@ class JobExecutor:
             session_manager=session,
             workspace_dir=job["workspace"],
             runtime=runtime,
-            memory_manager=MemoryManager(os.path.join(job["workspace"], "llm", "memory"), session_manager=session, memory_config=self.config.get("MEMORY")),
+            config_dir=self.config_dir,
         )
         task = job["task_description"]
         if job["context"]:

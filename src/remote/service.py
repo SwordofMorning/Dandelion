@@ -170,10 +170,13 @@ def _serve(args, parser, config, store, data_dir, workspace):
         parser.error("Set ALLOWED_CHATS in [Telegram] section of " + str(args.config))
     # End-if
 
+    config_dir = str(Path(args.config).resolve().parent)
     backups = BackupStore(str(data_dir), workspace_dir=workspace)
-    jobs = JobManager(store, JobExecutor(config, str(data_dir)), max_workers=workers)
+    jobs = JobManager(store, JobExecutor(config, str(data_dir), config_dir=config_dir), max_workers=workers)
     hub = ChannelHub(store)
-    factory = make_agent_factory(config, str(data_dir), workspace, jobs, hub=hub, backups=backups)
+    factory = make_agent_factory(
+        config, str(data_dir), workspace, jobs, hub=hub, backups=backups, config_dir=config_dir
+    )
     loop = RemoteLoop(store, jobs, factory, hub.notify, backups=backups)
     server = make_server(host, port, store, jobs, loop, hub, access_key, backups=backups)
     telegram = (

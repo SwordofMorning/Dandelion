@@ -15,8 +15,9 @@
  #   python mk/make.py all        : build standalone executable into build/
  #   python mk/make.py native     : build & install packages/dandelion-core editable
  #   python mk/make.py wheel      : build precompiled dandelion-core wheel into dist/
- #   python mk/make.py ascii      : run ASCII-only check across .py/.cpp/.hpp/.h
- #   python mk/make.py clean      : remove caches, build/, dist/, and empty legacy dirs
+ #   python mk/make.py sdist      : build dandelion-core source distribution into dist/
+ #   python mk/make.py ascii      : run ASCII-only check on code, scripts, and workflows
+ #   python mk/make.py clean      : remove caches, build/, dist/, build_info, egg-info, stale dirs
  #   python mk/make.py version    : print project name and version
  #   python mk/make.py sign       : sign Windows executable (placeholder)
  #   python mk/make.py help       : show this help
@@ -27,6 +28,7 @@ import datetime
 import importlib.util
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -67,8 +69,9 @@ Targets:
   all      : build standalone executable into build/
   native   : build & install packages/dandelion-core native C++ extension
   wheel    : build precompiled dandelion-core .whl into dist/
-  ascii    : run ASCII-only check on src/, packages/dandelion-core/src/, mk/, main.py
-  clean    : remove caches, build/, dist/, and empty legacy src/ directories
+  sdist    : build dandelion-core source distribution (.tar.gz) into dist/
+  ascii    : run ASCII-only check on src/, packages/dandelion-core/, mk/, .github/workflows/, main.py
+  clean    : remove caches, build/, dist/, build_info, egg-info, and empty legacy src/ dirs
   version  : print project name and version
   sign     : sign Windows executable (placeholder, P3)
   help     : show this help
@@ -191,6 +194,32 @@ def _gen_build_info(version):
 
 
 ##
+ # @brief Extract a numeric X.Y.Z(.W) version suitable for Windows PE resources.
+ #
+ # @param version Build version string (may include dev/pre-release suffix).
+ #
+ # @return Pure numeric version string (e.g. "1.6.0").
+ #
+def _extract_numeric_pe_version(version):
+    candidates = (
+        os.environ.get("DANDELION_PE_VERSION", "").strip(),
+        str(version or "").strip(),
+        str(_load_pyproject()["project"].get("version", "")).strip(),
+    )
+    for raw in candidates:
+        if not raw:
+            continue
+        # End-if
+        match = re.match(r"^v?(\d+\.\d+\.\d+(?:\.\d+)?)", raw)
+        if match:
+            return match.group(1)
+        # End-if
+    # End-for
+    return "0.1.0"
+# End-def
+
+
+##
  # @brief Assemble and run the Nuitka standalone build.
  #
  # @param cfg     Build config (ConfigParser).
@@ -221,6 +250,7 @@ def _run_nuitka(cfg, name, version):
         "--include-package=dandelion_core",
         "--include-package-data=dandelion_core",
         "--nofollow-import-to=src.remote",
+        "--include-module=_bisect",
         "--include-module=mk.lib.paths",
         "--include-module=mk.lib.build_info",
         "--assume-yes-for-downloads",
@@ -264,9 +294,9 @@ def _run_nuitka(cfg, name, version):
             cmd.append("--file-description=" + description)
         # End-if
 
-        # PE version resources must stay numeric (x.y.z); use the static
-        # pyproject version, not the CI tag override (e.g. 0.0.0-dev-...).
-        pe_version = _load_pyproject()["project"]["version"]
+        # PE version resources must stay purely numeric (x.y.z[.w]); extract
+        # the numeric base from DANDELION_PE_VERSION / tag / pyproject.toml.
+        pe_version = _extract_numeric_pe_version(version)
 
         cmd += [
             "--product-name=" + name,
@@ -511,8 +541,15 @@ def _copy_stdlib_fallback(bin_dir):
             if spec.submodule_search_locations:
                 src = spec.submodule_search_locations[0]
                 dst = os.path.join(fallback_dir, mod)
-                shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
-            elif spec.origin and spec.origin not in ("built-in", "frozen"):
+                # Restrict stdlib fallback strictly to Python sources (never copy
+                # host lib-dynload *.so/*.pyd binaries with raw host RPATHs).
+                shutil.copytree(
+                    src,
+                    dst,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.so", "*.pyd", "*.dll", "*.dylib"),
+                )
+            elif spec.origin and spec.origin not in ("built-in", "frozen") and spec.origin.endswith(".py"):
                 dst = os.path.join(fallback_dir, os.path.basename(spec.origin))
                 if os.path.exists(dst):
                     copied.add(mod)
@@ -648,11 +685,16 @@ def _postprocess(cfg, name, version):
             src_sub = os.path.join(src_llm_dir, entry_name)
             dst_sub = os.path.join(dst_llm_dir, entry_name)
             if os.path.isdir(src_sub):
+                ignore_patterns = ["__pycache__", ".*"]
+                if entry_name == "sysprompt":
+                    # CLI standalone excludes src.remote; omit Remote-only prompt template.
+                    ignore_patterns.append("remote.md")
+                # End-if
                 shutil.copytree(
                     src_sub,
                     dst_sub,
                     dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns("__pycache__", ".*"),
+                    ignore=shutil.ignore_patterns(*ignore_patterns),
                 )
                 keep = os.path.join(dst_sub, ".keep")
                 if os.path.exists(keep) and len(os.listdir(dst_sub)) > 1:
@@ -693,7 +735,16 @@ def _postprocess(cfg, name, version):
         entry_sh = os.path.join(target_dir, "dandelion.sh")
         content = (
             "#!/bin/sh\n"
-            "SCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+            "SOURCE=\"$0\"\n"
+            "while [ -L \"$SOURCE\" ]; do\n"
+            "    DIR=$(CDPATH= cd -- \"$(dirname -- \"$SOURCE\")\" && pwd)\n"
+            "    TARGET=$(readlink \"$SOURCE\")\n"
+            "    case \"$TARGET\" in\n"
+            "        /*) SOURCE=\"$TARGET\" ;;\n"
+            "        *)  SOURCE=\"$DIR/$TARGET\" ;;\n"
+            "    esac\n"
+            "done\n"
+            "SCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$SOURCE\")\" && pwd)\n"
             "exec \"$SCRIPT_DIR/bin/" + name + "\" \"$@\"\n"
         )
         with open(entry_sh, "w", encoding="ascii", newline="\n") as f:
@@ -860,7 +911,45 @@ def target_wheel():
 
 
 ##
- # @brief Target: run ASCII-only check across Python and C/C++ sources.
+ # @brief Target: build a source distribution (.tar.gz) of packages/dandelion-core into dist/.
+ #
+def target_sdist():
+    cfg = _load_config()
+    core_rel = cfg.get("core", "package_dir", fallback=os.path.join("packages", "dandelion-core"))
+    wheel_rel = cfg.get("core", "wheel_dir", fallback="dist")
+    core_dir = os.path.join(ROOT_DIR, core_rel)
+    out_dir = os.path.join(ROOT_DIR, wheel_rel)
+
+    if not os.path.isdir(core_dir):
+        print("[-] Core package directory not found: " + core_dir)
+        sys.exit(1)
+    # End-if
+
+    if importlib.util.find_spec("build") is None:
+        print("[-] The 'build' package is not installed.")
+        print("    Install with: " + sys.executable + " -m pip install build")
+        sys.exit(1)
+    # End-if
+
+    os.makedirs(out_dir, exist_ok=True)
+    cmd = [sys.executable, "-m", "build", "--sdist", "--outdir", out_dir, core_dir]
+    print("[*] Building dandelion-core sdist into " + os.path.relpath(out_dir, ROOT_DIR) + "/...")
+    print("[*] Executing: " + " ".join(cmd))
+    result = subprocess.run(cmd, cwd=ROOT_DIR)
+    if result.returncode != 0:
+        print("[-] Sdist build failed with exit code " + str(result.returncode))
+        sys.exit(result.returncode)
+    # End-if
+
+    built = sorted(fn for fn in os.listdir(out_dir) if fn.endswith(".tar.gz"))
+    for fn in built:
+        print("[+] Built sdist: " + os.path.join(wheel_rel, fn))
+    # End-for
+# End-def
+
+
+##
+ # @brief Target: run ASCII-only check across Python, C/C++, script, and workflow files.
  #
 def target_ascii():
     from mk.lib.ascii_check import DEFAULT_PATHS, check_paths
@@ -920,6 +1009,25 @@ def target_clean():
         # End-if
     # End-for
 
+    # Remove generated build_info.py and *.egg-info metadata directories.
+    build_info_file = os.path.join(MK_DIR, "lib", "build_info.py")
+    if os.path.isfile(build_info_file):
+        os.remove(build_info_file)
+        print("[+] Removed " + os.path.relpath(build_info_file, ROOT_DIR))
+    # End-if
+    for egg_parent in (ROOT_DIR, os.path.join(ROOT_DIR, core_rel), os.path.join(ROOT_DIR, core_rel, "src")):
+        if not os.path.isdir(egg_parent):
+            continue
+        # End-if
+        for entry_name in sorted(os.listdir(egg_parent)):
+            if entry_name.endswith(".egg-info"):
+                egg_path = os.path.join(egg_parent, entry_name)
+                shutil.rmtree(egg_path, ignore_errors=True)
+                print("[+] Removed " + os.path.relpath(egg_path, ROOT_DIR))
+            # End-if
+        # End-for
+    # End-for
+
     # Remove stale empty legacy directories under src/.
     stale_removed = 0
     for rel in STALE_SRC_DIRS:
@@ -974,6 +1082,7 @@ def main():
         "all": target_all,
         "native": target_native,
         "wheel": target_wheel,
+        "sdist": target_sdist,
         "ascii": target_ascii,
         "clean": target_clean,
         "version": target_version,

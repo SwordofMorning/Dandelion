@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <strings.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 
@@ -28,6 +29,8 @@ namespace dandelion
 {
 namespace
 {
+
+constexpr size_t kMaxErrorBodyBytes = 256 * 1024;
 
 std::once_flag g_curl_init_once;
 std::mutex g_ca_mutex;
@@ -41,6 +44,7 @@ struct TransferContext
     const DataSink* sink;
     HttpResult* result;
     CURL* handle;
+    bool error_body_truncated = false;
 };
 
 /**
@@ -67,13 +71,14 @@ std::string TrimAscii(const std::string& s)
 }
 
 /**
- * @brief Check whether a header name or value contains CR, LF, or NUL bytes.
+ * @brief Check whether a header name or value contains disallowed ASCII control characters.
  */
 bool HasCtl(const std::string& s)
 {
     for (char c : s)
     {
-        if (c == '\r' || c == '\n' || c == '\0')
+        unsigned char u = static_cast<unsigned char>(c);
+        if (u == '\r' || u == '\n' || u == '\0' || u == 0x7F || (u < 0x20 && u != '\t'))
         {
             return true;
         }
@@ -82,11 +87,16 @@ bool HasCtl(const std::string& s)
 }
 
 /**
- * @brief Check whether a filesystem path points to a readable regular file.
+ * @brief Check whether a filesystem path points to a readable, non-empty regular file.
  */
 bool FileReadable(const char* p)
 {
-    return p && *p && ::access(p, R_OK) == 0;
+    if (!p || !*p)
+    {
+        return false;
+    }
+    struct stat st;
+    return ::stat(p, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 && ::access(p, R_OK) == 0;
 }
 
 /**
@@ -94,7 +104,30 @@ bool FileReadable(const char* p)
  */
 bool DirReadable(const char* p)
 {
-    return p && *p && ::access(p, R_OK | X_OK) == 0;
+    if (!p || !*p)
+    {
+        return false;
+    }
+    struct stat st;
+    return ::stat(p, &st) == 0 && S_ISDIR(st.st_mode) && ::access(p, R_OK | X_OK) == 0;
+}
+
+/**
+ * @brief Return true for deterministic libcurl TLS/certificate errors that must not be retried.
+ */
+bool IsDeterministicTlsError(CURLcode rc)
+{
+    if (rc == CURLE_SSL_CACERT_BADFILE || rc == CURLE_PEER_FAILED_VERIFICATION || rc == CURLE_SSL_CERTPROBLEM)
+    {
+        return true;
+    }
+#if defined(CURLE_SSL_CACERT) && (CURLE_SSL_CACERT != CURLE_PEER_FAILED_VERIFICATION)
+    if (rc == CURLE_SSL_CACERT)
+    {
+        return true;
+    }
+#endif
+    return false;
 }
 
 /**
@@ -152,55 +185,107 @@ CaConfig ResolveCaConfig()
 }
 
 /**
- * @brief libcurl response body callback forwarding 2xx bytes to the DataSink.
+ * @brief libcurl response body callback forwarding 2xx bytes to the DataSink with exception safety.
  */
 size_t OnWrite(char* data, size_t size, size_t count, void* user)
 {
-    size_t len = size * count;
-    if (len == 0)
+    try
     {
-        return 0;
-    }
-    TransferContext* ctx = static_cast<TransferContext*>(user);
-    long status = 0;
-    curl_easy_getinfo(ctx->handle, CURLINFO_RESPONSE_CODE, &status);
-    if (status >= 200 && status < 300 && *ctx->sink)
-    {
-        ctx->result->delivered = true;
-        if (!(*ctx->sink)(data, len))
+        size_t len = size * count;
+        if (len == 0)
         {
-            ctx->result->aborted = true;
             return 0;
         }
+        TransferContext* ctx = static_cast<TransferContext*>(user);
+        long status = 0;
+        curl_easy_getinfo(ctx->handle, CURLINFO_RESPONSE_CODE, &status);
+        if (status >= 200 && status < 300)
+        {
+            if (*ctx->sink)
+            {
+                ctx->result->delivered = true;
+                if (!(*ctx->sink)(data, len))
+                {
+                    ctx->result->aborted = true;
+                    return 0;
+                }
+            }
+            else
+            {
+                ctx->result->body.append(data, len);
+            }
+        }
+        else
+        {
+            if (ctx->result->body.size() < kMaxErrorBodyBytes)
+            {
+                size_t room = kMaxErrorBodyBytes - ctx->result->body.size();
+                size_t take = len < room ? len : room;
+                ctx->result->body.append(data, take);
+                if (take < len && !ctx->error_body_truncated)
+                {
+                    ctx->error_body_truncated = true;
+                    ctx->result->body.append(" [truncated]");
+                }
+            }
+            else if (!ctx->error_body_truncated)
+            {
+                ctx->error_body_truncated = true;
+                ctx->result->body.append(" [truncated]");
+            }
+        }
+        return len;
     }
-    else
+    catch (...)
     {
-        ctx->result->body.append(data, len);
+        TransferContext* ctx = static_cast<TransferContext*>(user);
+        if (ctx && ctx->result)
+        {
+            ctx->result->aborted = true;
+            if (ctx->result->error.empty())
+            {
+                ctx->result->error = "Connection error: memory allocation failed while reading response.";
+            }
+        }
+        return 0;
     }
-    return len;
 }
 
 /**
- * @brief libcurl response header callback extracting Retry-After and Content-Type.
+ * @brief libcurl response header callback extracting Retry-After and Content-Type with exception safety.
  */
 size_t OnHeader(char* data, size_t size, size_t count, void* user)
 {
-    TransferContext* ctx = static_cast<TransferContext*>(user);
-    size_t len = size * count;
-    static const char kRetryAfter[] = "retry-after:";
-    static const char kContentType[] = "content-type:";
-    if (len > sizeof(kRetryAfter) - 1 && strncasecmp(data, kRetryAfter, sizeof(kRetryAfter) - 1) == 0)
+    try
     {
-        std::string value(data + sizeof(kRetryAfter) - 1, len - (sizeof(kRetryAfter) - 1));
-        double seconds = std::atof(value.c_str());
-        ctx->result->retry_after = seconds > 0 ? seconds : -1;
+        TransferContext* ctx = static_cast<TransferContext*>(user);
+        size_t len = size * count;
+        if (len >= 5 && strncasecmp(data, "HTTP/", 5) == 0)
+        {
+            // Reset per-response headers across 100-Continue or proxy CONNECT responses.
+            ctx->result->retry_after = -1;
+            ctx->result->content_type.clear();
+            return len;
+        }
+        static const char kRetryAfter[] = "retry-after:";
+        static const char kContentType[] = "content-type:";
+        if (len > sizeof(kRetryAfter) - 1 && strncasecmp(data, kRetryAfter, sizeof(kRetryAfter) - 1) == 0)
+        {
+            std::string value(data + sizeof(kRetryAfter) - 1, len - (sizeof(kRetryAfter) - 1));
+            double seconds = std::atof(value.c_str());
+            ctx->result->retry_after = seconds > 0 ? seconds : -1;
+        }
+        else if (len > sizeof(kContentType) - 1 && strncasecmp(data, kContentType, sizeof(kContentType) - 1) == 0)
+        {
+            std::string value(data + sizeof(kContentType) - 1, len - (sizeof(kContentType) - 1));
+            ctx->result->content_type = TrimAscii(value);
+        }
+        return len;
     }
-    else if (len > sizeof(kContentType) - 1 && strncasecmp(data, kContentType, sizeof(kContentType) - 1) == 0)
+    catch (...)
     {
-        std::string value(data + sizeof(kContentType) - 1, len - (sizeof(kContentType) - 1));
-        ctx->result->content_type = TrimAscii(value);
+        return 0;
     }
-    return len;
 }
 
 /**
@@ -260,7 +345,7 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
     {
         if (kv.first.empty() || kv.first.find(':') != std::string::npos || HasCtl(kv.first) || HasCtl(kv.second))
         {
-            r.error = "Invalid HTTP header (contains CR, LF, NUL, or malformed name).";
+            r.error = "Invalid HTTP header (contains control character or malformed name).";
             r.non_retryable = true;
             return r;
         }
@@ -280,7 +365,7 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
     }
     headers = curl_slist_append(headers, "Expect:");
 
-    TransferContext ctx{&sink, &r, h};
+    TransferContext ctx{&sink, &r, h, false};
     curl_easy_setopt(h, CURLOPT_URL, req.url.c_str());
     curl_easy_setopt(h, CURLOPT_POST, 1L);
     curl_easy_setopt(h, CURLOPT_POSTFIELDS, req.body.data());
@@ -317,8 +402,12 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
         const char* v = std::getenv(name);
         if (v && *v)
         {
-            user_no_proxy = TrimAscii(v);
-            break;
+            std::string trimmed = TrimAscii(v);
+            if (!trimmed.empty())
+            {
+                user_no_proxy = trimmed;
+                break;
+            }
         }
     }
     std::string no_proxy;
@@ -394,7 +483,7 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
         }
         else
         {
-            if (rc == CURLE_URL_MALFORMAT || rc == CURLE_UNSUPPORTED_PROTOCOL)
+            if (rc == CURLE_URL_MALFORMAT || rc == CURLE_UNSUPPORTED_PROTOCOL || IsDeterministicTlsError(rc))
             {
                 r.non_retryable = true;
             }

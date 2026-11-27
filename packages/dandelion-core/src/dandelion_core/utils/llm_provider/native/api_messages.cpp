@@ -38,9 +38,9 @@ bool IsToolLike(const std::string& type)
 }
 
 /**
- * @brief Strip foreign protocol blocks and unsigned thinking blocks before sending to Messages API.
+ * @brief Strip foreign protocol blocks, enforce non-empty content, and satisfy DeepSeek thinking replay rules.
  */
-nb::object StripForeign(nb::object messages)
+nb::object StripForeign(nb::object messages, const std::string& flavor, const std::string& thinking)
 {
     if (!IsList(messages))
     {
@@ -55,8 +55,12 @@ nb::object StripForeign(nb::object messages)
             out.append(msg);
             continue;
         }
+        const bool is_assistant = (TextOf(Field(msg, "role")) == "assistant");
         bool changed = false;
+        bool has_thinking = false;
+        bool has_tool_use = false;
         nb::list blocks;
+
         for (nb::handle block : content)
         {
             const std::string type = TextOf(Field(block, "type"));
@@ -69,11 +73,43 @@ nb::object StripForeign(nb::object messages)
             {
                 std::string sig = TextOf(Field(block, "signature"));
                 std::string src = TextOf(Field(block, "reasoning_source"));
+                if (flavor == "deepseek")
+                {
+                    has_thinking = true;
+                    if (IsDict(block) && DictHas(block, "reasoning_source"))
+                    {
+                        nb::dict copy = CopyDict(block);
+                        DictDelIfPresent(copy, "reasoning_source");
+                        blocks.append(copy);
+                        changed = true;
+                    }
+                    else
+                    {
+                        blocks.append(block);
+                    }
+                    continue;
+                }
                 if (sig.empty() || src == "openai")
                 {
                     changed = true;
                     continue;
                 }
+                has_thinking = true;
+                blocks.append(block);
+                continue;
+            }
+            if (type == "text")
+            {
+                if (TextOf(Field(block, "text")).empty())
+                {
+                    // Drop empty text blocks (including signed empty Gemini text parts after stripping).
+                    changed = true;
+                    continue;
+                }
+            }
+            if (IsToolLike(type))
+            {
+                has_tool_use = true;
             }
             if (IsDict(block) && (DictHas(block, "thought_signature") || DictHas(block, "gemini_function_call")))
             {
@@ -86,18 +122,31 @@ nb::object StripForeign(nb::object messages)
             }
             blocks.append(block);
         }
-        if (!changed)
+
+        // DeepSeek /anthropic thinking mode requires a thinking block on every assistant tool_use turn.
+        if (is_assistant && flavor == "deepseek" && thinking == "enabled" && has_tool_use && !has_thinking)
         {
-            out.append(msg);
-            continue;
+            nb::dict empty_think;
+            empty_think["type"] = "thinking";
+            empty_think["thinking"] = "";
+            blocks.insert(0, empty_think);
+            changed = true;
         }
-        // Prevent Anthropic HTTP 400 on empty content lists after stripping foreign-only blocks.
+
+        // Unconditionally guard against content: [] (e.g. after max_tokens dropped all tool_use blocks).
         if (nb::len(blocks) == 0)
         {
             nb::dict placeholder;
             placeholder["type"] = "text";
             placeholder["text"] = "[reasoning omitted]";
             blocks.append(placeholder);
+            changed = true;
+        }
+
+        if (!changed)
+        {
+            out.append(msg);
+            continue;
         }
         nb::dict copy = CopyDict(msg);
         copy["content"] = blocks;
@@ -179,7 +228,7 @@ public:
         {
             type = ev.event;
         }
-        if (type == "error" || ev.event == "error")
+        if (type == "error" || ev.event == "error" || !Field(d, "error").is_none())
         {
             throw ProtocolError("Stream error: " + ev.data);
         }
@@ -239,7 +288,6 @@ public:
             }
             else if (dt == "signature_delta")
             {
-                // Append signature chunks so split signature_delta frames never overwrite prior data.
                 m_signature_buf[idx] += TextOf(Field(delta, "signature"));
             }
             else if (dt == "citations_delta")
@@ -270,7 +318,11 @@ public:
             nb::object delta = Field(d, "delta");
             if (!Field(delta, "stop_reason").is_none())
             {
-                m_stop_reason = TextOf(Field(delta, "stop_reason"));
+                std::string sr = TextOf(Field(delta, "stop_reason"));
+                if (!sr.empty())
+                {
+                    m_stop_reason = sr;
+                }
             }
             nb::object usage = Field(d, "usage");
             if (IsDict(usage))
@@ -291,7 +343,7 @@ public:
      */
     nb::object Finish() override
     {
-        if (!m_started || !m_stopped || m_stop_reason.empty() || !m_open.empty())
+        if (!m_started || !m_stopped || m_stop_reason.empty() || (!m_open.empty() && m_stop_reason != "max_tokens"))
         {
             throw ProtocolError("Incomplete Messages stream (missing message or block boundary).");
         }
@@ -374,41 +426,59 @@ public:
         m_flavor = ResolveFlavor(c.compat, c.model_id, c.base_url, "anthropic");
     }
 
+    /**
+     * @brief Return the Messages protocol identifier ("anthropic").
+     */
     const char* Protocol() const override
     {
         return "anthropic";
     }
 
+    /**
+     * @brief Return the resolved upstream flavor.
+     */
     std::string Flavor() const override
     {
         return m_flavor;
     }
 
     /**
-     * @brief Force streaming when max_tokens exceeds kNonStreamingMaxTokens.
+     * @brief Force streaming when max_tokens exceeds kNonStreamingMaxTokens (arbitrary-precision safe).
      */
     bool ForceStream(nb::dict payload) override
     {
         nb::object cap = payload.get("max_tokens", nb::none());
-        return IsInt(cap) && nb::cast<long long>(cap) > kNonStreamingMaxTokens;
+        return IsInt(cap) && (cap > nb::int_(kNonStreamingMaxTokens));
     }
 
     /**
-     * @brief Build a Messages POST request and inject flavor-specific effort parameters.
+     * @brief Build a Messages POST request on a copied body without mutating the caller payload.
      */
     Built Build(nb::dict payload, bool stream) override
     {
-        payload["model"] = m_cfg.model_id;
-        InjectThinking(payload);
-
         nb::dict body = CopyDict(payload);
+        body["model"] = m_cfg.model_id;
+        InjectThinking(body);
+
+        if (DictHas(body, "system") && Field(body, "system").is_none())
+        {
+            DictDelIfPresent(body, "system");
+        }
+        if (DictHas(body, "tools") && Field(body, "tools").is_none())
+        {
+            DictDelIfPresent(body, "tools");
+        }
         if (DictHas(body, "messages"))
         {
-            body["messages"] = StripForeign(body["messages"]);
+            body["messages"] = StripForeign(body["messages"], m_flavor, m_cfg.thinking);
         }
         if (stream)
         {
             body["stream"] = true;
+        }
+        else
+        {
+            DictDelIfPresent(body, "stream");
         }
 
         std::string base = m_cfg.base_url.empty() ? EnvOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com") : m_cfg.base_url;
@@ -444,11 +514,17 @@ public:
         return b;
     }
 
+    /**
+     * @brief Parse a non-streaming Messages JSON response body.
+     */
     nb::object Parse(nb::object body) override
     {
         return ParseMessage(body);
     }
 
+    /**
+     * @brief Create a fresh MessagesStream SSE decoder.
+     */
     std::unique_ptr<StreamDecoder> Decoder(bool echo) override
     {
         return std::make_unique<MessagesStream>(echo);
@@ -458,18 +534,22 @@ private:
     /**
      * @brief Clear owned keys idempotently and inject flavor-appropriate thinking/effort knobs.
      */
-    void InjectThinking(nb::dict payload)
+    void InjectThinking(nb::dict body)
     {
         for (const char* key : kOwnedKeys)
         {
-            DictDelIfPresent(payload, key);
+            DictDelIfPresent(body, key);
+        }
+        if (m_flavor == "none")
+        {
+            return;
         }
 
         if (m_cfg.thinking == "enabled" && m_flavor != "deepseek")
         {
             nb::object budget = ResolveEffort("EFFORT_TO_BUDGET_TOKENS", m_cfg.effort, m_cfg.model_id);
-            nb::object cap = payload.get("max_tokens", nb::none());
-            if (IsInt(cap) && IsInt(budget) && nb::cast<long long>(cap) > 0 && nb::cast<long long>(cap) <= nb::cast<long long>(budget))
+            nb::object cap = body.get("max_tokens", nb::none());
+            if (IsInt(cap) && IsInt(budget) && (cap > nb::int_(0)) && (cap <= budget))
             {
                 PrintLine("[-] Warning: max_tokens=" + TextOf(cap) + " <= thinking budget_tokens=" + TextOf(budget) + " (" + m_cfg.model_id +
                           "); the provider may reject this request. Raise max_tokens or lower the effort level.");
@@ -477,44 +557,44 @@ private:
             nb::dict thinking;
             thinking["type"] = "enabled";
             thinking["budget_tokens"] = budget;
-            payload["thinking"] = thinking;
+            body["thinking"] = thinking;
         }
         else if (m_flavor == "deepseek" && m_cfg.thinking == "disabled")
         {
             nb::dict thinking;
             thinking["type"] = "disabled";
-            payload["thinking"] = thinking;
+            body["thinking"] = thinking;
         }
 
         if (m_flavor == "deepseek")
         {
             nb::dict oc;
             oc["effort"] = ResolveEffort("EFFORT_TO_DEEPSEEK_EFFORT", m_cfg.effort, m_cfg.model_id);
-            payload["output_config"] = oc;
+            body["output_config"] = oc;
         }
         else if (m_flavor == "openai")
         {
             nb::object level = ResolveEffort("EFFORT_TO_OPENAI_EFFORT", m_cfg.effort, m_cfg.model_id);
-            payload["reasoning_effort"] = level;
+            body["reasoning_effort"] = level;
             nb::dict oc;
             oc["effort"] = level;
-            payload["output_config"] = oc;
+            body["output_config"] = oc;
         }
         else if (m_flavor == "gemini")
         {
             std::string level = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
-            payload["reasoning_effort"] = level;
-            payload["thinking_level"] = level;
-            payload["thinkingLevel"] = level;
+            body["reasoning_effort"] = level;
+            body["thinking_level"] = level;
+            body["thinkingLevel"] = level;
             nb::dict oc;
             oc["effort"] = level;
-            payload["output_config"] = oc;
+            body["output_config"] = oc;
         }
         else if (m_flavor == "anthropic-effort")
         {
             nb::dict oc;
             oc["effort"] = ResolveEffort("EFFORT_TO_ANTHROPIC_EFFORT", m_cfg.effort, m_cfg.model_id);
-            payload["output_config"] = oc;
+            body["output_config"] = oc;
         }
     }
 

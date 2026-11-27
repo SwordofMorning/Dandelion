@@ -110,17 +110,22 @@ class BaseAgentHost(ABC):
      # @param note Free-form tag recorded in backup.json.
      # @param history_messages Optional message count recorded for diagnostics.
      #
-     # @return Captured SessionBackup instance.
+     # @return (backup, ok, msg) tuple.
      #
-    def capture_turn_backup(self, session=None, note="commit", history_messages=None) -> SessionBackup:
+    def capture_turn_backup(self, session=None, note="commit", history_messages=None):
         target_session = session if session is not None else self.session
         session_dir = getattr(target_session, "current_session_dir", None) if target_session is not None else None
-        backup = SessionBackup(session_dir)
-        if history_messages is None and self.agent is not None and hasattr(self.agent, "history"):
-            history_messages = len(self.agent.history)
+        session_id = getattr(target_session, "current_session_id", None) if target_session is not None else None
+        backup = SessionBackup(session_dir, session_id=session_id)
+        if history_messages is None:
+            if session is None and self.agent is not None and hasattr(self.agent, "history"):
+                history_messages = len(self.agent.history)
+            elif target_session is not None and hasattr(target_session, "load_history"):
+                history_messages = len(target_session.load_history())
+            # End-if
         # End-if
-        backup.create(note=note, history_messages=history_messages)
-        return backup
+        ok, msg = backup.create(note=note, history_messages=history_messages)
+        return backup, ok, msg
     # End-def
 
     ##

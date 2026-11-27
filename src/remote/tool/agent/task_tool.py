@@ -88,7 +88,7 @@ class SubmitTaskTool(BaseDelegationTool):
      #
      # @return (success, payload_or_error) tuple.
      #
-    def execute(self, model, task_description, role_prompt="", toolset="full"):
+    def execute(self, model, task_description, role_prompt="", toolset="full", **kwargs):
         if self.registry is not None:
             ok, err = self._validate_model(model)
             if not ok:
@@ -197,7 +197,7 @@ class TaskControlTool(BaseTool):
      #
      # @return (success, payload_or_error) tuple.
      #
-    def execute(self, action, job_id="", schedule_id="", due_at="", text="", kind="reminder", interval=None):
+    def execute(self, action, job_id="", schedule_id="", due_at="", text="", kind="reminder", interval=None, **kwargs):
         try:
             if action == "list":
                 result = [

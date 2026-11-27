@@ -52,6 +52,9 @@ public:
         return m_has_output;
     }
 
+    /**
+     * @brief Virtual destructor for polymorphic StreamDecoder cleanup.
+     */
     virtual ~StreamDecoder() = default;
 
     /**
@@ -104,6 +107,9 @@ public:
     {
     }
 
+    /**
+     * @brief Virtual destructor for polymorphic Codec cleanup.
+     */
     virtual ~Codec() = default;
 
     /**
@@ -199,7 +205,7 @@ public:
     nb::tuple SafeStreamRequest(nb::dict payload, nb::object logger, const std::string& log_tag, bool echo, nb::object cancelled);
 
     /**
-     * @brief Join all text blocks in a canonical content value into one string.
+     * @brief Join all text blocks in a canonical content value into one string (None -> "").
      */
     nb::object ExtractText(nb::object content) const;
 
@@ -247,13 +253,13 @@ private:
     /**
      * @brief Shared execution loop handling logging, retries, cooperative cancellation, and decoding.
      */
-    nb::tuple Run(nb::dict payload, nb::object logger, const std::string& log_tag, bool stream, bool echo, nb::object cancelled);
+    nb::tuple Run(nb::dict payload, nb::object logger, const std::string& log_tag, bool force_stream, bool echo, nb::object cancelled);
 
     std::unique_ptr<Codec> m_codec;
 };
 
 /**
- * @brief Merge adjacent same-role messages to preserve strict role alternation across all protocols.
+ * @brief Merge adjacent same-role messages in linear time to preserve strict role alternation.
  */
 nb::list NormalizeMessages(nb::object messages);
 

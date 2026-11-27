@@ -9,6 +9,7 @@
 
 #include "provider.hpp"
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -211,13 +212,14 @@ public:
         }
         if (type == "response.output_item.added")
         {
-            long idx = ReadOutputIndex(d);
+            int64_t idx = ReadOutputIndex(d);
             if (m_items.count(idx))
             {
                 throw ProtocolError("Duplicate Responses output_index.");
             }
             m_open_items.insert(idx);
             nb::dict item = CopyDict(Field(d, "item"));
+            RecordItemKey(idx, item);
             m_items[idx] = item;
             if (TextOf(Field(item, "type")) == "function_call")
             {
@@ -227,7 +229,7 @@ public:
         }
         if (type == "response.output_text.delta")
         {
-            long idx = ReadOutputIndex(d);
+            int64_t idx = ReadOutputIndex(d);
             if (!m_open_items.count(idx))
             {
                 throw ProtocolError("Responses output_text.delta for closed output item.");
@@ -235,7 +237,7 @@ public:
             std::string delta = TextOf(Field(d, "delta"));
             if (!delta.empty())
             {
-                long cidx = ReadIntField(d, "content_index", 0);
+                int64_t cidx = ReadIntField(d, "content_index", 0);
                 m_text_parts[idx][cidx] += delta;
                 Emit(delta);
             }
@@ -243,7 +245,7 @@ public:
         }
         if (type == "response.reasoning_summary_text.delta")
         {
-            long idx = ReadOutputIndex(d);
+            int64_t idx = ReadOutputIndex(d);
             if (!m_open_items.count(idx))
             {
                 throw ProtocolError("Responses reasoning_summary_text.delta for closed output item.");
@@ -251,14 +253,14 @@ public:
             std::string delta = TextOf(Field(d, "delta"));
             if (!delta.empty())
             {
-                long sidx = ReadIntField(d, "summary_index", 0);
+                int64_t sidx = ReadIntField(d, "summary_index", 0);
                 m_summary_parts[idx][sidx] += delta;
             }
             return;
         }
         if (type == "response.function_call_arguments.delta")
         {
-            long idx = ReadOutputIndex(d);
+            int64_t idx = ReadOutputIndex(d);
             if (!m_open_items.count(idx))
             {
                 throw ProtocolError("Responses function_call_arguments.delta for closed output item.");
@@ -273,7 +275,7 @@ public:
         }
         if (type == "response.function_call_arguments.done")
         {
-            long idx = ReadOutputIndex(d);
+            int64_t idx = ReadOutputIndex(d);
             if (m_open_items.count(idx))
             {
                 nb::object full = Field(d, "arguments");
@@ -286,12 +288,13 @@ public:
         }
         if (type == "response.output_item.done")
         {
-            long idx = ReadOutputIndex(d);
+            int64_t idx = ReadOutputIndex(d);
             if (!m_open_items.erase(idx))
             {
                 throw ProtocolError("Responses output_item.done for unopened output item.");
             }
             nb::dict done_item = CopyDict(Field(d, "item"));
+            RecordItemKey(idx, done_item);
             if (TextOf(Field(done_item, "type")) == "function_call" && TextOf(Field(done_item, "arguments")).empty() && !m_fc_args[idx].empty())
             {
                 done_item["arguments"] = SafeUtf8Str(m_fc_args[idx]);
@@ -306,8 +309,12 @@ public:
             {
                 resp = d;
             }
-            m_status = TextOf(Field(resp, "status"));
-            if (m_status.empty())
+            std::string st = TextOf(Field(resp, "status"));
+            if (!st.empty())
+            {
+                m_status = st;
+            }
+            else if (m_status.empty())
             {
                 m_status = (type == "response.completed") ? "completed" : "incomplete";
             }
@@ -333,7 +340,7 @@ public:
     }
 
     /**
-     * @brief Validate terminal boundary and assemble streamed items with empty-list fallback.
+     * @brief Validate terminal boundary and backfill any skeleton output items from streamed deltas.
      */
     nb::object Finish() override
     {
@@ -343,50 +350,24 @@ public:
         }
         if (!m_final_output.is_none())
         {
-            return BuildResponsesResult(m_final_output, m_status, m_incomplete_reason, m_usage);
+            nb::list merged;
+            int64_t pos = 0;
+            for (nb::handle raw_item : m_final_output)
+            {
+                nb::dict item = CopyDict(raw_item);
+                int64_t idx = ResolveStreamIndex(pos, item);
+                BackfillItem(idx, item);
+                merged.append(item);
+                ++pos;
+            }
+            return BuildResponsesResult(merged, m_status, m_incomplete_reason, m_usage);
         }
         nb::list assembled;
         for (auto& kv : m_items)
         {
-            long idx = kv.first;
+            int64_t idx = kv.first;
             nb::dict item = kv.second;
-            std::string itype = TextOf(Field(item, "type"));
-            if (itype == "message")
-            {
-                nb::object cur_content = Field(item, "content");
-                if ((!IsList(cur_content) || nb::len(cur_content) == 0) && m_text_parts.count(idx))
-                {
-                    nb::list parts;
-                    for (const auto& tp : m_text_parts.at(idx))
-                    {
-                        nb::dict part;
-                        part["type"] = "output_text";
-                        part["text"] = SafeUtf8Str(tp.second);
-                        parts.append(part);
-                    }
-                    item["content"] = parts;
-                }
-            }
-            else if (itype == "reasoning")
-            {
-                nb::object cur_summary = Field(item, "summary");
-                if ((!IsList(cur_summary) || nb::len(cur_summary) == 0) && m_summary_parts.count(idx))
-                {
-                    nb::list sums;
-                    for (const auto& sp : m_summary_parts.at(idx))
-                    {
-                        nb::dict part;
-                        part["type"] = "summary_text";
-                        part["text"] = SafeUtf8Str(sp.second);
-                        sums.append(part);
-                    }
-                    item["summary"] = sums;
-                }
-            }
-            else if (itype == "function_call" && TextOf(Field(item, "arguments")).empty() && m_fc_args.count(idx))
-            {
-                item["arguments"] = SafeUtf8Str(m_fc_args.at(idx));
-            }
+            BackfillItem(idx, item);
             assembled.append(item);
         }
         return BuildResponsesResult(assembled, m_status, m_incomplete_reason, m_usage);
@@ -394,25 +375,112 @@ public:
 
 private:
     /**
+     * @brief Record item id and call_id lookups so final_output skeleton items resolve their delta slot.
+     */
+    void RecordItemKey(int64_t idx, nb::handle item)
+    {
+        std::string item_id = TextOf(Field(item, "id"));
+        if (!item_id.empty())
+        {
+            m_id_to_index[item_id] = idx;
+        }
+        std::string call_id = TextOf(Field(item, "call_id"));
+        if (!call_id.empty())
+        {
+            m_call_id_to_index[call_id] = idx;
+        }
+    }
+
+    /**
+     * @brief Resolve the streamed output_index matching a final_output entry (by id/call_id or position).
+     */
+    int64_t ResolveStreamIndex(int64_t pos, nb::handle item) const
+    {
+        std::string item_id = TextOf(Field(item, "id"));
+        if (!item_id.empty())
+        {
+            auto it = m_id_to_index.find(item_id);
+            if (it != m_id_to_index.end())
+            {
+                return it->second;
+            }
+        }
+        std::string call_id = TextOf(Field(item, "call_id"));
+        if (!call_id.empty())
+        {
+            auto it = m_call_id_to_index.find(call_id);
+            if (it != m_call_id_to_index.end())
+            {
+                return it->second;
+            }
+        }
+        return pos;
+    }
+
+    /**
+     * @brief Backfill skeleton content/summary/arguments fields on an output item from streamed deltas.
+     */
+    void BackfillItem(int64_t idx, nb::dict item) const
+    {
+        std::string itype = TextOf(Field(item, "type"));
+        if (itype == "message")
+        {
+            nb::object cur_content = Field(item, "content");
+            if ((!IsList(cur_content) || nb::len(cur_content) == 0) && m_text_parts.count(idx))
+            {
+                nb::list parts;
+                for (const auto& tp : m_text_parts.at(idx))
+                {
+                    nb::dict part;
+                    part["type"] = "output_text";
+                    part["text"] = SafeUtf8Str(tp.second);
+                    parts.append(part);
+                }
+                item["content"] = parts;
+            }
+        }
+        else if (itype == "reasoning")
+        {
+            nb::object cur_summary = Field(item, "summary");
+            if ((!IsList(cur_summary) || nb::len(cur_summary) == 0) && m_summary_parts.count(idx))
+            {
+                nb::list sums;
+                for (const auto& sp : m_summary_parts.at(idx))
+                {
+                    nb::dict part;
+                    part["type"] = "summary_text";
+                    part["text"] = SafeUtf8Str(sp.second);
+                    sums.append(part);
+                }
+                item["summary"] = sums;
+            }
+        }
+        else if (itype == "function_call" && TextOf(Field(item, "arguments")).empty() && m_fc_args.count(idx) && !m_fc_args.at(idx).empty())
+        {
+            item["arguments"] = SafeUtf8Str(m_fc_args.at(idx));
+        }
+    }
+
+    /**
      * @brief Read an integer field with a default fallback.
      */
-    static long ReadIntField(nb::handle d, const char* key, long fallback)
+    static int64_t ReadIntField(nb::handle d, const char* key, int64_t fallback)
     {
         nb::object raw = Field(d, key);
-        return IsInt(raw) ? nb::cast<long>(raw) : fallback;
+        return IsInt(raw) ? nb::cast<int64_t>(raw) : fallback;
     }
 
     /**
      * @brief Read and validate a non-negative output_index field.
      */
-    static long ReadOutputIndex(nb::handle d)
+    static int64_t ReadOutputIndex(nb::handle d)
     {
         nb::object raw = Field(d, "output_index");
         if (!IsInt(raw))
         {
             throw ProtocolError("Missing Responses output_index.");
         }
-        long v = nb::cast<long>(raw);
+        int64_t v = nb::cast<int64_t>(raw);
         if (v < 0)
         {
             throw ProtocolError("Negative Responses output_index.");
@@ -424,11 +492,13 @@ private:
     bool m_terminal = false;
     std::string m_status;
     std::string m_incomplete_reason;
-    std::set<long> m_open_items;
-    std::map<long, nb::dict> m_items;
-    std::map<long, std::string> m_fc_args;
-    std::map<long, std::map<long, std::string>> m_text_parts;
-    std::map<long, std::map<long, std::string>> m_summary_parts;
+    std::set<int64_t> m_open_items;
+    std::map<int64_t, nb::dict> m_items;
+    std::map<int64_t, std::string> m_fc_args;
+    std::map<int64_t, std::map<int64_t, std::string>> m_text_parts;
+    std::map<int64_t, std::map<int64_t, std::string>> m_summary_parts;
+    std::map<std::string, int64_t> m_id_to_index;
+    std::map<std::string, int64_t> m_call_id_to_index;
     nb::object m_usage = nb::none();
     nb::object m_final_output = nb::none();
 };
@@ -445,14 +515,21 @@ public:
     explicit ResponsesCodec(const ProviderConfig& c)
         : Codec(c)
     {
+        m_explicit_compat = IsExplicitCompat(c.compat);
         m_flavor = ResolveFlavor(c.compat, c.model_id, c.base_url, "openai");
     }
 
+    /**
+     * @brief Return the Responses protocol identifier ("responses").
+     */
     const char* Protocol() const override
     {
         return "responses";
     }
 
+    /**
+     * @brief Return the resolved upstream flavor.
+     */
     std::string Flavor() const override
     {
         return m_flavor;
@@ -526,6 +603,9 @@ public:
         return BuildResponsesResult(Field(resp, "output"), status, incomplete_reason, Field(resp, "usage"));
     }
 
+    /**
+     * @brief Create a fresh ResponsesStream SSE decoder.
+     */
     std::unique_ptr<StreamDecoder> Decoder(bool echo) override
     {
         return std::make_unique<ResponsesStream>(echo);
@@ -533,7 +613,7 @@ public:
 
 private:
     /**
-     * @brief Inject Responses reasoning/include parameters and Sub2API cross-protocol bridge knobs.
+     * @brief Inject Responses reasoning/include parameters when thinking is enabled and explicit compat bridges.
      */
     void InjectEffort(nb::dict body)
     {
@@ -541,33 +621,39 @@ private:
         {
             DictDelIfPresent(body, key);
         }
-
-        if (m_cfg.thinking == "enabled")
+        if (m_flavor == "none" || m_cfg.thinking != "enabled")
         {
-            nb::object effort;
-            if (m_flavor == "gemini")
-            {
-                std::string glevel = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
-                effort = nb::str(glevel.data(), glevel.size());
-            }
-            else if (m_flavor == "deepseek")
-            {
-                effort = ResolveEffort("EFFORT_TO_DEEPSEEK_EFFORT", m_cfg.effort, m_cfg.model_id);
-            }
-            else
-            {
-                effort = ResolveEffort("EFFORT_TO_RESPONSES_EFFORT", m_cfg.effort, m_cfg.model_id);
-            }
-            nb::dict reasoning;
-            reasoning["effort"] = effort;
-            reasoning["summary"] = "auto";
-            body["reasoning"] = reasoning;
-
-            nb::list include;
-            include.append("reasoning.encrypted_content");
-            body["include"] = include;
+            return;
         }
 
+        nb::object effort;
+        if (m_flavor == "gemini")
+        {
+            std::string glevel = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
+            effort = nb::str(glevel.data(), glevel.size());
+        }
+        else if (m_flavor == "deepseek")
+        {
+            effort = ResolveEffort("EFFORT_TO_DEEPSEEK_EFFORT", m_cfg.effort, m_cfg.model_id);
+        }
+        else
+        {
+            effort = ResolveEffort("EFFORT_TO_RESPONSES_EFFORT", m_cfg.effort, m_cfg.model_id);
+        }
+
+        nb::dict reasoning;
+        reasoning["effort"] = effort;
+        reasoning["summary"] = "auto";
+        body["reasoning"] = reasoning;
+
+        nb::list include;
+        include.append("reasoning.encrypted_content");
+        body["include"] = include;
+
+        if (!m_explicit_compat)
+        {
+            return;
+        }
         if (m_flavor == "gemini")
         {
             std::string level = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
@@ -634,135 +720,149 @@ private:
             std::string role = TextOf(Field(msg, "role"));
             bool is_user = (role != "assistant");
             nb::object content = Field(msg, "content");
+            size_t before_items = nb::len(items);
 
             if (IsStr(content))
             {
                 std::string s = TextOf(content);
-                if (s.empty())
+                if (!s.empty())
                 {
-                    continue;
-                }
-                nb::dict part;
-                part["type"] = is_user ? "input_text" : "output_text";
-                part["text"] = SafeUtf8Str(s);
-                nb::list parts;
-                parts.append(part);
+                    nb::dict part;
+                    part["type"] = is_user ? "input_text" : "output_text";
+                    part["text"] = SafeUtf8Str(s);
+                    nb::list parts;
+                    parts.append(part);
 
-                nb::dict m;
-                m["type"] = "message";
-                m["role"] = is_user ? "user" : "assistant";
-                m["content"] = parts;
-                items.append(m);
-                continue;
-            }
-            if (!IsList(content))
-            {
-                continue;
-            }
-
-            nb::list msg_parts;
-            auto flush_message = [&]() {
-                if (nb::len(msg_parts) > 0)
-                {
                     nb::dict m;
                     m["type"] = "message";
                     m["role"] = is_user ? "user" : "assistant";
-                    m["content"] = msg_parts;
+                    m["content"] = parts;
                     items.append(m);
-                    msg_parts = nb::list();
-                }
-            };
-
-            for (nb::handle block : content)
-            {
-                std::string btype = TextOf(Field(block, "type"));
-                if (btype == "text")
-                {
-                    std::string t = TextOf(Field(block, "text"));
-                    if (!t.empty())
-                    {
-                        nb::dict part;
-                        part["type"] = is_user ? "input_text" : "output_text";
-                        part["text"] = SafeUtf8Str(t);
-                        msg_parts.append(part);
-                    }
-                }
-                else if (is_user && btype == "image")
-                {
-                    nb::object src = Field(block, "source");
-                    std::string mime = IsDict(src) ? TextOf(Field(src, "media_type")) : "";
-                    std::string data = IsDict(src) ? TextOf(Field(src, "data")) : "";
-                    if (!data.empty())
-                    {
-                        std::string url = "data:" + (mime.empty() ? std::string("image/png") : mime) + ";base64," + data;
-                        nb::dict part;
-                        part["type"] = "input_image";
-                        part["image_url"] = url;
-                        part["detail"] = "auto";
-                        msg_parts.append(part);
-                    }
-                }
-                else if (is_user && btype == "document")
-                {
-                    nb::object src = Field(block, "source");
-                    std::string mime = IsDict(src) ? TextOf(Field(src, "media_type")) : "";
-                    std::string data = IsDict(src) ? TextOf(Field(src, "data")) : "";
-                    std::string fname = TextOf(Field(block, "filename"));
-                    if (fname.empty())
-                    {
-                        fname = "document.pdf";
-                    }
-                    if (!data.empty())
-                    {
-                        std::string fdata = "data:" + (mime.empty() ? std::string("application/pdf") : mime) + ";base64," + data;
-                        nb::dict part;
-                        part["type"] = "input_file";
-                        part["filename"] = fname;
-                        part["file_data"] = fdata;
-                        msg_parts.append(part);
-                    }
-                }
-                else if (is_user && btype == "tool_result")
-                {
-                    flush_message();
-                    nb::dict out_item;
-                    out_item["type"] = "function_call_output";
-                    out_item["call_id"] = TextOf(Field(block, "tool_use_id"));
-                    out_item["output"] = SafeUtf8Str(ResultText(Field(block, "content")));
-                    items.append(out_item);
-                }
-                else if (!is_user && btype == "openai_reasoning")
-                {
-                    std::string enc = TextOf(Field(block, "encrypted_content"));
-                    if (!enc.empty())
-                    {
-                        flush_message();
-                        nb::object summary = Field(block, "summary");
-                        nb::dict r_item;
-                        r_item["type"] = "reasoning";
-                        r_item["summary"] = IsList(summary) ? summary : nb::object(nb::list());
-                        r_item["encrypted_content"] = enc;
-                        items.append(r_item);
-                    }
-                }
-                else if (!is_user && btype == "tool_use")
-                {
-                    flush_message();
-                    nb::object input = Field(block, "input");
-                    nb::dict fc_item;
-                    fc_item["type"] = "function_call";
-                    fc_item["call_id"] = TextOf(Field(block, "id"));
-                    fc_item["name"] = TextOf(Field(block, "name"));
-                    fc_item["arguments"] = JsonDumpsPlain(input.is_none() ? nb::object(nb::dict()) : input);
-                    items.append(fc_item);
                 }
             }
-            flush_message();
+            else if (IsList(content))
+            {
+                nb::list msg_parts;
+                auto flush_message = [&]() {
+                    if (nb::len(msg_parts) > 0)
+                    {
+                        nb::dict m;
+                        m["type"] = "message";
+                        m["role"] = is_user ? "user" : "assistant";
+                        m["content"] = msg_parts;
+                        items.append(m);
+                        msg_parts = nb::list();
+                    }
+                };
+
+                for (nb::handle block : content)
+                {
+                    std::string btype = TextOf(Field(block, "type"));
+                    if (btype == "text")
+                    {
+                        std::string t = TextOf(Field(block, "text"));
+                        if (!t.empty())
+                        {
+                            nb::dict part;
+                            part["type"] = is_user ? "input_text" : "output_text";
+                            part["text"] = SafeUtf8Str(t);
+                            msg_parts.append(part);
+                        }
+                    }
+                    else if (is_user && btype == "image")
+                    {
+                        nb::object src = Field(block, "source");
+                        std::string mime = IsDict(src) ? TextOf(Field(src, "media_type")) : "";
+                        std::string data = IsDict(src) ? TextOf(Field(src, "data")) : "";
+                        if (!data.empty())
+                        {
+                            std::string url = "data:" + (mime.empty() ? std::string("image/png") : mime) + ";base64," + data;
+                            nb::dict part;
+                            part["type"] = "input_image";
+                            part["image_url"] = url;
+                            part["detail"] = "auto";
+                            msg_parts.append(part);
+                        }
+                    }
+                    else if (is_user && btype == "document")
+                    {
+                        nb::object src = Field(block, "source");
+                        std::string mime = IsDict(src) ? TextOf(Field(src, "media_type")) : "";
+                        std::string data = IsDict(src) ? TextOf(Field(src, "data")) : "";
+                        std::string fname = TextOf(Field(block, "filename"));
+                        if (fname.empty())
+                        {
+                            fname = "document.pdf";
+                        }
+                        if (!data.empty())
+                        {
+                            std::string fdata = "data:" + (mime.empty() ? std::string("application/pdf") : mime) + ";base64," + data;
+                            nb::dict part;
+                            part["type"] = "input_file";
+                            part["filename"] = fname;
+                            part["file_data"] = fdata;
+                            msg_parts.append(part);
+                        }
+                    }
+                    else if (is_user && btype == "tool_result")
+                    {
+                        flush_message();
+                        nb::dict out_item;
+                        out_item["type"] = "function_call_output";
+                        out_item["call_id"] = TextOf(Field(block, "tool_use_id"));
+                        out_item["output"] = SafeUtf8Str(ResultText(Field(block, "content")));
+                        items.append(out_item);
+                    }
+                    else if (!is_user && btype == "openai_reasoning")
+                    {
+                        std::string enc = TextOf(Field(block, "encrypted_content"));
+                        if (!enc.empty())
+                        {
+                            flush_message();
+                            nb::object summary = Field(block, "summary");
+                            nb::dict r_item;
+                            r_item["type"] = "reasoning";
+                            r_item["summary"] = IsList(summary) ? summary : nb::object(nb::list());
+                            r_item["encrypted_content"] = enc;
+                            items.append(r_item);
+                        }
+                    }
+                    else if (!is_user && btype == "tool_use")
+                    {
+                        flush_message();
+                        nb::object input = Field(block, "input");
+                        nb::dict fc_item;
+                        fc_item["type"] = "function_call";
+                        fc_item["call_id"] = TextOf(Field(block, "id"));
+                        fc_item["name"] = TextOf(Field(block, "name"));
+                        fc_item["arguments"] = JsonDumpsPlain(input.is_none() ? nb::object(nb::dict()) : input);
+                        items.append(fc_item);
+                    }
+                }
+                flush_message();
+            }
+
+            // Preserve turn alternation when an assistant turn had only stripped foreign blocks.
+            if (!is_user && nb::len(items) == before_items)
+            {
+                nb::dict part;
+                part["type"] = "output_text";
+                part["text"] = "[reasoning omitted]";
+                nb::list parts;
+                parts.append(part);
+
+                nb::dict placeholder;
+                placeholder["type"] = "message";
+                placeholder["role"] = "assistant";
+                placeholder["content"] = parts;
+                items.append(placeholder);
+            }
         }
         return items;
     }
 
     std::string m_flavor;
+    bool m_explicit_compat = false;
 };
 
 } // namespace

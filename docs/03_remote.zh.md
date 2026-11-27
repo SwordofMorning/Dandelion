@@ -2,20 +2,21 @@
 
 ## 一、模块结构与总体定位
 
-`src/` 划分为 Core、CLI 和 Remote 三个顶层包：
+工程按 Core、CLI 和 Remote 三个层级解耦组织：
 
-1. `src/core/`：收纳与前端无关的通用执行机制与抽象基类，包括 `agent/`（`MyAgent`、`BasePromptBuilder`、`MemoryManager`、`SkillManager`、`ContextCompressor`、`ContextPruner`、`run_agent_loop`）、`tool/`（内置工具集，含 `remember`、`forget`、`prune_context`）、`subagent/` 与 `utils/`。
-2. `src/cli/`：提供本地终端交互、带沙箱边界保护的 `cli_runtime()`、`CLIPromptBuilder` 以及手动会话同步客户端 `sync.py`。本地客户端读取 `cli.cfg`（兼容回退 `api.cfg`）。
-3. `src/remote/`：提供部署在专用服务器上的全天候个人编码与陪伴助手，解除本地路径与命令沙箱限制（`sandbox=False`），采用单阻塞中断循环与工具化外部通讯和云盘自我备份。远端服务器统一读取 `remote.cfg`，无需配置环境变量，并通过根目录的 `python main.py remote` 命令一键管理。
+1. `packages/dandelion-core/src/dandelion_core/`（`dandelion-core`）：独立打包的前端无关内核与抽象基类，包含 `agent/`（`MyAgent`、`BasePromptBuilder`、`MemoryManager`、`SkillManager`、`ContextCompressor`、`ContextPruner`、`run_agent_loop`）、`tool/`（内置工具集，含 `remember`、`forget`、`prune_context`）、`subagent/`、`utils/`（含原生 C++17 + `nanobind` 五协议 LLM 引擎）、`runtime.py`（`BaseRuntime`）、`host.py`（`BaseAgentHost`）与 `sync_protocol.py`。
+2. `src/cli/`：提供本地终端交互（`InteractiveCLI(BaseAgentHost)`、`CLIRuntime(BaseRuntime)`、`CLIPromptBuilder`）及手动会话同步客户端 `sync.py`。本地客户端读取 `cli.cfg`（兼容回退 `api.cfg`）。
+3. `src/remote/`：提供部署在专用服务器上的全天候个人编码与陪伴助手（`RemoteLoop(BaseAgentHost)`、`RemoteRuntime(BaseRuntime)`、`RemotePromptBuilder`），解除本地路径与命令沙箱限制（`sandbox=False`），采用单阻塞中断循环与工具化外部通讯和云盘自我备份。远端服务器统一读取 `remote.cfg`，通过根目录的 `python main.py remote` 命令一键管理。
 
 Remote 的目录布局如下：
 
 ```text
 src/remote/
-├── execution/   # 主 Agent 装配、单阻塞中断循环与后台 Worker
+├── execution/   # 主 Agent 装配、单阻塞 RemoteLoop 与后台 JobManager/JobExecutor
 ├── storage/     # SQLite 生命周期存储、纯文件系统会话同步 (assets/syncs/) 与回复队列
 ├── channels/    # 基于 MD5 ACCESS_KEY 校验的 HTTP 接口与 Telegram 长轮询收发
-├── tool/        # Remote 专属工具（agent/task_tool.py、communication/message_tool.py、drive/drive_tool.py）
+├── tool/        # Remote 专属工具（SubmitTaskTool(BaseDelegationTool)、TaskControlTool、SendMessageTool、GoogleDriveTool）
+├── runtime.py   # RemoteRuntime(BaseRuntime)：Telegram 进度转发与协作中断
 ├── sysprompt.py # RemotePromptBuilder 全天候助手系统提示词
 ├── service.py   # 守护进程生命周期管理（init/start/stop/restart/status/logs/fg）与服务装配运行（serve）
 └── __main__.py  # python -m src.remote 薄入口

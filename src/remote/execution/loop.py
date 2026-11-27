@@ -59,11 +59,7 @@ class RemoteLoop(BaseAgentHost):
             return None
         # End-if
         runtime = getattr(agent, "runtime", None)
-        interrupt = getattr(runtime, "interrupt", None)
-        if interrupt is not None:
-            return interrupt
-        # End-if
-        return getattr(agent, "_remote_cancel_event", None)
+        return getattr(runtime, "interrupt", None)
     # End-def
 
     ##
@@ -126,17 +122,20 @@ class RemoteLoop(BaseAgentHost):
      # @return True when pending events or an active agent turn were signaled.
      #
     def cancel(self, session_id):
+        target = str(session_id)
         with self.store.changed, self._agents_lock:
-            cancelled_pending = self.store.cancel_pending_events(str(session_id)) > 0
-            agent = self._agents.get(str(session_id))
-            cancel_event = self._get_interrupt(agent)
-            if cancel_event is not None:
-                if hasattr(cancel_event, "request"):
-                    cancel_event.request("user_cancel", mode="rollback")
-                else:
-                    cancel_event.set()
+            cancelled_pending = self.store.cancel_pending_events(target) > 0
+            if self._active_session == target:
+                agent = self._agents.get(target)
+                cancel_event = self._get_interrupt(agent)
+                if cancel_event is not None:
+                    if hasattr(cancel_event, "request"):
+                        cancel_event.request("user_cancel", mode="rollback")
+                    else:
+                        cancel_event.set()
+                    # End-if
+                    return True
                 # End-if
-                return True
             # End-if
             return cancelled_pending
         # End-with
@@ -265,8 +264,17 @@ class RemoteLoop(BaseAgentHost):
         try:
             self.repair_interrupted_tools(agent)
 
-            backup = SessionBackup(agent.session.current_session_dir)
-            backup_ok, _ = backup.create("remote_turn", history_messages=len(agent.history))
+            captured = self.capture_turn_backup(
+                session=agent.session,
+                note="remote_turn",
+                history_messages=len(agent.history),
+            )
+            if isinstance(captured, tuple):
+                backup, backup_ok, _ = captured
+            else:
+                backup = captured
+                backup_ok = backup.is_valid()
+            # End-if
 
             if event["kind"] == "message" and chat_id and tg is not None and hasattr(tg, "start_progress"):
                 tg.start_progress(chat_id)

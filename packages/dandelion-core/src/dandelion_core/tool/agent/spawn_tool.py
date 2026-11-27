@@ -124,7 +124,7 @@ class SpawnSubagentTool(BaseDelegationTool):
             depth=1,
         )
 
-        return result.status != "failed", result.to_context_string()
+        return result.status not in ("failed", "cancelled"), result.to_context_string()
     # End-def
 # End-class
 
@@ -263,6 +263,6 @@ class RestrictedSpawnTool(BaseDelegationTool):
             self.parent.sub_results.append(result)
         # End-if
 
-        return result.status != "failed", result.to_context_string()
+        return result.status not in ("failed", "cancelled"), result.to_context_string()
     # End-def
 # End-class

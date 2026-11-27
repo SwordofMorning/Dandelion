@@ -48,15 +48,27 @@ namespace
 
 constexpr size_t kInlineBodyLimit = 64 * 1024;
 constexpr size_t kUploadChunkSize = 256 * 1024;
+constexpr size_t kMaxErrorBodyBytes = 256 * 1024;
 
 /**
- * @brief Check whether a string contains CR, LF, or NUL control characters.
+ * @brief Parsed HTTP proxy host and optional basic authentication credentials.
+ */
+struct ProxySpec
+{
+    std::string host;
+    std::string username;
+    std::string password;
+};
+
+/**
+ * @brief Check whether a string contains disallowed ASCII control characters.
  */
 bool HasCtl(const std::string& s)
 {
     for (char c : s)
     {
-        if (c == '\r' || c == '\n' || c == '\0')
+        unsigned char u = static_cast<unsigned char>(c);
+        if (u == '\r' || u == '\n' || u == '\0' || u == 0x7F || (u < 0x20 && u != '\t'))
         {
             return true;
         }
@@ -139,10 +151,24 @@ std::string Narrow(const wchar_t* w, size_t len)
 class WinHandle
 {
 public:
+    /**
+     * @brief Construct an empty WinHandle holding nullptr.
+     */
     WinHandle() = default;
+
+    /**
+     * @brief Copy construction is deleted to enforce unique handle ownership.
+     */
     WinHandle(const WinHandle&) = delete;
+
+    /**
+     * @brief Copy assignment is deleted to enforce unique handle ownership.
+     */
     WinHandle& operator=(const WinHandle&) = delete;
 
+    /**
+     * @brief Close the owned WinHTTP handle if non-null.
+     */
     ~WinHandle()
     {
         if (m_h)
@@ -361,7 +387,7 @@ std::string FirstHttpProxy(std::initializer_list<const char*> names)
 }
 
 /**
- * @brief Return the first non-empty environment variable from names.
+ * @brief Return the first non-empty trimmed environment variable from names.
  */
 std::string EnvFirst(std::initializer_list<const char*> names)
 {
@@ -370,32 +396,50 @@ std::string EnvFirst(std::initializer_list<const char*> names)
         const char* v = std::getenv(name);
         if (v && *v)
         {
-            return v;
+            std::string trimmed = TrimAscii(v);
+            if (!trimmed.empty())
+            {
+                return trimmed;
+            }
         }
     }
     return std::string();
 }
 
 /**
- * @brief Strip scheme, credentials, and trailing slashes from an HTTP proxy URL.
+ * @brief Parse an HTTP proxy URL into host:port and optional username/password credentials.
  */
-std::string ProxyHost(std::string p)
+ProxySpec ParseProxyUrl(std::string p)
 {
+    ProxySpec spec;
     size_t scheme = p.find("://");
     if (scheme != std::string::npos)
     {
         p = p.substr(scheme + 3);
     }
+    size_t slash = p.find_first_of("/?#");
+    if (slash != std::string::npos)
+    {
+        p = p.substr(0, slash);
+    }
     size_t at = p.rfind('@');
     if (at != std::string::npos)
     {
+        std::string auth = p.substr(0, at);
         p = p.substr(at + 1);
+        size_t colon = auth.find(':');
+        if (colon != std::string::npos)
+        {
+            spec.username = auth.substr(0, colon);
+            spec.password = auth.substr(colon + 1);
+        }
+        else
+        {
+            spec.username = auth;
+        }
     }
-    while (!p.empty() && p.back() == '/')
-    {
-        p.pop_back();
-    }
-    return p;
+    spec.host = p;
+    return spec;
 }
 
 /**
@@ -443,7 +487,6 @@ bool IsLoopbackHost(const std::wstring& host)
     {
         return true;
     }
-    // Validate strict dotted-quad IPv4 in 127.0.0.0/8 (avoid matching 127.example.com).
     int octets[4] = {0, 0, 0, 0};
     int idx = 0;
     size_t pos = 0;
@@ -480,19 +523,25 @@ bool IsLoopbackHost(const std::wstring& host)
 }
 
 /**
- * @brief Open a WinHTTP async session respecting loopback bypass and HTTP(S)_PROXY / NO_PROXY.
+ * @brief Open a WinHTTP async session respecting loopback bypass, NO_PROXY=*, and HTTP(S)_PROXY.
  */
-HINTERNET OpenSession(bool https, bool local)
+HINTERNET OpenSession(bool https, bool local, ProxySpec* out_proxy)
 {
-    if (local)
+    std::string raw_no_proxy = EnvFirst({"NO_PROXY", "no_proxy"});
+    if (local || raw_no_proxy == "*")
     {
         return WinHttpOpen(L"Dandelion", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC);
     }
     std::string proxy = https ? FirstHttpProxy({"HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"}) : FirstHttpProxy({"HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"});
     if (!proxy.empty())
     {
-        std::string bypass = FormatWinHttpBypass(EnvFirst({"NO_PROXY", "no_proxy"}));
-        std::wstring wproxy = Widen(ProxyHost(proxy));
+        ProxySpec spec = ParseProxyUrl(proxy);
+        if (out_proxy)
+        {
+            *out_proxy = spec;
+        }
+        std::string bypass = FormatWinHttpBypass(raw_no_proxy);
+        std::wstring wproxy = Widen(spec.host);
         std::wstring wbypass = Widen(bypass);
         return WinHttpOpen(L"Dandelion", WINHTTP_ACCESS_TYPE_NAMED_PROXY, wproxy.c_str(), wbypass.empty() ? WINHTTP_NO_PROXY_BYPASS : wbypass.c_str(), WINHTTP_FLAG_ASYNC);
     }
@@ -528,7 +577,7 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
     {
         if (kv.first.empty() || kv.first.find(':') != std::string::npos || HasCtl(kv.first) || HasCtl(kv.second))
         {
-            r.error = "Invalid HTTP header (contains CR, LF, NUL, or malformed name).";
+            r.error = "Invalid HTTP header (contains control character or malformed name).";
             r.non_retryable = true;
             return r;
         }
@@ -552,9 +601,16 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
     bool https = uc.nScheme == INTERNET_SCHEME_HTTPS;
     std::wstring host(uc.lpszHostName, uc.dwHostNameLength);
     std::wstring path = uc.lpszUrlPath ? std::wstring(uc.lpszUrlPath, uc.dwUrlPathLength) : std::wstring();
-    if (uc.lpszExtraInfo)
+    if (uc.lpszExtraInfo && uc.dwExtraInfoLength > 0)
     {
-        path.append(uc.lpszExtraInfo, uc.dwExtraInfoLength);
+        // Strip any #fragment before appending query parameters to the HTTP request-target.
+        std::wstring extra(uc.lpszExtraInfo, uc.dwExtraInfoLength);
+        size_t hash_pos = extra.find(L'#');
+        if (hash_pos != std::wstring::npos)
+        {
+            extra.erase(hash_pos);
+        }
+        path.append(extra);
     }
     if (path.empty())
     {
@@ -566,8 +622,9 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
     std::wstring headers;
     std::string buf(64 * 1024, '\0');
     AsyncRequest request;
+    ProxySpec proxy_spec;
 
-    session.m_h = OpenSession(https, IsLoopbackHost(host));
+    session.m_h = OpenSession(https, IsLoopbackHost(host), &proxy_spec);
     if (!session.m_h)
     {
         r.error = ErrorText(GetLastError());
@@ -599,6 +656,13 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
     {
         r.error = ErrorText(GetLastError());
         return r;
+    }
+
+    if (!proxy_spec.username.empty())
+    {
+        std::wstring wuser = Widen(proxy_spec.username);
+        std::wstring wpass = Widen(proxy_spec.password);
+        WinHttpSetCredentials(request.m_h, WINHTTP_AUTH_TARGET_PROXY, WINHTTP_AUTH_SCHEME_BASIC, wuser.c_str(), wpass.c_str(), nullptr);
     }
 
     for (const auto& kv : req.headers)
@@ -669,6 +733,7 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
     }
 
     bool ok = status >= 200 && status < 300;
+    bool error_body_truncated = false;
     for (;;)
     {
         DWORD available = 0;
@@ -690,18 +755,40 @@ HttpResult HttpPost(const HttpRequest& req, const DataSink& sink, const CheckCan
         {
             break;
         }
-        if (ok && sink)
+        if (ok)
         {
-            r.delivered = true;
-            if (!sink(buf.data(), got))
+            if (sink)
             {
-                r.aborted = true;
-                break;
+                r.delivered = true;
+                if (!sink(buf.data(), got))
+                {
+                    r.aborted = true;
+                    break;
+                }
+            }
+            else
+            {
+                r.body.append(buf.data(), got);
             }
         }
         else
         {
-            r.body.append(buf.data(), got);
+            if (r.body.size() < kMaxErrorBodyBytes)
+            {
+                size_t room = kMaxErrorBodyBytes - r.body.size();
+                size_t take = got < room ? got : room;
+                r.body.append(buf.data(), take);
+                if (take < got && !error_body_truncated)
+                {
+                    error_body_truncated = true;
+                    r.body.append(" [truncated]");
+                }
+            }
+            else if (!error_body_truncated)
+            {
+                error_body_truncated = true;
+                r.body.append(" [truncated]");
+            }
         }
     }
     return r;

@@ -4,29 +4,33 @@
  # @file mk/lib/ascii_check.py
  # @date 2026/11/28
  #
- # @brief Report non-ASCII characters in Python and C/C++ source files.
+ # @brief Report non-ASCII characters in Python, C/C++, build script, and workflow files.
  #
- # Scans *.py, *.cpp, *.hpp, and *.h files under the given directories (or
- # explicit files) and prints every non-ASCII character in clang-format style:
+ # Scans *.py, *.cpp, *.hpp, *.h, *.ps1, *.sh, *.yml, *.yaml, and CMakeLists.txt
+ # under the given directories (or explicit files) and prints every non-ASCII
+ # character in clang-format style:
  #     <path>:<line>:<col>: non-ASCII '<char>' (U+XXXX)
  #
  # Exit code: 0 = clean, 1 = findings.
  #
  # Usage:
  #     python3 mk/make.py ascii
- #     python3 mk/lib/ascii_check.py src/ packages/dandelion-core/src/ mk/ main.py
+ #     python3 mk/lib/ascii_check.py src/ packages/dandelion-core/src/ mk/ .github/workflows/ main.py
  #
 
 import argparse
 import os
 import sys
 
-ALLOWED_EXTS = (".py", ".cpp", ".hpp", ".h")
+ALLOWED_EXTS = (".py", ".cpp", ".hpp", ".h", ".ps1", ".sh", ".yml", ".yaml")
+ALLOWED_FILENAMES = ("CMakeLists.txt",)
 
 DEFAULT_PATHS = (
     "src",
     "packages/dandelion-core/src",
+    "packages/dandelion-core/CMakeLists.txt",
     "mk",
+    ".github/workflows",
     "main.py",
 )
 
@@ -55,7 +59,22 @@ SKIP_FILES = set()
 
 
 ##
- # @brief Yield source files matching ALLOWED_EXTS under root.
+ # @brief Check whether a filename is eligible for ASCII scanning.
+ #
+ # @param filename Basename of the candidate file.
+ #
+ # @return True when the file matches ALLOWED_EXTS or ALLOWED_FILENAMES.
+ #
+def _is_scannable_file(filename):
+    if filename in SKIP_FILES:
+        return False
+    # End-if
+    return filename.endswith(ALLOWED_EXTS) or filename in ALLOWED_FILENAMES
+# End-def
+
+
+##
+ # @brief Yield source/script/workflow files matching allowed extensions under root.
  #
  # @param root Directory path to traverse recursively.
  #
@@ -68,7 +87,7 @@ def iter_source_files(root):
             if d not in SKIP_DIRS and not d.endswith(".egg-info")
         )
         for fn in sorted(filenames):
-            if fn.endswith(ALLOWED_EXTS) and fn not in SKIP_FILES:
+            if _is_scannable_file(fn):
                 yield os.path.join(dirpath, fn)
             # End-if
         # End-for
@@ -182,13 +201,13 @@ def check_paths(paths, base_dir=None):
  #
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Report non-ASCII characters in Python and C/C++ source files."
+        description="Report non-ASCII characters in source, script, and workflow files."
     )
     ap.add_argument(
         "paths",
         nargs="*",
         default=list(DEFAULT_PATHS),
-        help="Files or directories to scan (*.py, *.cpp, *.hpp, *.h).",
+        help="Files or directories to scan (*.py, *.cpp, *.hpp, *.h, *.ps1, *.sh, *.yml, *.yaml, CMakeLists.txt).",
     )
     args = ap.parse_args(argv)
     return check_paths(args.paths)

@@ -1,6 +1,6 @@
 # ===== Step 1 : Project and C++17 Configuration =====
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.26)
 project(dandelion_core_native LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -9,12 +9,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
+if(MSVC)
+    # Link the static C++ runtime (/MT) across both nanobind-static and _native so
+    # prebuilt Windows wheels never require host-installed MSVCP140.dll.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+
 # ===== Step 2 : Python and nanobind Discovery =====
 
-if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.26")
-    find_package(Python REQUIRED COMPONENTS Interpreter Development.Module OPTIONAL_COMPONENTS Development.SABIModule)
-else()
-    find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(Python REQUIRED COMPONENTS Interpreter Development.Module OPTIONAL_COMPONENTS Development.SABIModule)
+
+if(Python_VERSION VERSION_GREATER_EQUAL "3.12" AND NOT TARGET Python::SABIModule)
+    message(FATAL_ERROR "Python ${Python_VERSION} requires Development.SABIModule for cp312-abi3 builds.")
 endif()
 
 execute_process(
@@ -52,7 +58,7 @@ endif()
 
 # ===== Step 4 : Build nanobind Extension (cp312-abi3 on Python >= 3.12) =====
 
-if(Python_VERSION VERSION_GREATER_EQUAL "3.12" AND TARGET Python::SABIModule)
+if(Python_VERSION VERSION_GREATER_EQUAL "3.12")
     message(STATUS "Building dandelion _native with nanobind STABLE_ABI (cp312-abi3) and NB_STATIC")
     nanobind_add_module(_native STABLE_ABI NB_STATIC ${DANDELION_NATIVE_SOURCES})
 else()
@@ -66,6 +72,7 @@ target_include_directories(_native PRIVATE "${DANDELION_NATIVE_DIR}")
 
 if(WIN32)
     if(MSVC)
+        set_property(TARGET _native PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
         target_compile_options(_native PRIVATE /EHsc /O2 /utf-8 /bigobj)
     else()
         target_compile_options(_native PRIVATE -O2)
@@ -73,6 +80,12 @@ if(WIN32)
     endif()
     target_link_libraries(_native PRIVATE winhttp)
 else()
+    if(NOT APPLE)
+        set(DANDELION_EXPORT_MAP "${CMAKE_CURRENT_BINARY_DIR}/native_exports.map")
+        file(WRITE "${DANDELION_EXPORT_MAP}" "{\n    global:\n        PyInit__native;\n    local:\n        *;\n};\n")
+        target_link_options(_native PRIVATE "-Wl,--version-script=${DANDELION_EXPORT_MAP}")
+    endif()
+
     set(DANDELION_STATIC_PREFIX "$ENV{DANDELION_STATIC_PREFIX}")
     if(NOT APPLE AND DANDELION_STATIC_PREFIX AND EXISTS "${DANDELION_STATIC_PREFIX}/lib/libcurl.a")
         message(STATUS "Linking static libcurl + OpenSSL + zlib from ${DANDELION_STATIC_PREFIX}")

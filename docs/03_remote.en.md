@@ -2,18 +2,19 @@
 
 ## 一、Architecture Overview
 
-`src/` is organized into three top-level packages:
+The repository is organized into three layers:
 
-1. `src/core/`: Frontend-agnostic execution mechanisms and abstract base classes, including `agent/` (`MyAgent`, `BasePromptBuilder`, `MemoryManager`, `SkillManager`, `ContextCompressor`, `ContextPruner`, `run_agent_loop`), `tool/` (built-in tools including `remember`, `forget`, and `prune_context`), `subagent/`, and `utils/`.
-2. `src/cli/`: Local terminal frontend reading `cli.cfg` (with automatic fallback to legacy `api.cfg`), featuring workspace sandbox protection (`cli_runtime()`), `CLIPromptBuilder`, and manual session sync client `sync.py`.
-3. `src/remote/`: Always-on personal coding and companion assistant for dedicated server deployment (`sandbox=False`), configured via `remote.cfg` and managed via `python main.py remote`.
+1. `packages/dandelion-core/src/dandelion_core/` (`dandelion-core`): Frontend-agnostic core package and abstract base classes, including `agent/` (`MyAgent`, `BasePromptBuilder`, `MemoryManager`, `SkillManager`, `ContextCompressor`, `ContextPruner`, `run_agent_loop`), `tool/` (built-in tools including `remember`, `forget`, and `prune_context`), `subagent/`, `utils/` (including the native C++17 `nanobind` multi-protocol LLM engine), `runtime.py` (`BaseRuntime`), `host.py` (`BaseAgentHost`), and `sync_protocol.py`.
+2. `src/cli/`: Local terminal frontend (`InteractiveCLI(BaseAgentHost)`, `CLIRuntime(BaseRuntime)`, `CLIPromptBuilder`) reading `cli.cfg` (with automatic fallback to legacy `api.cfg`), featuring workspace sandbox protection and manual session sync client `sync.py`.
+3. `src/remote/`: Always-on personal coding and companion assistant (`RemoteLoop(BaseAgentHost)`, `RemoteRuntime(BaseRuntime)`, `RemotePromptBuilder`) for dedicated server deployment (`sandbox=False`), configured via `remote.cfg` and managed via `python main.py remote`.
 
 ```text
 src/remote/
-├── execution/   # Main agent assembly, single blocking interrupt loop, background workers
+├── execution/   # Main agent assembly, single blocking RemoteLoop, background JobManager/JobExecutor
 ├── storage/     # SQLite lifecycle store, pure-filesystem syncs (assets/syncs/), and reply persistence
 ├── channels/    # HTTP API (MD5 ACCESS_KEY verification) and allowlisted Telegram polling/delivery
-├── tool/        # Remote tools (agent/task_tool.py, communication/message_tool.py, drive/drive_tool.py)
+├── tool/        # Remote tools (SubmitTaskTool(BaseDelegationTool), TaskControlTool, SendMessageTool, GoogleDriveTool)
+├── runtime.py   # RemoteRuntime(BaseRuntime) with Telegram progress forwarding & cooperative interrupt
 ├── sysprompt.py # RemotePromptBuilder for the 24/7 server assistant
 ├── service.py   # Daemon lifecycle manager (init/start/stop/restart/status/logs/fg) and service runner (serve)
 └── __main__.py  # Thin module entrypoint for python -m src.remote

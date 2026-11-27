@@ -59,7 +59,7 @@ void SetPackageName(std::string pkg);
 nb::object Field(nb::handle obj, const char* key);
 
 /**
- * @brief Convert a Python object to UTF-8 std::string (None -> "", str -> UTF-8 with fallback).
+ * @brief Convert a Python object to UTF-8 std::string (None -> "", str -> UTF-8 with surrogate replacement).
  */
 std::string TextOf(nb::handle obj);
 
@@ -149,9 +149,19 @@ bool EndsWith(const std::string& s, const std::string& suffix);
 std::string RstripSlash(std::string s);
 
 /**
- * @brief Check whether a string contains CR, LF, or NUL control characters.
+ * @brief Check whether a string contains disallowed HTTP header control characters.
  */
 bool HasHeaderControlChars(const std::string& s);
+
+/**
+ * @brief Strip vendor/models prefixes from a Gemini model ID and reject URL path/query injection characters.
+ */
+std::string SanitizeBareModel(const std::string& model);
+
+/**
+ * @brief Return true for OpenAI reasoning models (o1, o3, o4, gpt-5, gpt-6 families).
+ */
+bool IsOpenAIReasoningModel(const std::string& model_id);
 
 /**
  * @brief Return environment variable name when non-empty, or fallback otherwise.
@@ -164,12 +174,12 @@ std::string EnvOr(const char* name, const std::string& fallback);
 nb::object JsonLoads(const std::string& text);
 
 /**
- * @brief Serialize a Python object to UTF-8 JSON using blocks.json_default.
+ * @brief Serialize a Python object to RFC 8259 UTF-8 JSON (allow_nan=False) using blocks.json_default.
  */
 std::string JsonDumps(nb::handle obj);
 
 /**
- * @brief Serialize a Python object to UTF-8 JSON without a default hook.
+ * @brief Serialize a Python object to RFC 8259 UTF-8 JSON (allow_nan=False) without a default hook.
  */
 std::string JsonDumpsPlain(nb::handle obj);
 
@@ -239,7 +249,7 @@ std::string SystemText(nb::object system);
 std::string ResultText(nb::object content);
 
 /**
- * @brief Check whether the calling thread is the Python main thread (cached thread-locally).
+ * @brief Check whether the calling thread is the Python main thread (fork-safe thread-local cache).
  */
 bool IsMainThread();
 

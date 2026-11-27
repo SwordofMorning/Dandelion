@@ -292,6 +292,24 @@ class MemoryManager:
     # End-def
 
     ##
+     # @brief List memory entries across global and/or session tiers.
+     #
+     # @param scope One of "all", "global", or "session".
+     #
+     # @return List of memory metadata and body dictionaries.
+     #
+    def list_memories(self, scope="all"):
+        result = []
+        if scope in ("all", "global"):
+            result += self._list_tier(self.memory_dir, "global")
+        # End-if
+        if scope in ("all", "session"):
+            result += self._list_tier(self.session_memory_dir(), "session")
+        # End-if
+        return result
+    # End-def
+
+    ##
      # @brief read index memory file (MEMORY.md), looks like:
      #
      # - [name a] description (tags) [updated: time]

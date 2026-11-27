@@ -96,4 +96,13 @@ class TurnInterrupt:
     def set(self):
         self.request(reason="cancel", mode=MODE_ROLLBACK)
     # End-def
+
+    ##
+     # @brief Alias for threading.Event compatibility.
+     #
+     # @return True when an interrupt is pending.
+     #
+    def is_set(self):
+        return self.is_requested()
+    # End-def
 # End-class

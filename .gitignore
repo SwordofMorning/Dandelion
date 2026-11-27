@@ -13,7 +13,6 @@ env/
 .log/
 .remote/
 workspace/
-.playfround/
 .playground_parsed/
 *.zip
 *.log

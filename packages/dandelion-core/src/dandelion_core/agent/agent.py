@@ -24,6 +24,7 @@
 import json
 import os
 import re
+import shutil
 import time
 
 from ..runtime import Runtime
@@ -45,12 +46,31 @@ from .tools import build_tools
 _DYN_CTX_START = "[Dandelion Context"
 _DYN_CTX_END = "[Dandelion Context End]"
 
-# Main-agent LLM call retry policy: 1 initial attempt + _LLM_RETRY_COUNT retries.
-# Exponential backoff (seconds) between attempts, polled in 100ms slices for
-# prompt TurnInterrupt cancellation.
-_LLM_RETRY_COUNT = 3
-_LLM_RETRY_BACKOFF = (2, 4, 8)
+# Main-agent LLM call retry policy: 1 initial attempt + _LLM_RETRY_COUNT retry.
+# _native.Provider already performs 3 internal attempts on transport/429/5xx
+# errors, so keeping outer retries bounded prevents 4x3=12 retry amplification.
+_LLM_RETRY_COUNT = 1
+_LLM_RETRY_BACKOFF = (2,)
 _RETRY_POLL_INTERVAL_SEC = 0.1
+_NON_RETRYABLE_STATUS_RE = re.compile(
+    r"\b(?:http\s*|error\s+code:\s*|status\s*=?\s*)(?:400|401|403|404|422)\b",
+    re.IGNORECASE,
+)
+
+
+##
+ # @brief Check whether an API error represents a deterministic 4xx client failure.
+ #
+ # @param err Error string returned by the provider.
+ #
+ # @return True for deterministic HTTP 400/401/403/404/422 errors.
+ #
+def _is_non_retryable_error(err):
+    if not err:
+        return False
+    # End-if
+    return bool(_NON_RETRYABLE_STATUS_RE.search(str(err)))
+# End-def
 
 
 ##
@@ -96,15 +116,17 @@ class MyAgent:
      # @param runtime Optional BaseRuntime instance for output, cancellation and approval.
      # @param tool_factory Optional callable constructing the main-agent tool mapping.
      # @param prompt_builder_cls Optional BasePromptBuilder subclass or factory.
+     # @param config_dir Optional operator config directory (e.g. <root>/.env for Remote).
      #
      # @return None.
      #
     def __init__(self, config, session_manager, workspace_dir, runtime=None,
-                 tool_factory=None, prompt_builder_cls=None):
+                 tool_factory=None, prompt_builder_cls=None, config_dir=None):
         # ----- @par 1. Init members -----
         self.config = config
         self.session = session_manager
         self.workspace_dir = workspace_dir
+        self.config_dir = config_dir
         self.runtime = runtime or Runtime()
         self.tool_factory = tool_factory or build_tools
         self.pool = None
@@ -329,7 +351,7 @@ class MyAgent:
                         session_hint = f" (session: {self.session.current_session_id})"
                     # End-if
                     sections.append(
-                        PromptBuilder.render_task_state_text(state, session_hint)
+                        self.prompt_builder.render_task_state_text(state, session_hint)
                     )
                 # End-if
             except Exception as e:
@@ -514,6 +536,10 @@ class MyAgent:
                 # End-if
             # End-if
 
+            if _is_non_retryable_error(err):
+                break
+            # End-if
+
             if attempt < max_attempts:
                 wait = _LLM_RETRY_BACKOFF[attempt - 1]
                 self.runtime.emit(f"[-] API Error: {err} (attempt {attempt}/{max_attempts})")
@@ -562,6 +588,15 @@ class MyAgent:
             self._pending_media_blocks = []
             self._print_token_usage(self.last_usage)
             return False, None
+        # End-if
+
+        # Cooperative cancel guard before dispatching any potentially destructive tools
+        # (e.g. if TurnInterrupt fired during post-response compaction or stream tail).
+        if self.runtime.cancelled():
+            self.pop_unpaired_tool_use_tail()
+            self.session.save_history(self.history)
+            self._pending_media_blocks = []
+            return False, RequestCancelledError("Request cancelled by runtime interrupt.")
         # End-if
 
         results = []
@@ -716,7 +751,10 @@ class MyAgent:
     def rollback_turn(self, backup=None, trigger=""):
         from ..utils.logging.backup import SessionBackup
 
-        snap = backup if backup is not None else SessionBackup(self.session.current_session_dir)
+        snap = backup if backup is not None else SessionBackup(
+            self.session.current_session_dir,
+            session_id=getattr(self.session, "current_session_id", None),
+        )
         if not snap.is_valid():
             return False, [], ["invalid_backup"]
         # End-if
@@ -729,14 +767,56 @@ class MyAgent:
             })
             return False, restored, failed
         # End-if
+
+        # Handle mid-turn prune_context(rollover=True): restore session pointer
+        # back to backup's original session and remove the orphaned rollover dir.
+        cur_dir = getattr(self.session, "current_session_dir", None)
+        snap_dir = snap.session_dir
+        removed_rollover_id = None
+        if cur_dir and snap_dir and os.path.abspath(cur_dir) != os.path.abspath(snap_dir):
+            orig_id = snap.session_id or os.path.basename(os.path.normpath(snap_dir))
+            switched = False
+            if hasattr(self.session, "switch_session"):
+                switched = bool(self.session.switch_session(orig_id))
+            # End-if
+            if not switched:
+                self.session.current_session_id = orig_id
+                self.session.current_session_dir = snap_dir
+            # End-if
+
+            log_root = getattr(self.session, "log_dir", None)
+            if log_root:
+                abs_log = os.path.realpath(log_root)
+                abs_cur = os.path.realpath(cur_dir)
+                abs_snap = os.path.realpath(snap_dir)
+                try:
+                    inside_log = os.path.commonpath([abs_log, abs_cur]) == abs_log
+                except ValueError:
+                    inside_log = False
+                # End-try
+                if inside_log and abs_cur != abs_log and abs_cur != abs_snap and os.path.isdir(abs_cur):
+                    try:
+                        shutil.rmtree(abs_cur)
+                        removed_rollover_id = os.path.basename(abs_cur)
+                    except OSError:
+                        pass
+                    # End-try
+                # End-if
+            # End-if
+        # End-if
+
         self.reload_history()
-        self.session.log_api_call("TURN ROLLBACK", {
+        log_payload = {
             "trigger": str(trigger),
             "status": "done",
             "restored": restored,
             "failed": failed,
             "history_messages": len(self.history),
-        })
+        }
+        if removed_rollover_id:
+            log_payload["removed_rollover_session"] = removed_rollover_id
+        # End-if
+        self.session.log_api_call("TURN ROLLBACK", log_payload)
         return True, restored, failed
     # End-def
 # End-class

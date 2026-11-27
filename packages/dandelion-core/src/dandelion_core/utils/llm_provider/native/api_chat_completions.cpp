@@ -9,6 +9,7 @@
 
 #include "provider.hpp"
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -51,39 +52,18 @@ std::string JoinLines(const std::vector<std::string>& parts)
 }
 
 /**
- * @brief Detect OpenAI reasoning models (o1/o3/o4/gpt-5) that reject temperature and require max_completion_tokens.
- */
-bool IsOpenAIReasoningModel(const std::string& model_id)
-{
-    std::string m = Lower(Trim(model_id));
-    size_t slash = m.rfind('/');
-    if (slash != std::string::npos)
-    {
-        m = m.substr(slash + 1);
-    }
-    if (StartsWith(m, "gpt-5"))
-    {
-        return true;
-    }
-    for (const char* prefix : {"o1", "o3", "o4"})
-    {
-        if (m == prefix || StartsWith(m, std::string(prefix) + "-"))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @brief Extract reasoning_content (or OpenRouter/vLLM "reasoning" alias) from a message or delta object.
+ * @brief Extract reasoning_content (falling back to OpenRouter/vLLM "reasoning" alias when empty or absent).
  */
 std::string ExtractReasoningField(nb::handle obj)
 {
     nb::object rc = Field(obj, "reasoning_content");
     if (!rc.is_none())
     {
-        return TextOf(rc);
+        std::string val = TextOf(rc);
+        if (!val.empty())
+        {
+            return val;
+        }
     }
     nb::object r = Field(obj, "reasoning");
     if (IsStr(r))
@@ -231,7 +211,11 @@ public:
         nb::object choice = choices[0];
         if (!Field(choice, "finish_reason").is_none())
         {
-            m_finish = TextOf(Field(choice, "finish_reason"));
+            std::string fr = TextOf(Field(choice, "finish_reason"));
+            if (!fr.empty())
+            {
+                m_finish = fr;
+            }
         }
         nb::object delta = Field(choice, "delta");
 
@@ -256,7 +240,15 @@ public:
         for (nb::handle tc : tool_calls)
         {
             nb::object raw_index = Field(tc, "index");
-            long idx = IsInt(raw_index) ? nb::cast<long>(raw_index) : 0;
+            int64_t idx = 0;
+            if (IsInt(raw_index))
+            {
+                idx = nb::cast<int64_t>(raw_index);
+                if (idx < 0)
+                {
+                    throw ProtocolError("Negative Chat Completions tool_call index.");
+                }
+            }
             nb::object fn = Field(tc, "function");
             std::string tc_id = TextOf(Field(tc, "id"));
             std::string fn_name = TextOf(Field(fn, "name"));
@@ -271,21 +263,14 @@ public:
             }
             else
             {
-                // Accumulate late id/name fields delivered on subsequent delta chunks.
                 if (!tc_id.empty() && m_calls[it->second].id.empty())
                 {
                     m_calls[it->second].id = tc_id;
                 }
                 if (!fn_name.empty())
                 {
-                    if (m_calls[it->second].name.empty())
-                    {
-                        m_calls[it->second].name = fn_name;
-                    }
-                    else if (m_calls[it->second].name != fn_name)
-                    {
-                        m_calls[it->second].name += fn_name;
-                    }
+                    // Unconditionally concatenate streamed tool-name chunks (preserves repeated chars/tokens).
+                    m_calls[it->second].name += fn_name;
                 }
             }
             if (!fn_args.empty())
@@ -314,7 +299,7 @@ private:
     std::string m_text;
     std::string m_finish;
     std::vector<ChatToolCall> m_calls;
-    std::map<long, size_t> m_order;
+    std::map<int64_t, size_t> m_order;
     nb::object m_usage = nb::none();
 };
 
@@ -335,11 +320,17 @@ public:
         m_supports_effort = !(Contains(Lower(c.base_url), "nvidia") || ContainsAny(Lower(c.model_id), {"z-ai", "glm-5.2"}));
     }
 
+    /**
+     * @brief Return the Chat Completions protocol identifier ("openai").
+     */
     const char* Protocol() const override
     {
         return "openai";
     }
 
+    /**
+     * @brief Return the resolved upstream flavor.
+     */
     std::string Flavor() const override
     {
         return m_flavor;
@@ -352,7 +343,7 @@ public:
     {
         nb::dict body;
         body["model"] = m_cfg.model_id;
-        body["messages"] = ConvertMessages(payload.get("messages", nb::list()), payload.get("system", nb::str("")));
+        body["messages"] = ConvertMessages(payload.get("messages", nb::list()), payload.get("system", nb::str("")), m_flavor, m_cfg.thinking);
 
         nb::object cap = payload.get("max_tokens", nb::int_(8192));
         bool reasoning_model = IsOpenAIReasoningModel(m_cfg.model_id);
@@ -430,6 +421,9 @@ public:
                                  MapChatUsage(Field(resp, "usage")));
     }
 
+    /**
+     * @brief Create a fresh ChatCompletionsStream SSE decoder.
+     */
     std::unique_ptr<StreamDecoder> Decoder(bool echo) override
     {
         return std::make_unique<ChatCompletionsStream>(echo);
@@ -437,13 +431,17 @@ public:
 
 private:
     /**
-     * @brief Inject cross-protocol effort/thinking parameters into Chat Completions body idempotently.
+     * @brief Inject effort/thinking parameters idempotently, gating foreign Sub2API bridges behind explicit compat.
      */
     void InjectEffort(nb::dict body)
     {
         for (const char* key : kOwnedKeys)
         {
             DictDelIfPresent(body, key);
+        }
+        if (m_flavor == "none")
+        {
+            return;
         }
         if (!m_supports_effort && !m_explicit_compat)
         {
@@ -452,7 +450,7 @@ private:
 
         if (m_flavor == "openai")
         {
-            if (m_cfg.thinking == "enabled" || m_explicit_compat)
+            if (m_cfg.thinking == "enabled" && (m_explicit_compat || IsOpenAIReasoningModel(m_cfg.model_id)))
             {
                 body["reasoning_effort"] = ResolveEffort("EFFORT_TO_OPENAI_EFFORT", m_cfg.effort, m_cfg.model_id);
             }
@@ -466,38 +464,40 @@ private:
                 body["thinking"] = thinking;
                 body["reasoning_effort"] = ResolveEffort("EFFORT_TO_DEEPSEEK_EFFORT", m_cfg.effort, m_cfg.model_id);
             }
-            else if (m_cfg.thinking == "disabled")
+            else if (m_cfg.thinking == "disabled" && (m_explicit_compat || Contains(Lower(m_cfg.base_url), "deepseek")))
             {
                 nb::dict thinking;
                 thinking["type"] = "disabled";
                 body["thinking"] = thinking;
             }
-            else if (m_explicit_compat)
-            {
-                body["reasoning_effort"] = ResolveEffort("EFFORT_TO_DEEPSEEK_EFFORT", m_cfg.effort, m_cfg.model_id);
-            }
         }
         else if (m_flavor == "gemini")
         {
-            std::string level = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
-            body["reasoning_effort"] = level;
-            body["thinking_level"] = level;
-            body["thinkingLevel"] = level;
+            if (m_explicit_compat)
+            {
+                std::string level = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
+                body["reasoning_effort"] = level;
+                body["thinking_level"] = level;
+                body["thinkingLevel"] = level;
+            }
         }
         else if (m_flavor == "anthropic" || m_flavor == "anthropic-effort")
         {
-            if (m_cfg.thinking == "enabled")
+            if (m_explicit_compat)
             {
-                nb::dict thinking;
-                thinking["type"] = "enabled";
-                thinking["budget_tokens"] = ResolveEffort("EFFORT_TO_BUDGET_TOKENS", m_cfg.effort, m_cfg.model_id);
-                body["thinking"] = thinking;
-            }
-            if (m_flavor == "anthropic-effort")
-            {
-                nb::dict oc;
-                oc["effort"] = ResolveEffort("EFFORT_TO_ANTHROPIC_EFFORT", m_cfg.effort, m_cfg.model_id);
-                body["output_config"] = oc;
+                if (m_cfg.thinking == "enabled")
+                {
+                    nb::dict thinking;
+                    thinking["type"] = "enabled";
+                    thinking["budget_tokens"] = ResolveEffort("EFFORT_TO_BUDGET_TOKENS", m_cfg.effort, m_cfg.model_id);
+                    body["thinking"] = thinking;
+                }
+                if (m_flavor == "anthropic-effort")
+                {
+                    nb::dict oc;
+                    oc["effort"] = ResolveEffort("EFFORT_TO_ANTHROPIC_EFFORT", m_cfg.effort, m_cfg.model_id);
+                    body["output_config"] = oc;
+                }
             }
         }
     }
@@ -538,7 +538,7 @@ private:
     /**
      * @brief Translate canonical history and system prompt into Chat Completions message format.
      */
-    static nb::list ConvertMessages(nb::object messages, nb::object system)
+    static nb::list ConvertMessages(nb::object messages, nb::object system, const std::string& flavor, const std::string& thinking)
     {
         nb::list out;
         std::string sys_text = SystemText(system);
@@ -693,9 +693,17 @@ private:
                 }
                 nb::dict m;
                 m["role"] = "assistant";
-                if (!reasonings.empty())
+                if (flavor != "openai")
                 {
-                    m["reasoning_content"] = SafeUtf8Str(JoinLines(reasonings));
+                    if (!reasonings.empty())
+                    {
+                        m["reasoning_content"] = SafeUtf8Str(JoinLines(reasonings));
+                    }
+                    else if (flavor == "deepseek" && thinking == "enabled" && nb::len(calls) > 0)
+                    {
+                        // DeepSeek thinking mode requires reasoning_content on assistant tool_calls turns.
+                        m["reasoning_content"] = "";
+                    }
                 }
                 if (!texts.empty())
                 {

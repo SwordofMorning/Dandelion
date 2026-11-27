@@ -37,27 +37,19 @@ std::string VersionedBase(const std::string& configured)
 }
 
 /**
- * @brief Strip a leading "models/" prefix from a Gemini model identifier.
- */
-std::string BareModel(const std::string& model)
-{
-    return StartsWith(model, "models/") ? model.substr(7) : model;
-}
-
-/**
  * @brief Return true for Gemini 1.x / 2.x models predating thought-signature validation and thinkingLevel.
  */
-bool IsLegacyGemini(const std::string& model)
+bool IsLegacyGemini(const std::string& bare_model)
 {
-    return ContainsAny(Lower(model), {"gemini-1", "gemini-2"});
+    return ContainsAny(Lower(bare_model), {"gemini-1", "gemini-2"});
 }
 
 /**
  * @brief Return true for Gemini 2.5 models that accept thinkingBudget (case-insensitive).
  */
-bool IsGemini25(const std::string& model)
+bool IsGemini25(const std::string& bare_model)
 {
-    return StartsWith(Lower(BareModel(model)), "gemini-2.5-");
+    return StartsWith(Lower(bare_model), "gemini-2.5-");
 }
 
 /**
@@ -119,7 +111,7 @@ nb::object AsObject(nb::object v)
 /**
  * @brief Convert canonical Dandelion history into Gemini generateContent contents[] preserving thought signatures.
  */
-nb::list BuildContents(nb::object messages, const std::string& model)
+nb::list BuildContents(nb::object messages, const std::string& bare_model)
 {
     std::set<std::string> local_ids;
     auto names = CollectToolNames(messages, &local_ids);
@@ -229,7 +221,7 @@ nb::list BuildContents(nb::object messages, const std::string& model)
                 parts.append(part);
             }
 
-            if (!user && has_call && !first_call_signed && !IsLegacyGemini(model))
+            if (!user && has_call && !first_call_signed && !IsLegacyGemini(bare_model))
             {
                 for (nb::handle part : parts)
                 {
@@ -240,6 +232,14 @@ nb::list BuildContents(nb::object messages, const std::string& model)
                     }
                 }
             }
+        }
+
+        // Preserve strict user/model role alternation if all assistant blocks were foreign reasoning.
+        if (!user && nb::len(parts) == 0)
+        {
+            nb::dict placeholder;
+            placeholder["text"] = "[reasoning omitted]";
+            parts.append(placeholder);
         }
 
         if (nb::len(parts) > 0)
@@ -254,7 +254,7 @@ nb::list BuildContents(nb::object messages, const std::string& model)
 }
 
 /**
- * @brief Map Gemini usageMetadata into Dandelion's canonical usage dict.
+ * @brief Map Gemini usageMetadata into Dandelion's canonical usage dict without signed overflow UB.
  */
 nb::object MapGeminiUsage(nb::object u)
 {
@@ -263,13 +263,13 @@ nb::object MapGeminiUsage(nb::object u)
     {
         return out;
     }
-    long long output = 0;
+    nb::object output = nb::int_(0);
     for (const char* key : {"candidatesTokenCount", "thoughtsTokenCount"})
     {
         nb::object v = Field(u, key);
         if (IsInt(v))
         {
-            output += nb::cast<long long>(v);
+            output = output + v;
         }
     }
     out["input_tokens"] = Field(u, "promptTokenCount");
@@ -316,7 +316,11 @@ public:
         nb::object feedback = Field(chunk, "promptFeedback");
         if (!Field(feedback, "blockReason").is_none())
         {
-            m_block_reason = TextOf(Field(feedback, "blockReason"));
+            std::string br = TextOf(Field(feedback, "blockReason"));
+            if (!br.empty())
+            {
+                m_block_reason = br;
+            }
         }
         if (!Field(chunk, "usageMetadata").is_none())
         {
@@ -330,7 +334,11 @@ public:
         nb::object cand = candidates[0];
         if (!Field(cand, "finishReason").is_none())
         {
-            m_finish = TextOf(Field(cand, "finishReason"));
+            std::string fr = TextOf(Field(cand, "finishReason"));
+            if (!fr.empty())
+            {
+                m_finish = fr;
+            }
         }
         nb::object parts = Field(Field(cand, "content"), "parts");
         if (!IsList(parts))
@@ -352,16 +360,13 @@ public:
             {
                 FlushPendingText();
                 nb::object args = AsObject(Field(call, "args"));
-                if (TextOf(Field(call, "name")).empty() || !IsDict(args) || !Field(call, "partialArgs").is_none() || nb::bool_(Field(call, "willContinue")))
-                {
-                    throw ProtocolError("Incomplete Gemini function call.");
-                }
+                bool incomplete = TextOf(Field(call, "name")).empty() || !IsDict(args) || !Field(call, "partialArgs").is_none() || nb::bool_(Field(call, "willContinue"));
                 std::string id = TextOf(Field(call, "id"));
                 nb::dict block;
                 block["type"] = "tool_use";
                 block["id"] = id.empty() ? RandomCallId() : id;
                 block["name"] = TextOf(Field(call, "name"));
-                block["input"] = args;
+                block["input"] = IsDict(args) ? args : nb::object(nb::dict());
                 if (id.empty() || !sig.is_none())
                 {
                     block["gemini_function_call"] = call;
@@ -370,8 +375,14 @@ public:
                 {
                     block["thought_signature"] = sig;
                 }
+                size_t slot = m_blocks.size();
                 m_blocks.push_back(MakeBlock(block));
-                if (m_echo)
+                if (incomplete)
+                {
+                    // Defer rejection until Finish() so MAX_TOKENS drops truncated tool calls cleanly.
+                    m_incomplete_calls.insert(slot);
+                }
+                else if (m_echo)
                 {
                     Emit(JsonDumpsPlain(args), true);
                 }
@@ -424,26 +435,33 @@ public:
         }
         if (m_finish != "STOP" && m_finish != "MAX_TOKENS")
         {
-            // Surface SAFETY / MALFORMED_FUNCTION_CALL / RECITATION even after partial text.
             throw ProtocolError("Gemini stopped abnormally (finishReason=" + m_finish + ").");
         }
 
         nb::list content;
         bool has_calls = false;
-        for (auto& block : m_blocks)
+        for (size_t i = 0; i < m_blocks.size(); ++i)
         {
+            nb::object& block = m_blocks[i];
             std::string type = TextOf(Field(block, "type"));
             if (type == "text" && TextOf(Field(block, "text")).empty() && Field(block, "thought_signature").is_none())
             {
                 continue;
             }
-            if (type == "tool_use" && m_finish != "STOP")
+            if (type == "tool_use")
             {
                 if (m_finish == "MAX_TOKENS")
                 {
                     continue;
                 }
-                throw ProtocolError("Incomplete Gemini function call (finishReason=" + m_finish + ").");
+                if (m_finish != "STOP")
+                {
+                    throw ProtocolError("Incomplete Gemini function call (finishReason=" + m_finish + ").");
+                }
+                if (m_incomplete_calls.count(i))
+                {
+                    throw ProtocolError("Incomplete Gemini function call.");
+                }
             }
             has_calls = has_calls || (type == "tool_use");
             content.append(block);
@@ -494,6 +512,7 @@ private:
     bool m_has_pending_text = false;
     std::string m_pending_text;
     std::vector<nb::object> m_blocks;
+    std::set<size_t> m_incomplete_calls;
     nb::object m_usage = nb::none();
     std::string m_finish;
     std::string m_block_reason;
@@ -506,20 +525,27 @@ class GenerateContentCodec : public Codec
 {
 public:
     /**
-     * @brief Construct codec and resolve terminal flavor.
+     * @brief Construct codec, validate bare model identifier, and resolve terminal flavor.
      */
     explicit GenerateContentCodec(const ProviderConfig& c)
         : Codec(c)
     {
+        m_bare_model = SanitizeBareModel(c.model_id);
         m_explicit_compat = IsExplicitCompat(c.compat);
         m_flavor = ResolveFlavor(c.compat, c.model_id, c.base_url, "gemini");
     }
 
+    /**
+     * @brief Return the Generate Content protocol identifier ("gemini").
+     */
     const char* Protocol() const override
     {
         return "gemini";
     }
 
+    /**
+     * @brief Return the resolved upstream flavor.
+     */
     std::string Flavor() const override
     {
         return m_flavor;
@@ -531,7 +557,7 @@ public:
     Built Build(nb::dict payload, bool stream) override
     {
         nb::dict body;
-        body["contents"] = BuildContents(payload.get("messages", nb::none()), m_cfg.model_id);
+        body["contents"] = BuildContents(payload.get("messages", nb::none()), m_bare_model);
 
         std::string system = SystemText(payload.get("system", nb::str("")));
         if (!system.empty())
@@ -579,15 +605,15 @@ public:
             gen["maxOutputTokens"] = cap;
         }
 
-        if (m_cfg.thinking == "enabled")
+        if (m_cfg.thinking == "enabled" && m_flavor != "none")
         {
-            if (IsGemini25(m_cfg.model_id))
+            if (IsGemini25(m_bare_model))
             {
                 nb::dict tc;
                 tc["thinkingBudget"] = ResolveEffort("EFFORT_TO_GEMINI_25_BUDGET", m_cfg.effort, m_cfg.model_id);
                 gen["thinkingConfig"] = tc;
             }
-            else if (!IsLegacyGemini(m_cfg.model_id))
+            else if (!IsLegacyGemini(m_bare_model))
             {
                 std::string level = Upper(ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id));
                 nb::dict tc;
@@ -600,7 +626,7 @@ public:
             body["generationConfig"] = gen;
         }
 
-        if (m_explicit_compat)
+        if (m_explicit_compat && m_flavor != "none")
         {
             if (m_flavor == "openai")
             {
@@ -623,7 +649,7 @@ public:
         }
 
         Built b;
-        b.url = VersionedBase(m_cfg.base_url) + "/models/" + BareModel(m_cfg.model_id) + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
+        b.url = VersionedBase(m_cfg.base_url) + "/models/" + m_bare_model + (stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
         b.headers = {
             {"x-goog-api-key", m_cfg.api_key},
             {"content-type", "application/json"},
@@ -633,6 +659,9 @@ public:
         return b;
     }
 
+    /**
+     * @brief Parse a non-streaming GenerateContentResponse JSON body.
+     */
     nb::object Parse(nb::object body) override
     {
         GenerateContentStream acc(false);
@@ -640,12 +669,16 @@ public:
         return acc.Finish();
     }
 
+    /**
+     * @brief Create a fresh GenerateContentStream SSE decoder.
+     */
     std::unique_ptr<StreamDecoder> Decoder(bool echo) override
     {
         return std::make_unique<GenerateContentStream>(echo);
     }
 
 private:
+    std::string m_bare_model;
     std::string m_flavor;
     bool m_explicit_compat = false;
 };

@@ -37,8 +37,8 @@ function Import-MsvcEnv {
     }
 
     $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if (-not $vsPath) {
-        throw "Visual Studio with C++ x64 build tools (VC.Tools.x86.x64) was not found."
+    if ($LASTEXITCODE -ne 0 -or -not $vsPath) {
+        throw "Visual Studio with C++ x64 build tools (VC.Tools.x86.x64) was not found (vswhere exit $LASTEXITCODE)."
     }
 
     $vsDevCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
@@ -87,6 +87,11 @@ function Ensure-CMakeNinja {
     }
 }
 
+function Test-LocalCoreBuildDeps {
+    & $Python -c "import importlib.util, sys; sys.exit(0 if (importlib.util.find_spec('scikit_build_core') and importlib.util.find_spec('nanobind')) else 1)"
+    return ($LASTEXITCODE -eq 0)
+}
+
 if ($Target -eq "clean") {
     Write-Host "[*] Cleaning native build artifacts..."
     $toClean = @(
@@ -115,13 +120,25 @@ if (-not (Test-Path $CoreDir)) {
 Import-MsvcEnv
 Ensure-CMakeNinja
 
+$HasLocalDeps = Test-LocalCoreBuildDeps
+if ($HasLocalDeps) {
+    Write-Host "[+] Found local scikit-build-core and nanobind (using --no-build-isolation)."
+} else {
+    Write-Host "[*] Local scikit-build-core/nanobind not detected (using PEP 517 build isolation)."
+}
+
 if ($Target -eq "build") {
-    Write-Host "[*] Building and installing dandelion-core editable (no build isolation)..."
-    & $Python -m pip install --no-build-isolation --no-deps -e $CoreDir
+    Write-Host "[*] Building and installing dandelion-core editable..."
+    $pipArgs = @("-m", "pip", "install")
+    if ($HasLocalDeps) {
+        $pipArgs += "--no-build-isolation"
+    }
+    $pipArgs += @("--no-deps", "-e", $CoreDir)
+    & $Python @pipArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Native editable install failed with exit code $LASTEXITCODE."
     }
-    & $Python -c "from dandelion_core.utils.llm_provider import _native; print('[+] Loaded native module:', _native.__file__)"
+    & $Python -I -c "from dandelion_core.utils.llm_provider import _native; print('[+] Loaded native module:', _native.__file__)"
     if ($LASTEXITCODE -ne 0) {
         throw "Native module verification import failed."
     }
@@ -132,12 +149,46 @@ if ($Target -eq "build") {
 if ($Target -eq "wheel") {
     New-Item -ItemType Directory -Force -Path $WheelDir | Out-Null
     Write-Host "[*] Building dandelion-core wheel into $WheelDir ..."
-    & $Python -m pip wheel --no-build-isolation --no-deps --wheel-dir $WheelDir $CoreDir
+    $pipArgs = @("-m", "pip", "wheel")
+    if ($HasLocalDeps) {
+        $pipArgs += "--no-build-isolation"
+    }
+    $pipArgs += @("--no-deps", "--wheel-dir", $WheelDir, $CoreDir)
+    & $Python @pipArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Wheel build failed with exit code $LASTEXITCODE."
     }
-    Get-ChildItem -Path $WheelDir -Filter "dandelion_core-*.whl" | ForEach-Object {
-        Write-Host "[+] Built wheel: $($_.FullName)"
+    $builtWheels = @(Get-ChildItem -Path $WheelDir -Filter "dandelion_core-*.whl" | Sort-Object LastWriteTime -Descending)
+    if ($builtWheels.Count -eq 0) {
+        throw "No dandelion_core-*.whl artifact found in $WheelDir."
+    }
+    foreach ($w in $builtWheels) {
+        Write-Host "[+] Built wheel: $($w.FullName)"
+    }
+
+    # Verify the newly built wheel installs and imports _native inside an isolated venv.
+    $verifyDir = Join-Path $env:TEMP ("dandelion-wheel-verify-" + $PID)
+    try {
+        if (Test-Path $verifyDir) {
+            Remove-Item -Recurse -Force $verifyDir
+        }
+        & $Python -m venv $verifyDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create verification venv at $verifyDir."
+        }
+        $verifyPy = Join-Path $verifyDir "Scripts\python.exe"
+        & $verifyPy -m pip install --no-deps --force-reinstall $builtWheels[0].FullName
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install built wheel into verification venv."
+        }
+        & $verifyPy -I -c "import os, sys; from dandelion_core.utils.llm_provider import _native; p = os.path.abspath(_native.__file__); assert p.startswith(os.path.abspath(sys.prefix)), p; print('[+] Verified wheel _native:', p)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Built wheel failed isolated _native import verification."
+        }
+    } finally {
+        if (Test-Path $verifyDir) {
+            Remove-Item -Recurse -Force $verifyDir
+        }
     }
     exit 0
 }

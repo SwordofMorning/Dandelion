@@ -21,6 +21,7 @@ import signal
 import subprocess
 
 from dandelion_core.host import BaseAgentHost
+from dandelion_core.utils.llm_provider.blocks import RequestCancelledError
 from dandelion_core.utils.logging.backup import SessionBackup
 
 from .runtime import INTERRUPT
@@ -69,8 +70,16 @@ class InteractiveCLI(BaseAgentHost):
         # @note _turn_active  : a turn is running, so SIGINT is ours to record.
         #       _backup_ready : this turn has a complete backup and may be
         #                       rolled back (reset on rollback / checkout).
+        #       _turn_backup  : SessionBackup captured before commit, retained
+        #                       across mid-turn session rollovers.
         self._turn_active = False
         self._backup_ready = False
+        self._turn_backup = None
+
+        # Recover any orphaned tool_use calls left by a prior hard crash.
+        if self.agent is not None and self.session is not None:
+            self.repair_interrupted_tools(self.agent)
+        # End-if
 
         # Initialize prompt_toolkit session with in-memory history
         if HAS_PTK:
@@ -78,6 +87,17 @@ class InteractiveCLI(BaseAgentHost):
         else:
             self.prompt_session = None
         # End-if
+    # End-def
+
+    ##
+     # @brief Resolve the active TurnInterrupt controller from agent.runtime.
+     #
+     # @return TurnInterrupt controller instance.
+     #
+    def _interrupt(self):
+        runtime = getattr(self.agent, "runtime", None)
+        interrupt = getattr(runtime, "interrupt", None)
+        return interrupt if interrupt is not None else INTERRUPT
     # End-def
 
     ##
@@ -189,7 +209,6 @@ class InteractiveCLI(BaseAgentHost):
                 self.cli.raw(f" {mark} {s['name']:<20} | {s['id']}")
             # End-for
             self.cli.raw("")
-        # End-if
 
         # ----- 2. Delete branch <name/id> -----
         elif args[0] == '-d':
@@ -270,6 +289,7 @@ class InteractiveCLI(BaseAgentHost):
             # The backup belongs to the session directory: a new branch always
             # starts without rollback capability until its first commit.
             self._backup_ready = False
+            self._turn_backup = None
             # Print success.
             self.cli.success(f"Switched to a new session branch: '{new_name}'")
             return
@@ -288,11 +308,13 @@ class InteractiveCLI(BaseAgentHost):
         # Try to switch/checkout session
         if self.session.switch_session(session_id):
             self.agent.reload_history()
+            self.repair_interrupted_tools(self.agent)
             # Switch the staged buffer to the target branch's draft.
             self.staged_message = self.session.load_staged()
             # The backup belongs to the session directory, so a switch always
             # invalidates the current turn's rollback capability.
             self._backup_ready = False
+            self._turn_backup = None
             if self.staged_message.strip():
                 self.cli.info(f"Restored pending draft ({len(self.staged_message.strip())} chars) in this branch.")
             # End-if
@@ -545,18 +567,25 @@ class InteractiveCLI(BaseAgentHost):
         # Stale requests from a previous turn must not leak into this one, and
         # the clear must happen BEFORE the backup copy so that a SIGINT arriving
         # during the copy is preserved and honoured by the checkpoint below.
-        INTERRUPT.clear()
+        self._interrupt().clear()
 
         # ----- Turn backup (the Ctrl+C rollback anchor) -----
         # @note The backup is taken BEFORE the raw input is appended, so it
         #       holds exactly "the state before this commit" - including the
         #       staged draft, which is what the user gets back after a rollback.
-        # @note A retried commit (same pending turn after an API failure) reuses
-        #       the existing backup instead of re-snapshotting a history that
-        #       already contains the message.
-        if not self._backup_ready:
-            ok, msg = SessionBackup(self.session.current_session_dir).create(
-                "commit", history_messages=len(self.agent.history))
+        # @note Retained in self._turn_backup so mid-turn session rollovers
+        #       (prune_context(rollover=True)) still roll back to the original
+        #       pre-commit session cleanly.
+        if not self._backup_ready or self._turn_backup is None:
+            captured = self.capture_turn_backup(note="commit")
+            if isinstance(captured, tuple):
+                backup, ok, msg = captured
+            else:
+                backup = captured
+                ok = backup.is_valid()
+                msg = "ok" if ok else "backup creation failed"
+            # End-if
+            self._turn_backup = backup if ok else None
             self._backup_ready = ok
             if not ok:
                 self.cli.warning(f"Backup failed: this turn cannot be rolled back ({msg}).")
@@ -596,6 +625,16 @@ class InteractiveCLI(BaseAgentHost):
                     self.session.clear_staged()
                     self.staged_message = ""
                     break
+                # End-if
+
+                # Mid-stream cooperative interrupt: consult [S]top/[R]ollback/[C]ontinue.
+                # If the user chooses [C]ontinue (_try_stop returns False), resume
+                # immediately without opening the API error recovery menu.
+                if isinstance(err, RequestCancelledError):
+                    if self._try_stop():
+                        return
+                    # End-if
+                    continue
                 # End-if
 
                 # Stop requested during this step: never open a recovery menu
@@ -663,29 +702,35 @@ class InteractiveCLI(BaseAgentHost):
         # End-if
 
         if cont:
-            try:
-                _, err = self._run_agent_loop()
-            except (KeyboardInterrupt, EOFError):
-                self.cli.info("\nSend aborted mid-execution. The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
-                return
-            # End-try
-            if err is not None:
-                self.cli.error(f"Tool loop interrupted by API error: {err}")
-                self.cli.info("The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
-            # End-if
+            while True:
+                try:
+                    _, err = self._run_agent_loop()
+                except (KeyboardInterrupt, EOFError):
+                    self.cli.info("\nSend aborted mid-execution. The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+                    return
+                # End-try
+                if isinstance(err, RequestCancelledError):
+                    if self._try_stop():
+                        return
+                    # End-if
+                    continue
+                # End-if
+                if err is not None:
+                    self.cli.error(f"Tool loop interrupted by API error: {err}")
+                    self.cli.info("The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+                # End-if
+                break
+            # End-while
         # End-if
 
         # Last checkpoint of the turn: also covers a stop request that landed
         # on the final step (a plain-text reply with nothing left to run).
         self._try_stop()
 
-        # @note _backup_ready is turn-scoped and must not survive a finished
-        #       turn: the next commit has to take a fresh snapshot, otherwise an
-        #       interrupt in a later turn would roll back this completed turn.
-        #       (Paths that keep the pending message - a retried commit after an
-        #       API failure or an aborted send - intentionally return early and
-        #       keep reusing the existing backup.)
+        # @note _backup_ready / _turn_backup are turn-scoped and must not survive
+        #       a finished turn.
         self._backup_ready = False
+        self._turn_backup = None
     # End-def
 
     ##
@@ -788,10 +833,11 @@ class InteractiveCLI(BaseAgentHost):
         if not self._turn_active:
             raise KeyboardInterrupt
         # End-if
-        INTERRUPT.request("sigint")
+        intr = self._interrupt()
+        intr.request("sigint")
         self.cli.warning(
-            f"Interrupt requested ({INTERRUPT.reason()}): finishing the current step, "
-            f"then pausing for [S]top / [R]ollback / [C]ontinue."
+            f"Interrupt recorded ({intr.reason()}): aborting in-flight step "
+            f"and pausing for [S]top / [R]ollback / [C]ontinue..."
         )
     # End-def
 
@@ -842,37 +888,42 @@ class InteractiveCLI(BaseAgentHost):
      # @retval False Nothing requested, or the user chose Continue (or rollback failed).
      #
     def _try_stop(self):
-        if not INTERRUPT.is_requested():
+        intr = self._interrupt()
+        if not intr.is_requested():
             return False
         # End-if
 
-        trig = INTERRUPT.reason()
+        trig = intr.reason()
         choice = self._prompt_interrupt_action(trig)
         if choice == "C":
-            INTERRUPT.clear()
+            intr.clear()
             self.cli.info("Resuming turn execution...")
             return False
         # End-if
 
         if choice == "S":
             self._do_stop(trig)
-            INTERRUPT.clear()
+            intr.clear()
             return True
         # End-if
 
-        if not SessionBackup(self.session.current_session_dir).is_valid():
+        backup = getattr(self, "_turn_backup", None)
+        if backup is None:
+            backup = SessionBackup(self.session.current_session_dir)
+        # End-if
+        if not backup.is_valid():
             self.cli.error("Rollback failed: no usable backup for this turn, continuing.")
-            INTERRUPT.clear()
+            intr.clear()
             return False
         # End-if
 
-        if not self._do_rollback():
+        if not self._do_rollback(backup):
             self.cli.error("Stop failed: the rollback could not be completed, continuing.")
-            INTERRUPT.clear()
+            intr.clear()
             return False
         # End-if
 
-        INTERRUPT.clear()
+        intr.clear()
         return True
     # End-def
 
@@ -889,12 +940,14 @@ class InteractiveCLI(BaseAgentHost):
             # message and keep the draft in staged.md.
             self._rollback_pending_message()
             self._backup_ready = False
+            self._turn_backup = None
             self.cli.info("Turn stopped before first step completed. Staged draft preserved.")
             return True
         # End-if
 
         self.stop_active_turn("[Turn stopped by user.]")
         self._backup_ready = False
+        self._turn_backup = None
         self.cli.success(
             f"Stopped at current step boundary (trigger: {trigger or 'sigint'}). "
             f"Completed progress ({len(self.agent.history)} messages) is preserved in this session."
@@ -907,11 +960,15 @@ class InteractiveCLI(BaseAgentHost):
     ##
      # @brief Restore the session state captured before the last commit.
      #
+     # @param backup Optional pre-turn SessionBackup captured before commit.
+     #
      # @return True when the rollback completed (state reloaded); False when
      #         nothing was rolled back and the turn should keep running.
      #
-    def _do_rollback(self):
-        ok, restored, failed = self.rollback_active_turn(trigger=INTERRUPT.reason())
+    def _do_rollback(self, backup=None):
+        intr = self._interrupt()
+        target_backup = backup if backup is not None else getattr(self, "_turn_backup", None)
+        ok, restored, failed = self.rollback_active_turn(target_backup, trigger=intr.reason())
         if not ok:
             self.cli.error("Rollback could not be completed: " + ", ".join(failed))
             self.cli.info("Nothing was rolled back; the turn keeps running.")
@@ -920,9 +977,10 @@ class InteractiveCLI(BaseAgentHost):
 
         self.staged_message = self.session.load_staged()
         self._backup_ready = False
+        self._turn_backup = None
 
         self.cli.success(
-            f"Rolled back to before the last commit (trigger: {INTERRUPT.reason()}): "
+            f"Rolled back to before the last commit (trigger: {intr.reason()}): "
             + ", ".join(restored))
         self.cli.info(
             f"Original input restored to the staged buffer "
@@ -976,7 +1034,17 @@ class InteractiveCLI(BaseAgentHost):
 
                         self._turn_active = True
                         try:
-                            ok, err = self._run_agent_loop()
+                            while True:
+                                ok, err = self._run_agent_loop()
+                                if isinstance(err, RequestCancelledError):
+                                    if self._try_stop():
+                                        err = None
+                                        break
+                                    # End-if
+                                    continue
+                                # End-if
+                                break
+                            # End-while
                         finally:
                             self._turn_active = False
                         # End-try
@@ -984,8 +1052,9 @@ class InteractiveCLI(BaseAgentHost):
                         # All retries exhausted: drop the pending tool turn
                         # (tool_result + its assistant tool_use pair) so history
                         # never ends with a dangling tool_use that would 400 the
-                        # next commit. The pair was never seen by the model.
-                        if err is not None:
+                        # next commit. Never delete completed tool outputs on a
+                        # cooperative RequestCancelledError!
+                        if err is not None and not isinstance(err, RequestCancelledError):
                             self.cli.error(f"\nFATAL: Background execution blocked by an API Error: {err}")
                             self._drop_pending_tool_turn()
                             self.cli.error("Dropping the pending tool turn to prevent infinite API retry loop.")
@@ -1078,6 +1147,7 @@ class InteractiveCLI(BaseAgentHost):
                     finally:
                         self._turn_active = False
                         self._backup_ready = False
+                        self._turn_backup = None
                     # End-try
                 elif command == 'clear':
                     self._cmd_clear()

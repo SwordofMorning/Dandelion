@@ -24,11 +24,13 @@ BraceWrapping:
   SplitEmptyNamespace: true
 
 # Constructor initializer list settings
-BreakConstructorInitializersBeforeComma: false
 BreakConstructorInitializers: BeforeComma
 ConstructorInitializerIndentWidth: 4
 AllowAllConstructorInitializersOnNextLine: true
 ConstructorInitializerAllOnOneLineOrOnePerLine: false
+
+# Template declaration settings
+BreakTemplateDeclarations: Yes
 
 # Comment settings
 SpacesBeforeTrailingComments: 1

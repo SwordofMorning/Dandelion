@@ -9,6 +9,7 @@
 
 #include "provider.hpp"
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -19,6 +20,16 @@ namespace dandelion
 {
 namespace
 {
+
+/**
+ * @brief Buffered thought_summary item allowing O(N) C++ text coalescing before Finish().
+ */
+struct SummaryEntry
+{
+    bool is_text = false;
+    std::string text;
+    nb::object raw = nb::none();
+};
 
 /**
  * @brief Normalize base URL to include /v1beta unless an API version suffix is already present.
@@ -37,27 +48,19 @@ std::string VersionedBase(const std::string& configured)
 }
 
 /**
- * @brief Strip a leading "models/" prefix from a Gemini model identifier.
- */
-std::string BareModel(const std::string& model)
-{
-    return StartsWith(model, "models/") ? model.substr(7) : model;
-}
-
-/**
  * @brief Return true for Gemini 1.x / 2.x models predating thinking_level.
  */
-bool IsLegacyGemini(const std::string& model)
+bool IsLegacyGemini(const std::string& bare_model)
 {
-    return ContainsAny(Lower(model), {"gemini-1", "gemini-2"});
+    return ContainsAny(Lower(bare_model), {"gemini-1", "gemini-2"});
 }
 
 /**
  * @brief Return true for Gemini 2.5 models that accept thinking_budget (case-insensitive).
  */
-bool IsGemini25(const std::string& model)
+bool IsGemini25(const std::string& bare_model)
 {
-    return StartsWith(Lower(BareModel(model)), "gemini-2.5-");
+    return StartsWith(Lower(bare_model), "gemini-2.5-");
 }
 
 /**
@@ -134,112 +137,128 @@ nb::list BuildSteps(nb::object messages)
     {
         bool user = TextOf(Field(msg, "role")) != "assistant";
         nb::object content = Field(msg, "content");
+        size_t before_steps = nb::len(steps);
+
         if (IsStr(content))
         {
-            if (TextOf(content).empty())
+            if (!TextOf(content).empty())
             {
-                continue;
+                nb::dict item;
+                item["type"] = "text";
+                item["text"] = content;
+                nb::list items;
+                items.append(item);
+
+                nb::dict step;
+                step["type"] = user ? "user_input" : "model_output";
+                step["content"] = items;
+                steps.append(step);
             }
+        }
+        else if (IsList(content))
+        {
+            nb::list items;
+            auto flush = [&](const char* type) {
+                if (nb::len(items) > 0)
+                {
+                    nb::dict step;
+                    step["type"] = type;
+                    step["content"] = items;
+                    steps.append(step);
+                    items = nb::list();
+                }
+            };
+
+            for (nb::handle block : content)
+            {
+                std::string type = TextOf(Field(block, "type"));
+                if (type == "text")
+                {
+                    if (!TextOf(Field(block, "text")).empty())
+                    {
+                        nb::dict item;
+                        item["type"] = "text";
+                        item["text"] = Field(block, "text");
+                        items.append(item);
+                    }
+                }
+                else if (user && (type == "image" || type == "document"))
+                {
+                    auto media = ExtractMedia(block);
+                    if (!media.second.empty())
+                    {
+                        nb::dict item;
+                        item["type"] = type;
+                        item["data"] = media.second;
+                        item["mime_type"] = media.first;
+                        items.append(item);
+                    }
+                }
+                else if (user && type == "tool_result")
+                {
+                    flush("user_input");
+                    std::string id = TextOf(Field(block, "tool_use_id"));
+                    nb::dict step;
+                    step["type"] = "function_result";
+                    step["call_id"] = id;
+                    step["name"] = names.count(id) ? names[id] : id;
+                    step["result"] = SafeUtf8Str(ResultText(Field(block, "content")));
+                    if (nb::bool_(Field(block, "is_error")))
+                    {
+                        step["is_error"] = true;
+                    }
+                    steps.append(step);
+                }
+                else if (!user && type == "gemini_thought")
+                {
+                    flush("model_output");
+                    nb::dict step;
+                    step["type"] = "thought";
+                    nb::object sig = Field(block, "signature");
+                    if (!sig.is_none())
+                    {
+                        step["signature"] = sig;
+                    }
+                    if (!Field(block, "summary").is_none())
+                    {
+                        step["summary"] = Field(block, "summary");
+                    }
+                    steps.append(step);
+                }
+                else if (!user && type == "tool_use")
+                {
+                    flush("model_output");
+                    nb::dict step;
+                    step["type"] = "function_call";
+                    step["id"] = TextOf(Field(block, "id"));
+                    step["name"] = TextOf(Field(block, "name"));
+                    step["arguments"] = AsObject(Field(block, "input"));
+                    steps.append(step);
+                }
+            }
+            flush(user ? "user_input" : "model_output");
+        }
+
+        // Preserve turn alternation when an assistant turn had only stripped foreign blocks.
+        if (!user && nb::len(steps) == before_steps)
+        {
             nb::dict item;
             item["type"] = "text";
-            item["text"] = content;
+            item["text"] = "[reasoning omitted]";
             nb::list items;
             items.append(item);
 
-            nb::dict step;
-            step["type"] = user ? "user_input" : "model_output";
-            step["content"] = items;
-            steps.append(step);
-            continue;
+            nb::dict placeholder;
+            placeholder["type"] = "model_output";
+            placeholder["content"] = items;
+            steps.append(placeholder);
         }
-        if (!IsList(content))
-        {
-            continue;
-        }
-
-        nb::list items;
-        auto flush = [&](const char* type) {
-            if (nb::len(items) > 0)
-            {
-                nb::dict step;
-                step["type"] = type;
-                step["content"] = items;
-                steps.append(step);
-                items = nb::list();
-            }
-        };
-
-        for (nb::handle block : content)
-        {
-            std::string type = TextOf(Field(block, "type"));
-            if (type == "text")
-            {
-                if (!TextOf(Field(block, "text")).empty())
-                {
-                    nb::dict item;
-                    item["type"] = "text";
-                    item["text"] = Field(block, "text");
-                    items.append(item);
-                }
-            }
-            else if (user && (type == "image" || type == "document"))
-            {
-                auto media = ExtractMedia(block);
-                if (!media.second.empty())
-                {
-                    nb::dict item;
-                    item["type"] = type;
-                    item["data"] = media.second;
-                    item["mime_type"] = media.first;
-                    items.append(item);
-                }
-            }
-            else if (user && type == "tool_result")
-            {
-                // Flush pending user_input blocks before emitting function_result to preserve order.
-                flush("user_input");
-                std::string id = TextOf(Field(block, "tool_use_id"));
-                nb::dict step;
-                step["type"] = "function_result";
-                step["call_id"] = id;
-                step["name"] = names.count(id) ? names[id] : id;
-                step["result"] = SafeUtf8Str(ResultText(Field(block, "content")));
-                if (nb::bool_(Field(block, "is_error")))
-                {
-                    step["is_error"] = true;
-                }
-                steps.append(step);
-            }
-            else if (!user && type == "gemini_thought")
-            {
-                flush("model_output");
-                nb::dict step;
-                step["type"] = "thought";
-                step["signature"] = Field(block, "signature");
-                if (!Field(block, "summary").is_none())
-                {
-                    step["summary"] = Field(block, "summary");
-                }
-                steps.append(step);
-            }
-            else if (!user && type == "tool_use")
-            {
-                flush("model_output");
-                nb::dict step;
-                step["type"] = "function_call";
-                step["id"] = TextOf(Field(block, "id"));
-                step["name"] = TextOf(Field(block, "name"));
-                step["arguments"] = AsObject(Field(block, "input"));
-                steps.append(step);
-            }
-        }
-        flush(user ? "user_input" : "model_output");
     }
     return steps;
 }
 
 /**
- * @brief Map Interactions usage object into Dandelion's canonical usage dict.
+ * @brief Map Interactions usage object into Dandelion's canonical usage dict without signed overflow UB.
  */
 nb::object MapInteractionUsage(nb::object u)
 {
@@ -248,13 +267,13 @@ nb::object MapInteractionUsage(nb::object u)
     {
         return out;
     }
-    long long output = 0;
+    nb::object output = nb::int_(0);
     for (const char* key : {"total_output_tokens", "total_thought_tokens"})
     {
         nb::object v = Field(u, key);
         if (IsInt(v))
         {
-            output += nb::cast<long long>(v);
+            output = output + v;
         }
     }
     out["input_tokens"] = Field(u, "total_input_tokens");
@@ -293,6 +312,37 @@ std::string ExtractStepText(nb::object content)
 }
 
 /**
+ * @brief Slice echoed input steps from a stateless Interactions response so only new model steps remain.
+ */
+nb::object SliceGeneratedSteps(nb::object steps)
+{
+    if (!IsList(steps))
+    {
+        return steps;
+    }
+    size_t total = nb::len(steps);
+    size_t start_idx = 0;
+    for (size_t i = 0; i < total; ++i)
+    {
+        std::string stype = TextOf(Field(steps[i], "type"));
+        if (stype == "user_input" || stype == "function_result")
+        {
+            start_idx = i + 1;
+        }
+    }
+    if (start_idx == 0)
+    {
+        return steps;
+    }
+    nb::list sliced;
+    for (size_t i = start_idx; i < total; ++i)
+    {
+        sliced.append(steps[i]);
+    }
+    return sliced;
+}
+
+/**
  * @brief Convert Interactions output steps into a canonical response namespace.
  */
 nb::object BuildInteractionResponse(nb::object steps, const std::string& status, nb::object usage)
@@ -312,7 +362,11 @@ nb::object BuildInteractionResponse(nb::object steps, const std::string& status,
             {
                 nb::dict block;
                 block["type"] = "gemini_thought";
-                block["signature"] = Field(step, "signature");
+                nb::object sig = Field(step, "signature");
+                if (!sig.is_none())
+                {
+                    block["signature"] = sig;
+                }
                 if (!Field(step, "summary").is_none())
                 {
                     block["summary"] = Field(step, "summary");
@@ -373,8 +427,8 @@ void CheckInteractionStatus(nb::object interaction)
 /**
  * @brief Incremental SSE decoder for Gemini Interactions streams.
  *
- * Defers function_call argument JSON parsing to Finish() so status=="incomplete" truncations
- * drop partial tool calls cleanly without throwing JSONDecodeError inside step.stop.
+ * Buffers both text and thought_summary deltas in C++ std::string for linear O(N) performance
+ * and defers function_call argument JSON parsing to Finish() for clean incomplete truncation drops.
  */
 class InteractionsStream : public StreamDecoder
 {
@@ -402,17 +456,19 @@ public:
         }
         if (type == "step.start")
         {
-            long idx = ReadIndex(d);
+            int64_t idx = ReadIndex(d);
             if (m_steps.count(idx))
             {
                 throw ProtocolError("Duplicate Interactions step index.");
             }
             m_open.insert(idx);
-            m_steps[idx] = CopyDict(Field(d, "step"));
+            nb::dict step = CopyDict(Field(d, "step"));
+            SeedStepBuffers(idx, step);
+            m_steps[idx] = step;
         }
         else if (type == "step.delta")
         {
-            long idx = ReadIndex(d);
+            int64_t idx = ReadIndex(d);
             if (!m_open.count(idx))
             {
                 throw ProtocolError("Interactions step is not open.");
@@ -421,7 +477,7 @@ public:
         }
         else if (type == "step.stop")
         {
-            long idx = ReadIndex(d);
+            int64_t idx = ReadIndex(d);
             if (!m_open.erase(idx))
             {
                 throw ProtocolError("Interactions step is not open.");
@@ -441,7 +497,15 @@ public:
             CheckInteractionStatus(inter);
             if (!Field(inter, "status").is_none())
             {
-                m_status = TextOf(Field(inter, "status"));
+                std::string st = TextOf(Field(inter, "status"));
+                if (!st.empty())
+                {
+                    m_status = st;
+                }
+            }
+            if (type == "interaction.completed" && m_status.empty())
+            {
+                m_status = "completed";
             }
             if (!Field(inter, "usage").is_none())
             {
@@ -456,7 +520,7 @@ public:
     }
 
     /**
-     * @brief Validate terminal status and step boundaries, parse deferred tool arguments, and build response.
+     * @brief Validate terminal status and step boundaries, materialize C++ buffers, and build response.
      */
     nb::object Finish() override
     {
@@ -466,13 +530,12 @@ public:
             throw ProtocolError("Incomplete Interactions stream (missing step.stop or terminal status).");
         }
 
-        // Prefer streamed m_steps over m_final_steps to avoid replaying echoed input steps from stateless responses.
         if (!m_steps.empty())
         {
             nb::list steps;
             for (auto& kv : m_steps)
             {
-                long idx = kv.first;
+                int64_t idx = kv.first;
                 nb::dict step = kv.second;
                 if (m_text_buf.count(idx) && !m_text_buf[idx].empty())
                 {
@@ -487,6 +550,25 @@ public:
                     parts.append(part);
                     step["content"] = parts;
                 }
+                if (m_summary_buf.count(idx) && !m_summary_buf[idx].empty())
+                {
+                    nb::list summary_list;
+                    for (const SummaryEntry& entry : m_summary_buf[idx])
+                    {
+                        if (entry.is_text)
+                        {
+                            nb::dict part;
+                            part["type"] = "text";
+                            part["text"] = SafeUtf8Str(entry.text);
+                            summary_list.append(part);
+                        }
+                        else if (!entry.raw.is_none())
+                        {
+                            summary_list.append(entry.raw);
+                        }
+                    }
+                    step["summary"] = summary_list;
+                }
                 if (m_status != "incomplete" && m_args.count(idx) && !m_args[idx].empty())
                 {
                     step["arguments"] = JsonLoads(m_args[idx]);
@@ -498,7 +580,7 @@ public:
 
         if (!m_final_steps.is_none())
         {
-            return BuildInteractionResponse(m_final_steps, m_status, m_usage);
+            return BuildInteractionResponse(SliceGeneratedSteps(m_final_steps), m_status, m_usage);
         }
 
         return BuildInteractionResponse(nb::list(), m_status, m_usage);
@@ -506,16 +588,77 @@ public:
 
 private:
     /**
-     * @brief Read and validate an explicit Interactions step index.
+     * @brief Seed C++ text, summary, and argument buffers from initial fields present on step.start.
      */
-    long ReadIndex(nb::handle d) const
+    void SeedStepBuffers(int64_t idx, nb::dict step)
+    {
+        std::string init_text = ExtractStepText(Field(step, "content"));
+        if (!init_text.empty())
+        {
+            m_text_buf[idx] = init_text;
+        }
+        nb::object init_args = Field(step, "arguments");
+        if (IsStr(init_args))
+        {
+            std::string raw_args = TextOf(init_args);
+            if (!raw_args.empty())
+            {
+                m_args[idx] = raw_args;
+            }
+        }
+        nb::object init_summary = Field(step, "summary");
+        if (IsList(init_summary) && nb::len(init_summary) > 0)
+        {
+            for (nb::handle item : init_summary)
+            {
+                AppendSummaryItem(idx, nb::borrow<nb::object>(item));
+            }
+        }
+    }
+
+    /**
+     * @brief Append one thought_summary item into C++ buffer, coalescing adjacent text entries in O(1).
+     */
+    void AppendSummaryItem(int64_t idx, nb::object item)
+    {
+        if (item.is_none())
+        {
+            return;
+        }
+        auto& entries = m_summary_buf[idx];
+        if (IsDict(item) && TextOf(Field(item, "type")) == "text")
+        {
+            std::string chunk = TextOf(Field(item, "text"));
+            if (!entries.empty() && entries.back().is_text)
+            {
+                entries.back().text += chunk;
+            }
+            else
+            {
+                SummaryEntry entry;
+                entry.is_text = true;
+                entry.text = std::move(chunk);
+                entries.push_back(std::move(entry));
+            }
+            return;
+        }
+        SummaryEntry entry;
+        entry.is_text = false;
+        entry.raw = std::move(item);
+        entries.push_back(std::move(entry));
+    }
+
+    /**
+     * @brief Read and validate an explicit non-negative Interactions step index.
+     */
+    int64_t ReadIndex(nb::handle d) const
     {
         nb::object raw = Field(d, "index");
         if (!IsInt(raw))
         {
             throw ProtocolError("Missing Interactions step index.");
         }
-        long v = nb::cast<long>(raw);
+        int64_t v = nb::cast<int64_t>(raw);
         if (v < 0)
         {
             throw ProtocolError("Negative Interactions step index.");
@@ -526,7 +669,7 @@ private:
     /**
      * @brief Apply one step.delta payload to the open step at idx.
      */
-    void ApplyDelta(long idx, nb::object delta)
+    void ApplyDelta(int64_t idx, nb::object delta)
     {
         nb::dict s = m_steps.at(idx);
         std::string type = TextOf(Field(delta, "type"));
@@ -537,25 +680,7 @@ private:
         }
         if (type == "thought_summary")
         {
-            if (!DictHas(s, "summary"))
-            {
-                s["summary"] = nb::list();
-            }
-            nb::object item = Field(delta, "content");
-            if (!item.is_none())
-            {
-                nb::list summary = nb::borrow<nb::list>(s["summary"]);
-                if (IsDict(item) && TextOf(Field(item, "type")) == "text" && nb::len(summary) > 0)
-                {
-                    nb::object last = summary[nb::len(summary) - 1];
-                    if (IsDict(last) && TextOf(Field(last, "type")) == "text")
-                    {
-                        last["text"] = SafeUtf8Str(TextOf(Field(last, "text")) + TextOf(Field(item, "text")));
-                        return;
-                    }
-                }
-                summary.append(item);
-            }
+            AppendSummaryItem(idx, Field(delta, "content"));
             return;
         }
         for (const char* key : {"arguments_delta", "partial_arguments", "arguments"})
@@ -591,10 +716,11 @@ private:
     }
 
     bool m_completed = false;
-    std::set<long> m_open;
-    std::map<long, nb::dict> m_steps;
-    std::map<long, std::string> m_text_buf;
-    std::map<long, std::string> m_args;
+    std::set<int64_t> m_open;
+    std::map<int64_t, nb::dict> m_steps;
+    std::map<int64_t, std::string> m_text_buf;
+    std::map<int64_t, std::vector<SummaryEntry>> m_summary_buf;
+    std::map<int64_t, std::string> m_args;
     std::string m_status;
     nb::object m_usage = nb::none();
     nb::object m_final_steps = nb::none();
@@ -607,20 +733,27 @@ class InteractionsCodec : public Codec
 {
 public:
     /**
-     * @brief Construct codec and resolve terminal flavor.
+     * @brief Construct codec, validate bare model identifier, and resolve terminal flavor.
      */
     explicit InteractionsCodec(const ProviderConfig& c)
         : Codec(c)
     {
+        m_bare_model = SanitizeBareModel(c.model_id);
         m_explicit_compat = IsExplicitCompat(c.compat);
         m_flavor = ResolveFlavor(c.compat, c.model_id, c.base_url, "gemini");
     }
 
+    /**
+     * @brief Return the Interactions protocol identifier ("interactions").
+     */
     const char* Protocol() const override
     {
         return "interactions";
     }
 
+    /**
+     * @brief Return the resolved upstream flavor.
+     */
     std::string Flavor() const override
     {
         return m_flavor;
@@ -632,7 +765,7 @@ public:
     Built Build(nb::dict payload, bool stream) override
     {
         nb::dict body;
-        body["model"] = BareModel(m_cfg.model_id);
+        body["model"] = m_bare_model;
         body["input"] = BuildSteps(payload.get("messages", nb::none()));
 
         std::string system = SystemText(payload.get("system", nb::str("")));
@@ -671,13 +804,13 @@ public:
         {
             gen["max_output_tokens"] = cap;
         }
-        if (m_cfg.thinking == "enabled")
+        if (m_cfg.thinking == "enabled" && m_flavor != "none")
         {
-            if (IsGemini25(m_cfg.model_id))
+            if (IsGemini25(m_bare_model))
             {
                 gen["thinking_budget"] = ResolveEffort("EFFORT_TO_GEMINI_25_BUDGET", m_cfg.effort, m_cfg.model_id);
             }
-            else if (!IsLegacyGemini(m_cfg.model_id))
+            else if (!IsLegacyGemini(m_bare_model))
             {
                 gen["thinking_level"] = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
             }
@@ -687,7 +820,7 @@ public:
             body["generation_config"] = gen;
         }
 
-        if (m_explicit_compat)
+        if (m_explicit_compat && m_flavor != "none")
         {
             if (m_flavor == "openai")
             {
@@ -726,18 +859,29 @@ public:
         return b;
     }
 
+    /**
+     * @brief Parse a non-streaming Interactions JSON body, checking errors and slicing echoed input steps.
+     */
     nb::object Parse(nb::object body) override
     {
+        if (!Field(body, "error").is_none())
+        {
+            throw ProtocolError("Error: " + JsonDumps(body));
+        }
         CheckInteractionStatus(body);
-        return BuildInteractionResponse(Field(body, "steps"), TextOf(Field(body, "status")), Field(body, "usage"));
+        return BuildInteractionResponse(SliceGeneratedSteps(Field(body, "steps")), TextOf(Field(body, "status")), Field(body, "usage"));
     }
 
+    /**
+     * @brief Create a fresh InteractionsStream SSE decoder.
+     */
     std::unique_ptr<StreamDecoder> Decoder(bool echo) override
     {
         return std::make_unique<InteractionsStream>(echo);
     }
 
 private:
+    std::string m_bare_model;
     std::string m_flavor;
     bool m_explicit_compat = false;
 };

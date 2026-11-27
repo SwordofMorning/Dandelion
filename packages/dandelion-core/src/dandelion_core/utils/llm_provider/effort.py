@@ -47,6 +47,9 @@ FLAVOR_GEMINI           = "gemini"
 # unless the caller asks for this flavor explicitly.
 FLAVOR_ANTHROPIC_EFFORT = "anthropic-effort"
 
+# "none" suppresses all cross-protocol effort/bridge key injection explicitly.
+FLAVOR_NONE = "none"
+
 # "auto" requests detection and is never a resolved flavor.
 FLAVOR_AUTO = "auto"
 
@@ -57,6 +60,7 @@ VALID_FLAVORS = (
     FLAVOR_DEEPSEEK,
     FLAVOR_OPENAI,
     FLAVOR_GEMINI,
+    FLAVOR_NONE,
 )
 
 ##

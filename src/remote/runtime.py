@@ -4,7 +4,8 @@
  #
  # @brief Remote runtime implementation inheriting Core BaseRuntime.
  # Encapsulates Telegram progress forwarding, unrestricted server approvals,
- # non-echoing streaming, and per-conversation TurnInterrupt state.
+ # non-echoing streaming, per-conversation TurnInterrupt state, and optional
+ # background-worker threading.Event cancellation.
  #
 
 from dandelion_core.agent.interrupt import TurnInterrupt
@@ -12,7 +13,7 @@ from dandelion_core.runtime import BaseRuntime
 
 
 ##
- # @brief Concrete runtime adapter for Dandelion Remote conversation agents.
+ # @brief Concrete runtime adapter for Dandelion Remote conversation and job agents.
  #
 class RemoteRuntime(BaseRuntime):
     ##
@@ -21,12 +22,14 @@ class RemoteRuntime(BaseRuntime):
      # @param session_id Conversation identifier (e.g. 'telegram:123456').
      # @param hub Optional ChannelHub owning a Telegram transport for progress updates.
      # @param interrupt Optional TurnInterrupt controller for this conversation.
+     # @param cancel_event Optional threading.Event for background job cancellation.
      # @param echo Whether streaming LLM tokens echo directly to stdout.
      # @param sandbox Whether workspace boundary approval prompts are enforced.
      #
      # @return None.
      #
-    def __init__(self, session_id="", hub=None, interrupt=None, echo=False, sandbox=False):
+    def __init__(self, session_id="", hub=None, interrupt=None, cancel_event=None,
+                 echo=False, sandbox=False):
         super().__init__(
             echo=echo,
             sandbox=sandbox,
@@ -34,6 +37,7 @@ class RemoteRuntime(BaseRuntime):
         )
         self.session_id = str(session_id)
         self.hub = hub
+        self._cancel_event = cancel_event
     # End-def
 
     ##
@@ -63,5 +67,17 @@ class RemoteRuntime(BaseRuntime):
      #
     def approve(self, action_desc, abs_target, abs_workspace):
         return True
+    # End-def
+
+    ##
+     # @brief Check whether either a worker cancel_event or TurnInterrupt is set.
+     #
+     # @return True when cancellation was requested.
+     #
+    def cancelled(self):
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            return True
+        # End-if
+        return super().cancelled()
     # End-def
 # End-class

@@ -24,7 +24,7 @@ CURL_VER="8.11.1"
 CURL_TAG="8_11_1"
 CURL_SHA256="a889ac9dbba3644271bd9d1302b5c22a088893719b72be3487bc3d401e5c4e80"
 
-STAMP="${PREFIX}/.built-zlib${ZLIB_VER}-ssl${OPENSSL_VER}-curl${CURL_VER}-$(uname -m)"
+STAMP="${PREFIX}/.built-zlib${ZLIB_VER}-ssl${OPENSSL_VER}-curl${CURL_VER}-v2-$(uname -m)"
 
 if [ -f "$STAMP" ] \
     && [ -f "${PREFIX}/lib/libz.a" ] \
@@ -37,7 +37,13 @@ fi
 
 # Perl modules required by OpenSSL 3.x Configure on CentOS 7 (manylinux2014).
 echo "[*] Ensuring Perl build modules for OpenSSL 3.x on CentOS 7 (manylinux2014)"
-yum install -y -q perl-IPC-Cmd perl-Data-Dumper perl-FindBin perl-Time-Piece >/dev/null 2>&1 || true
+if ! perl -MIPC::Cmd -MData::Dumper -MFindBin -MTime::Piece -e '1' 2>/dev/null; then
+    yum install -y -q perl-IPC-Cmd perl-Data-Dumper perl-FindBin perl-Time-Piece
+fi
+if ! perl -MIPC::Cmd -MData::Dumper -MFindBin -MTime::Piece -e '1' 2>/dev/null; then
+    echo "[-] FATAL: Required Perl modules (IPC::Cmd, Data::Dumper, FindBin, Time::Piece) are missing for OpenSSL 3.x Configure." >&2
+    exit 1
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -106,13 +112,14 @@ CFLAGS="-O2 -fPIC -fvisibility=hidden" \
     --prefix="${PREFIX}" \
     --libdir="${PREFIX}/lib" \
     --disable-shared --enable-static \
+    --disable-curl \
     --with-openssl="${PREFIX}" \
     --with-zlib="${PREFIX}" \
     --disable-ldap --disable-ldaps --disable-ftp --disable-file \
     --disable-rtsp --disable-dict --disable-telnet --disable-tftp \
     --disable-pop3 --disable-imap --disable-smb --disable-smtp \
     --disable-gopher --disable-mqtt --disable-manual --disable-docs \
-    --without-libidn2 --without-libpsl --without-librtmp \
+    --without-libidn2 --without-libpsl --without-librtmp --without-gssapi \
     --without-brotli --without-zstd --without-nghttp2 --without-libssh2 \
     --without-ca-bundle --without-ca-path
 make -j"${NPROC}"

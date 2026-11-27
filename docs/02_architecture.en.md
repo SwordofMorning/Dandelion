@@ -1,458 +1,225 @@
 # Architecture of Dandelion
 
-This document outlines the architecture of the Dandelion project, with a focus on the mechanisms within the `src` and `mk` directories. It will help you quickly understand the call structure and build logic of this project.
+This document outlines the architecture of the Dandelion monorepo, focusing on `packages/dandelion-core/`, `src/`, and `mk/`. It helps you quickly understand the layered OOP design, native C++17 LLM provider, and cross-platform build/release pipeline.
 
 ## 1. Main Architecture
 
 ### 1.1 Overview
 
-Temporarily ignoring "auxiliary files" like `.gitignore` and `.env`, Dandelion can be simply summarized as:
+Temporarily ignoring auxiliary files like `.gitignore` and `.env`, Dandelion is organized as a three-layer monorepo:
 
 ```sh
-1. main.py      # Entry point for the main() function
-    -> src/         # Source code of various sub-modules
-2. mk/          # Build scripts; mk/lib/paths.py also locates the workspace root for main.py
+1. main.py                              # CLI & Remote entry point (-h/--help, -v/--version, remote ...)
+    -> packages/dandelion-core/         # Standalone PyPI package `dandelion-core` (import `dandelion_core`)
+    -> src/cli/                         # Interactive terminal host frontend
+    -> src/remote/                      # 24/7 server daemon host frontend (excluded from CLI standalone)
+2. mk/                                  # Unified local dev & CI build/script center + path locating
 ```
 
-Including other folders, the project layout is represented as follows:
+Including workspace and CI directories, the repository layout is:
 
 ```sh
-1. main.py      # Entry point for the main() function
-    -> src/         # Source code of various sub-modules
-    -> llm/         # Stores skills and global persistent memories (llm/memory, llm/skill)
-    -> .log/        # Stores sessions (sess_xxx/) and logs
-    -> .env/        # Stores API Keys, routing, and SSH device configs (api.cfg, devices.yaml)
-2. mk/          # Nuitka compilation and build scripts, also provides path locating
-3. test/        # Test code/cases
-4. docs/        # Project documentation
-5. .github/     # GitHub Actions workflows
+1. main.py                              # Application entry point
+    -> packages/dandelion-core/         # Standalone Core + native C++17/nanobind LLM engine
+    -> src/cli/                         # Terminal CLI host (InteractiveCLI, CLIRuntime)
+    -> src/remote/                      # Remote server daemon host (RemoteLoop, RemoteRuntime)
+    -> llm/                             # Skills (llm/skill), global memories (llm/memory), prompt templates
+    -> .log/                            # Persisted sessions (sess_xxx/) and logs
+    -> .env/                            # Operator configs (cli.cfg, remote.cfg, devices.yaml, known_hosts)
+2. mk/                                  # Unified build & script center (make.py, config/, lib/, scripts/)
+3. docs/                                # Project documentation
+4. .github/workflows/                   # CI/CD workflows (ascii-check.yml, release.yml)
 ```
 
 ### 1.2 Main Function
 
-The code in `main.py` is relatively concise. It primarily performs the following tasks:
+`main.py` stays concise and handles top-level dispatch and bootstrap:
 
-1. Locates the workspace root directory (`mk/lib/paths.py::base_dir()`): When running from source, it takes the repository root (inferred step-by-step from `__file__`); when running as a Nuitka binary, it takes the parent directory of `bin/` (artifact layout is `<root>/bin/dandelion`). This root directory acts as a sandbox boundary, and runtime environment variable/configuration overrides are intentionally unsupported.
-    > In other words, Dandelion defaults to only allowing operations on files within the workspace root directory. Any out-of-bounds access will trigger an interactive y/N human approval via `BaseTool.check_workspace_permission()` (see [Chapter 7](#7-tool-classes)), rather than passing silently.
-2. Loads the configuration files under `.env/` (`load_api_config()`).
-3. Initializes the session manager (`SessionManager`, which automatically restores the most recently used session branch).
-4. Constructs the Main Agent based on the configuration (`MyAgent`, which includes tool registration, SubAgent pool, memory, and skill managers).
-5. Assigns the Agent and Session Manager to the CLI (`InteractiveCLI`) and starts it.
+1. Dispatches `python main.py remote ...` to `src/remote/service.py` (when available) and handles `-h`/`--help` and `-v`/`--version`.
+2. Locates the workspace root (`mk/lib/paths.py::base_dir()`): when running from source it resolves the repository root; when running as a Nuitka standalone binary it resolves the parent of `bin/` (`<root>/bin/dandelion`). This root acts as the CLI sandbox boundary and intentionally does not accept runtime env overrides.
+   > By default, CLI mode restricts file operations to the workspace root. Out-of-bounds access triggers an interactive y/N/C approval prompt via `BaseTool.check_workspace_permission()` and `CLIRuntime.approve()` (see [Chapter 7](#7-tool-classes)).
+3. Loads `.env/cli.cfg` (falling back to legacy `.env/api.cfg`) via `dandelion_core.utils.config.load_api_config()`.
+4. Initializes `SessionManager` (automatically restoring the most recently used session branch).
+5. Constructs `MyAgent` with `cli_runtime()` (`CLIRuntime`), `CLIPromptBuilder`, and `config_dir=config_dir()`.
+6. Starts `InteractiveCLI(agent_instance=agent, session_manager=session_mgr)` (`BaseAgentHost` subclass).
 
-The overall request path (details expanded in subsequent chapters) is:
+Overall request path:
 
 ```sh
 main.py
-  -> InteractiveCLI.run()       # CLI Loop (Interactive Layer)
-    -> _run_agent_loop()        # CLI stop / rollback adapter
-      -> core.run_agent_loop() # Shared Agent Loop (multi-turn tool iteration)
-        -> MyAgent.step()      # Single round-trip (tools loop iteration)
+  -> InteractiveCLI.run()                 # CLI Host Loop (inherits BaseAgentHost)
+    -> _run_agent_loop()                  # Stop / Rollback / Continue checkpoint adapter
+      -> dandelion_core.agent.runner.run_agent_loop()
+        -> MyAgent.step()                 # Single LLM + tool-dispatch iteration
 ```
 
-Remote starts with `python -m src.remote` and calls the same Core Agent Loop from a blocking Event Loop, without passing through the CLI or automatically importing terminal modules. Both hosts inject output, approval and cancellation through `src/core/runtime.py`.
+Remote starts via `python main.py remote ...` or `python -m src.remote ...` and drives the exact same `run_agent_loop()` from `RemoteLoop(BaseAgentHost)` with `RemoteRuntime(BaseRuntime)` (`sandbox=False`, `echo=False`), without importing terminal modules.
 
-## 2. Build Scripts
+## 2. Build & Script Center (`mk/`)
 
-The `mk/` directory is relatively straightforward. Additionally, `mk/lib/paths.py` provides workspace root localization for the program. Therefore, let's start with the project's build process. If you are not interested in the build process, you can skip directly to the [next chapter](#3-src-overview).
+`mk/` is the single unified build and script center for both local development and GitHub Actions CI.
 
-The build tool used is Nuitka (standalone mode). It compiles only the "small files" in the project to C; larger files are included in the build artifact by directly copying their Python source code.
-
-For local builds, you can directly use the following commands:
+Common local commands:
 
 ```bash
-#   python mk/make.py            : full build (same as 'all')
-#   python mk/make.py clean      : remove runtime caches and build artifacts
-#   python mk/make.py all        : build standalone executable into build/
-#   python mk/make.py version    : print project name and version
-#   python mk/make.py sign       : sign Windows executable (placeholder, P3)
+python mk/make.py            # Full Nuitka standalone build (same as 'all')
+python mk/make.py all        # Build standalone executable into build/dandelion/
+python mk/make.py native     # Build & editable-install packages/dandelion-core native extension
+python mk/make.py wheel      # Build precompiled dandelion-core .whl into dist/
+python mk/make.py sdist      # Build dandelion-core .tar.gz source distribution into dist/
+python mk/make.py ascii      # Run 100% ASCII check across .py/.cpp/.hpp/.h/.ps1/.sh/.yml/CMakeLists.txt
+python mk/make.py clean      # Remove caches, build/, dist/, build_info.py, *.egg-info, empty legacy dirs
+python mk/make.py version    # Print project name and version
+python mk/make.py sign       # Sign Windows executable (placeholder, P3)
 ```
 
-The output will be placed in the `build` folder.
+On Windows, local MSVC + CMake + Ninja builds can also use `powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target build|wheel|clean`.
 
-For GHA builds, the process is invoked sequentially via `.github/workflows/release.yml -> mk/make.py` (detailed in [Section 2.4](#24-ci-build-and-release)).
-
-### 2.1 Architecture of `mk`
-
-The `mk` folder mainly contains the following:
+### 2.1 Architecture of `mk/`
 
 ```sh
-.
-├── config                  # Configuration folder
-│   ├── build.config            # Nuitka configuration file (INI)
-│   └── dandelion.ico           # Binary application icon
-├── __init__.py             # Export package, mainly for reading by main.py
-├── lib                     # Auxiliary functions
-│   ├── build_info.py           # Build metadata constants (generated by make.py, do not edit manually)
-│   ├── __init__.py             # Export package
-│   └── paths.py                # Locates workspace root for 'source' or 'binary' programs
-└── make.py                 # Main build script (Makefile-style target dispatch)
+mk/
+├── config/
+│   ├── build.config            # Nuitka & core package configuration (INI)
+│   └── dandelion.ico           # Windows binary icon
+├── lib/
+│   ├── ascii_check.py          # Unified ASCII-only checker (.py/.cpp/.hpp/.h/.ps1/.sh/.yml/CMakeLists.txt)
+│   ├── build_info.py           # Generated build metadata (created by make.py, removed by clean)
+│   ├── __init__.py
+│   └── paths.py                # Frozen/dev workspace root & stdlib fallback resolver
+├── scripts/
+│   ├── build_curl_static.sh    # Static zlib 1.3.1 + OpenSSL 3.0.15 + minimal HTTP/HTTPS libcurl 8.11.1
+│   ├── build_native.ps1        # Windows MSVC (vswhere) + CMake + Ninja helper
+│   └── docker_build.sh         # manylinux2014 Nuitka standalone build script (consumes prebuilt wheel)
+├── __init__.py
+└── make.py                     # Makefile-style target dispatcher
 ```
 
-### 2.2 Nuitka Configuration
+### 2.2 Nuitka Configuration (`mk/config/build.config`)
 
-Basic configurations are defined in `mk/config/build.config`, among which the following are noteworthy:
+Because heavy Python LLM SDKs (`openai`, `anthropic`, `httpx`, `pydantic`, `anyio`) were replaced by the native C++17 engine, `mk/config/build.config` only bypasses lightweight pure-Python / data packages:
 
-```sh
-# Nuitka config: Do not compile these heavy SDKs and libraries to C.
-nofollow_imports = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
-
-# Custom config: Manually copy these packages to the dist folder (bypassing Nuitka).
-copy_packages = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
-
-# Custom config: Force compile standard libraries required by the bypassed packages.
+```ini
+nofollow_imports = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
+copy_packages = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
 include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree
 ```
 
-To reduce compilation time, the aforementioned packages are designated not to be compiled but manually copied. If "full compilation" is needed, these configuration lines can be deleted.
+On Windows, `windows_jobs = 2` limits MSVC parallel heap usage to avoid `C1002: compiler is out of heap space`.
 
-Also, the configuration contains:
+### 2.3 `mk/make.py` Standalone Pipeline (`target_all`)
 
-```sh
-windows_jobs = 2
-```
+1. **Metadata (`_gen_build_info`)**: Reads `pyproject.toml` (overridden by `DANDELION_VERSION` / `DANDELION_TARGET` in CI) and writes `mk/lib/build_info.py`.
+2. **Compilation (`_run_nuitka`)**: Invokes Nuitka `--mode=standalone` with `--include-package=src.cli`, `--include-package=dandelion_core`, `--include-package-data=dandelion_core`, `--nofollow-import-to=src.remote`, `--include-module=_bisect`, and `--include-module=mk.lib.*`. Windows PE resources extract a purely numeric version via `_extract_numeric_pe_version()`.
+3. **Post-Processing (`_postprocess`)**:
+   - Moves `main.dist` into `build/dandelion/bin/`.
+   - Copies the dependency closure of `copy_packages` (including `.dist-info`) and `.py`-only stdlib fallbacks into `bin/_stdlib_fallback/` (never copying host `lib-dynload/*.so` binaries).
+   - Creates `.env/`, `llm/{memory,skill,sysprompt}/`, `.log/`, pre-fills `.env/cli.cfg`, and omits Remote-only `llm/sysprompt/remote.md` from CLI standalone bundles.
+   - Generates symlink-safe `dandelion.sh` (Linux) or `dandelion.cmd` (Windows), strips ELF binaries, and forces `DT_RPATH=$ORIGIN` via `patchelf`.
 
-This prevents potential Out-of-Memory errors on GHA Windows platforms (MSVC uses significant heap space for large single compilation units, triggering "C1002: compiler is out of heap space"). It manually restricts the number of `make -j` tasks.
+### 2.4 CI Build, PyPI Publish, and 3-Artifact Release
 
-Furthermore, the `[build]` section defines `entry = main.py`, `output_dir = build`, `cache_dir = .nuitka-cache`, `icon`, and `company/description` (written into Windows PE resources). The `[sign]` section currently has `enabled = false`, serving as a placeholder for code signing reserved in `make sign`.
+`.github/workflows/release.yml` runs a unified pipeline:
 
-### 2.3 `mk/make.py`
+1. **`meta`**: Resolves exact pushed tag (`${GITHUB_REF_VALUE#refs/tags/}`), validates PEP 440 version + numeric Windows PE version, and detects pre-releases (`-alpha`/`-beta`/`-rc`).
+2. **`build-core-wheels` & `build-core-sdist`**: Uses `pypa/cibuildwheel@v3` on `manylinux2014` (`glibc 2.17`, `x86_64` & `aarch64`, statically linking cached `zlib 1.3.1` + `OpenSSL 3.0.15` + minimal HTTP/HTTPS `libcurl 8.11.1` via `mk/scripts/build_curl_static.sh`) and `windows-latest` (`AMD64`, WinHTTP). Produces `cp311-cp311` and forward-compatible `cp312-abi3` wheels, then verifies them on Python `3.11` and `3.13` inside `ubuntu:18.04`, `almalinux:8`, `ubuntu:24.04` (without `libcurl4`, checking `ldd`, `importlib.resources`, `SSHTool`, all 5 protocols, and verified OS CA TLS) and Windows.
+3. **`build` (Streamlined 3-Artifact Nuitka Matrix)**: Builds `dandelion-win-x86_64` (Windows host), `dandelion-linux-x86_64` (`quay.io/pypa/manylinux2014_x86_64`), and `dandelion-linux-aarch64` (`quay.io/pypa/manylinux2014_aarch64`) via `mk/scripts/docker_build.sh`, consuming the prebuilt `cp311` wheel with zero C++ recompile while preserving `prompt-toolkit`. Each Linux binary is smoke-tested inside `ubuntu:18.04`, `almalinux:8`, and `ubuntu:24.04` containers.
+4. **`publish-pypi` & `release`**: On `v*` tags, publishes `dandelion-core` via OIDC Trusted Publishing only after all wheel tests AND all 3 standalone builds pass, then uploads the 3 standalone zips plus wheels/sdist to GitHub Releases.
 
-In the `main()` function at the bottom of the script, tasks are dispatched based on user input. For the core build function `target_all()`, it sequentially executes three main jobs:
+## 3. Package Layout Overview
 
-#### 2.3.1 Pre-Information
+1. **`packages/dandelion-core/src/dandelion_core/` (`dandelion-core`)**: Frontend-agnostic core package containing `agent/`, `subagent/`, `tool/`, `utils/`, `data/sysprompt/`, `runtime.py` (`BaseRuntime`, `DefaultRuntime`), `host.py` (`BaseAgentHost`), and `sync_protocol.py`.
+2. **`src/cli/`**: Interactive terminal host (`InteractiveCLI(BaseAgentHost)`, `CLIRuntime(BaseRuntime)`, `CLIPromptBuilder(BasePromptBuilder)`, `SessionSync`, `CLIPrinter`).
+3. **`src/remote/`**: 24/7 server daemon host (`RemoteLoop(BaseAgentHost)`, `RemoteRuntime(BaseRuntime)`, `RemotePromptBuilder(BasePromptBuilder)`, SQLite WAL store, Telegram/HTTP channels, background job workers, and Remote tools).
 
-1. Read Metadata: Reads project name and version from `pyproject.toml` via `_project_meta()`. If the `DANDELION_VERSION` environment variable is set (injected by CI calculating git tags, stripping leading `v`), it overrides the version number.
-2. Generate Static Info: Generates `mk/lib/build_info.py` via `_gen_build_info()`. This file stores compilation time, version, etc., as constants, exposing them to `main.py` similar to a `.h` file in C/C++. For example:
-    ```py
-        VERSION = "0.0.0-dev-260807-abc123-ci"
-        BUILD_MODE = "standalone"
-        BUILD_DATE = "2026-08-10 09:30:28"
-        PLATFORM = "linux"
-    ```
-    > In CI, if `DANDELION_TARGET` (e.g., `18.04`) is set, `PLATFORM` becomes something like `linux-x86_64-ubuntu18.04` to identify the glibc target of the artifact.
+CLI and Remote both depend on `dandelion_core`; `dandelion_core` imports neither `src.*` nor `mk.*`.
 
-#### 2.3.2 Core Compilation
-
-The core function of `_run_nuitka()` is to convert Python code into binary artifacts. For this function:
-
-1. Reads related configurations. On Windows, ensures `make -j` respects `windows_jobs` (2) to prevent memory overflow.
-2. Explicitly configures the `anti-bloat` plugin and `--noinclude-*-mode=nofollow` to strip out unnecessary testing/build libraries like `pytest/unittest/setuptools`.
-3. Explicitly specifies which large files Nuitka should not trace (`--nofollow-import-to`) via `nofollow_imports`.
-4. Enforces inclusion of required standard libraries via `include_std_modules` to prevent runtime errors after C compilation.
-5. On Windows, appends PE version resources (`--product-name/--product-version/--file-version`; since versions must be purely numeric, it uses static pyproject versions instead of CI tags) and icon parameters.
-6. Finally, invokes Nuitka via `subprocess.run` (`--mode=standalone`, `--include-package=src.cli`, `--include-package=src.core`, `--nofollow-import-to=src.remote`, `--include-module=mk.lib.*`) to generate the artifact.
-
-#### 2.3.3 Post-Processing
-
-Because we manually excluded certain libraries in the previous section to save compilation time, we need to re-introduce them into the artifact here. We handle this via `_postprocess()`.
-
-1. Directory Migration: Renames and moves the default `<entry>.dist` generated by Nuitka to `build/<name>/bin`.
-    > The outer layer is the workspace, wrapping the `bin` directory inside. The final artifact layout is:
-    > ```sh
-    > build/Dandelion/
-    > ├── bin/                  # Actual binary + copied dependencies
-    > ├── .env/                 # cli.cfg (pre-filled by cli.cfg.example)
-    > ├── llm/                  # memory/, skill/ (empty directories with .keep placeholders)
-    > ├── .log/
-    > ├── dandelion.sh/.cmd     # Wrapper scripts for launching
-    > └── version.txt           # Version number + optional target=ubuntu18.04 tag
-    > ```
-2. Copies previously excluded dependencies back into `bin`.
-    > `_copy_dependency_closure()` uses a BFS search to copy required packages, their sub-dependencies, and `.dist-info` to ensure no runtime version verification errors occur.
-3. Re-introduces missing Standard Libraries (`_copy_stdlib_fallback()`).
-    > Take `requests` for example: if we instructed Nuitka to ignore compiling this library, but it depends on `ssl`. If our core code didn't use `ssl`, it might be completely missing.
-    > Therefore, we use Python's built-in `ast` module to scan the dependencies copied in step (2), and copy any utilized standard libraries into the `bin/_stdlib_fallback` directory.
-4. Construct Workspace: For an "out-of-the-box" experience, directories like `.env`, `llm/memory`, `llm/skill`, and `.log/` are created under the `build/Dandelion` root.
-5. Generate Wrapper Scripts: To run the program at the `build/Dandelion` level without cd'ing into `bin`, wrapper scripts `dandelion.cmd` and `dandelion.sh` are placed outside to execute the actual binary inside `bin`.
-    > On Linux, `exec` wrapper scripts are used instead of symlinks to prevent crashes caused by inconsistent dual-path resolution (between `$ORIGIN` and Nuitka module dirs). Additionally, if `patchelf` is present, it forces `--force-rpath --set-rpath $ORIGIN` on the binary to guarantee `libpython` inside `bin/` is searched before `LD_LIBRARY_PATH`, preventing external `libpython` hijacking.
-6. Cleanup: Writes `version.txt` and recursively cleans up `__pycache__` in the artifacts.
-
-### 2.4 CI Build and Release
-
-`.github/workflows/release.yml` implements "version calculation + matrix build + artifact upload":
-
-1. `meta` job calculates the version: uses `git describe --tags --match "v*"` on push tags; otherwise generates `v0.0.0-dev-<yyMMdd>-<short-sha>`. Unofficial releases (workflow within CI) append a `-ci` suffix. The version is injected into `mk/make.py` via `DANDELION_VERSION`.
-2. `build` job matrix:
-    - Windows x86_64: GitHub host runner (Nuitka + MSVC + clcache).
-    - Linux x86_64 and arm64: 5 Ubuntu targets each (18.04/20.04/22.04/24.04/26.04), all utilizing container builds via `docker-build.sh`.
-3. Caching Strategy: `venv` and Nuitka caches are isolated by `os_name-arch-distro`.
-
-## 3. `src` Overview
-
-`src/` contains three main packages:
-
-1. `core`: The common foundation. `core/agent` contains the Main Agent, synchronous Agent Loop, tool assembly, context compression, memory and prompts. `core/runtime.py` defines shared host callbacks; `core/subagent` manages SubAgents, `core/tool` implements tools, and `core/utils` provides configuration, logging, model routing and API requests.
-2. `cli`: Terminal interaction, commands, Ctrl+C rollback and the manual session-backup client in `cli/sync.py`.
-3. `remote`: Server events, background jobs, session-backup ingestion, Telegram and scheduling.
-
-CLI and Remote each depend on Core; Core imports neither host. Nuitka explicitly includes only `src.cli` and `src.core` with their subpackages, and excludes `src.remote`. See the [Remote guide](03_remote.en.md) for deployment.
-
-## 4. General Classes
-
-`src/core/utils` provides general configuration, logging and API request methods. Terminal interaction lives separately in `src/cli`. This chapter covers shared interfaces before explaining how CLI calls the common Agent Loop.
-
-After understanding how the Agent Loop is implemented in the [CLI Section](#46-cli) of this chapter, we will proceed to the [next chapter](#5-agent-core-design) to review the specific implementations of the Agent classes.
+## 4. Core Utilities (`dandelion_core/utils`)
 
 ```sh
-.
-├── config              # Config Loader
-├── __init__.py
-├── llm_provider        # Dynamic API SDK configuration
-├── logging             # Logging / Session Management
+dandelion_core/utils/
+├── config/             # load_api_config(), load_remote_config(), load_devices_config()
 ├── embedding.py        # Pluggable text embedding providers
-└── llm_request         # LLM Request & SubAgent ModelRegistry
+├── llm_provider/       # Native C++17 + nanobind multi-protocol HTTP/SSE engine
+│   ├── __init__.py     # create_provider(), certifi fallback CA wiring
+│   ├── blocks.py       # Canonical Block, PartialStreamError, RequestCancelledError
+│   ├── effort.py       # Cross-protocol effort & Sub2API flavor mapping (incl. xhigh)
+│   └── native/         # 14 C++17 source/header files (5 protocol codecs + curl/WinHTTP)
+├── llm_request/        # SafeLLMClient & SubAgent ModelRegistry
+└── logging/            # SessionManager & atomic SessionBackup
 ```
 
 ### 4.1 Config Loading (`config`)
 
-`src/core/utils/config/config.py` provides functions to read configurations under `.env/`. Among them:
+`dandelion_core/utils/config/config.py` provides:
 
-1. `load_api_config()` reads `api.cfg`.
-2. `load_devices_config()` reads `devices.yaml` containing SSH device aliases, addresses, auth methods, etc. This is accessed during the execution phase in `src/core/tool/shell/ssh_tool.py` (LLMs can only see aliases, not credentials).
+1. `load_api_config(file_path)` / `load_remote_config(file_path)` reading `cli.cfg` / `remote.cfg`.
+2. `load_devices_config(devices_path=None, *, config_dir=None, workspace_dir=None)` reading `devices.yaml` for `SSHTool` (resolved via injected `config_dir` or `<workspace_dir>/.env`, with zero `mk.lib.paths` coupling).
 
 ### 4.2 Logging and Sessions (`logging`)
 
-`src/core/utils/logging/logger.py` (`AgentLogger`) is primarily responsible for writing runtime data into daily log files (`YYYY_MM_DD.log`), allowing the upper-level `SessionManager` to reuse the same serialization logic:
+Runtime request/response records are appended by `SessionManager.log_api_call()` to the current session's `api.log` (rotated to `api.log.old` at 20 MB):
 
 ```sh
-Agent/SubAgent -> log_api_call() -> `.log/`
+Agent/SubAgent -> SessionManager.log_api_call() -> .log/sess_xxx/api.log
 ```
 
-`src/core/utils/logging/session.py` (`SessionManager`) implements session management for the CLI. Each session branch is stored in `.log/` under the format `sess_yyyymmdd_hhmmss_ms`. A session folder typically contains:
+`dandelion_core/utils/logging/session.py` (`SessionManager`) manages session branches (`sess_yyyymmdd_hhmmss_ms`) containing `api.log`, `archives/`, `artifacts/`, `history.log`, `memory/`, `meta.log`, `staged.md`, and `task_state.json`. `backup.py` (`SessionBackup`) provides atomic pre-turn snapshots supporting rollback even across mid-turn `prune_context(rollover=True)` session creation.
 
-```log
-.
-├── api.log
-├── archives/            # Complete context backups (generated on compression), append-only, restorable
-├── artifacts
-│   ├── call_00_52wgHo88lnWaSbwa1LVi0390.txt
-│   ├── call_00_d3RYUb6puaMqEbF6qHPz5544.txt
-│   ├── ...
-│   └── call_01_QwIjMQ4IxwJxKq6P2WP18965.txt
-├── history.log
-├── memory
-│   ├── feat_staged_retry_decisions.md
-│   ├── feat_staged_retry_impl_status.md
-│   ├── feat_staged_retry_recheck_status.md
-│   └── MEMORY.md
-├── meta.log
-├── staged.md            # CLI draft staging area (generated when drafts exist)
-└── task_state.json
-```
+### 4.3 Native Multi-Protocol Engine (`llm_provider`)
 
-Details:
+`dandelion_core/utils/llm_provider/` replaces Python vendor SDKs with a native C++17 + `nanobind` (`cp312-abi3` on Python >= 3.12) extension (`_native`) implementing five wire protocols directly over `libcurl` (POSIX, with runtime OS CA + `certifi` fallback) or `WinHTTP` (Windows):
 
-1. `api.log` records raw json data of every Agent request to the LLM and its response.
-2. `artifacts/` stores large outputs of tool calls. If any tool output exceeds 8000 characters (`MAX_INLINE_CHARS`), `agent.step()` writes the full result to `<tool_use_id>.txt`. Only the truncated first 8000 characters plus a pointer saying "output saved to <absolute path>" is retained in the context. The LLM can use `read_file` to fetch the rest on-demand, thereby avoiding context explosion and delaying token compression.
-3. `history.log` contains the complete message array (`messages`, including user/assistant/tool_result blocks and injected `[Dandelion Context]`). This is the persistent source for building payloads, context compression, and recovery.
-4. `memory/` contains Session (Local) layer memories that the LLM deems necessary to store, isolated by session branch.
-5. `meta.log` holds the session's metadata.
-6. `task_state.json` contains tasks self-planned by the LLM, including `target`, `todos`, and `completed` items, acting as a focus-keeping mechanism.
-7. `archives/` and `staged.md` do not exist in every session: the former is generated during context compression, while the latter appears when drafts are edited via `vim`/`load`.
+1. `api_messages.cpp`: Anthropic Messages API (`/v1/messages`)
+2. `api_chat_completions.cpp`: OpenAI Chat Completions (`/v1/chat/completions`, including DeepSeek `reasoning_content` round-trip and OpenAI reasoning model parameter handling)
+3. `api_responses.cpp`: OpenAI Responses API (`/v1/responses`, stateless `store=false` + `reasoning.encrypted_content`)
+4. `api_generate_content.cpp`: Gemini `generateContent` / `streamGenerateContent`
+5. `api_interactions.cpp`: Gemini `v1beta/interactions`
 
-### 4.3 API Requests (`llm_provider`)
+All 5 codecs support cooperative cancellation polling (`cancelled` callback -> `RequestCancelledError` within ~75ms) and cross-protocol `compat` / `effort` injection (`low` / `medium` / `high` / `xhigh` / `max`, including `gemini-4-neon` `xhigh`).
 
-`src/core/utils/llm_provider` derives API request formats for OpenAI and Anthropic SDKs. `base.py` provides universal base class methods, from which the rest are derived. `SafeLLMClient._create_provider()` selects them based on `SDK_TYPE`.
+### 4.4 SubAgent Model Registry (`model_registry`) & Requests (`llm_request`)
 
-For the Anthropic API, the Reasoning Effort (Think Level) utilized by DeepSeek adopts OpenAI-style `low`, `med`, `high` strings instead of Anthropic's specific "Think Budget" (thinking/effort injection logic is handled inside the Provider).
+`dandelion_core/utils/llm_request/model_registry.py` exposes `[Main] SUB_LIST` models directly to the LLM via `BaseDelegationTool` schema enums and catalogs ("Let LLM Decide"). `SafeLLMClient` calls native `normalize_messages()` before dispatch, passes `cancelled=self.runtime.cancelled` into `_native.Provider`, and avoids silent cross-model fallback on SubAgents.
 
-For OpenAI, basic frameworks and contents are implemented, but they need future updates for Response API (TODO). Note: Google/Gemini is now integrated exclusively via OpenAI-compatible endpoints, removing native Google SDK dependencies.
+### 4.5 CLI Host (`src/cli/`)
 
-### 4.4 SubAgent Model Registry (`model_registry`)
+`InteractiveCLI(BaseAgentHost)` (`src/cli/cli.py`) uses `prompt_toolkit` (with `input` fallback) and `CLIRuntime(BaseRuntime)` (`src/cli/runtime.py`) to provide Git-style session commands (`branch`, `checkout`, `vim`, `load`, `status`, `commit`, `sync`, `remote`, `clear`), automatic interrupted-tool repair on startup/`checkout`, and unified `SIGINT` handling (`[S]top` / `[R]ollback` / `[C]ontinue`) that aborts in-flight native streams and resumes cleanly on `[C]ontinue` without dropping tool outputs.
 
-`src/core/utils/llm_request/model_registry.py` (`ModelRegistry` and `RegistryModelSpec`) follows the "Let LLM Decide" principle: instead of guessing categories via programmatic regex keywords, it preserves the ordered `[Main] SUB_LIST` specifications including `name`, `description` (`basic.description`), per-model `max_tokens`, reasoning settings, and multimodal capabilities (`media_exts` / `media_limits`).
-
-Each SubAgent's `name` and `description` are exposed directly in the delegation tools (`spawn_subagent` and Remote's `submit_task`) alongside an explicit `model` enum schema so the calling Agent LLM selects the appropriate worker model using its full live context.
-
-### 4.5 LLM Requests (`llm_request`)
-
-`src/core/utils/llm_request` is primarily responsible for sending requests to the LLM. The workflow is as follows:
-
-```py
-# - Main Agent
-#      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
-# - Sub Agent
-#      SubAgent.run() -> SafeLLMClient.subagent_request(model_alias, payload) -> cached provider -> request to LLM
-```
-
-Details:
-
-1. The Main Agent requests directly via `safe_stream_request()` within its own Tool iterate loop.
-2. SubAgents dispatch explicitly to the parent-selected model via `subagent_request(model_alias, payload)`, bounded by that model's own `spec.max_tokens`.
-3. Regardless of the path, message normalization (`_normalize_messages()`) occurs before sending: adjacent messages of the same role are merged to satisfy strict role-alternating requirements.
-4. Error Handling:
-    - Main Agent: 1 initial attempt + `_LLM_RETRY_COUNT=3` retries with exponential backoff `(2, 4, 8)` seconds.
-    - SubAgent: No silent cross-model fallback. Any provider failure is returned directly to the parent Agent (via `SubAgentResult` or Remote's `job_done` interrupt) so the parent LLM decides whether to retry, switch models, or handle the work directly.
-
-### 4.6 CLI
-
-`src/cli/printer.py` provides terminal color printing without other core logic.
-
-`src/cli/cli.py` is based on `prompt_toolkit` (falling back to standard `input` if missing) to provide an interactive CLI mimicking git-style commands. Noteworthy points include:
-
-1. `_build_completer()` defines commands and their sub-command auto-completion.
-2. `run()` uses an infinite loop to implement the "CLI Loop", structured internally in two layers:
-    ```sh
-        # Interactive **CLI** Loop
-        run(True)
-            # **Agent** Loop
-            -> _run_agent_loop()
-                # Call **Tools** Loop/Iterate
-                -> agent.step()
-    ```
-    Here, `_run_agent_loop()` is triggered in two scenarios: running tool loops after sending a message via the `commit` command; and as a "background check" against the history tail before `run()` waits for input. If the last message is a `tool_result` (an unfinished tool iteration left from an interruption), it automatically resumes the Agent Loop. If it fails, it drops the dangling "tool_use/tool_result pair" to avoid a 400 error on the next request.
-3. Staged Area: Drafts edited via `vim`/`load` are temporarily written to the session's `staged.md`, and the CLI prompt displays a `*` to indicate a dirty flag.
-
-## 5. Agent Core Design
-
-`src/core/agent/` groups the Main Agent implementation: `agent.py` executes one request/tool iteration, `runner.py` provides the synchronous Agent Loop, `tools.py` selects Main and Worker tools, and the other modules handle prompts, memory, context compression and skills. Cross-host output, approval and cancellation callbacks remain in `src/core/runtime.py`; the manual backup client belongs to `src/cli/sync.py`. We start with `sysprompt`, then cover SubAgent design in the next chapter.
+## 5. Agent Core Design (`dandelion_core/agent/`)
 
 ```text
-src/core/
-├── agent/       # Main Agent, loop, context and tool assembly
-├── subagent/    # Synchronous delegation, results and parallel dispatch
-├── tool/        # Concrete tools and the common tool base
-├── utils/       # Config, logging, LLM requests and routing
-├── runtime.py   # Host output, approval and cancellation callbacks
-└── __init__.py  # Lazily loaded public entry points
+packages/dandelion-core/src/dandelion_core/
+├── agent/              # MyAgent, runner, tools, sysprompt, memory, skill, compress, prune, interrupt
+├── data/sysprompt/     # Packaged default templates (remote.md) loaded via importlib.resources
+├── subagent/           # ISubAgent, SubAgent, SubAgentPool, dispatch, registry, result
+├── tool/               # BaseTool, BaseDelegationTool, MediaToolBase, ShellCommandGuard, concrete tools
+├── utils/              # config, logging, embedding, llm_provider (_native), llm_request
+├── runtime.py          # BaseRuntime(ABC), DefaultRuntime / Runtime
+├── host.py             # BaseAgentHost(ABC)
+├── sync_protocol.py    # Shared CLI <-> Remote session sync wire protocol
+└── __init__.py         # Lazy public exports
 ```
 
-### 5.1 sysprompt
+### 5.1 System Prompt (`sysprompt.py`)
 
-Dandelion's system prompt is defined as constants in `src/core/agent/sysprompt.py` (`PromptBuilder`) rather than loading from files. The sysprompt assembly process:
+`BasePromptBuilder(ABC)` (`dandelion_core/agent/sysprompt.py`) keeps the static system prompt byte-identical across a session for maximum KV prefix cache hits, while `MyAgent._inject_dynamic_context()` appends `[Dandelion Context]` (memory index, recalled memories, `task_state.json`) to the latest plain-text user message. Shared sections (`_build_subagent_orchestration_section()`, `_build_skills_section()`, `_build_language_section()`, `_build_memory_section()`) are reused across `DefaultPromptBuilder`, `CLIPromptBuilder`, and `RemotePromptBuilder`. Packaged templates under `dandelion_core/data/sysprompt/` are loaded via `importlib.resources` after checking `<workspace_dir>/llm/sysprompt/`.
 
-1. First, define the `[Dandelion]` identity and environment info, enabling the LLM to use correct shell commands.
-2. Second, append SubAgent usage rules if SubAgents are enabled.
-3. Third, stitch in the Skill catalog.
-4. Next, outline security rules, language policies, and response style guidelines.
-5. Finally, define the Memory system usage guide (dual-layer memory, `[Dandelion Context]` block semantics, and `remember`/`update_state` tool usage).
+### 5.2 Skills, Dual-Tier Memory, and Context Management
 
-Crucially: To maximize Prompt Caching hit rates, **dynamic content** (memory indexes, relevant memory summaries, task states) is not injected directly into the `system` message. Instead, it is rendered into `[Dandelion Context]` blocks and appended to the end of the latest plain-text `user` message via `agent._inject_dynamic_context()`. This keeps the system prompt byte-for-byte identical across the session, allowing prefix caches (like DeepSeek's) to maintain high hit rates across tool loop iterations. The constructed request looks like this:
+- **Skills (`dandelion_core/agent/skill.py`)**: Scans `llm/skill/` and exposes full content on demand via `LoadSkillTool`.
+- **Memory (`dandelion_core/agent/memory.py`)**: Two-tier (global `llm/memory/` + session `.log/sess_<id>/memory/`) hybrid vector + keyword retrieval; ASCII policy enforced across source/script/workflow files by `python mk/make.py ascii` (`mk/lib/ascii_check.py`).
+- **Context Compression & Pruning (`compress.py`, `prune.py`)**: Reactive overflow/budget compaction (`ContextCompressor`) paired with LLM-invoked `prune_context` (including `rollover=True` session rollover with rollback support).
 
-```json
-{
-    "system": "You are Dandelion, ......",
-    "messages": [
-        {
-            "role": "user",
-            "content": "User input or Tools result. [Dandelion Context (auto-injected reference data)]\nRelevant Memories: ...... [Dandelion Context End]"
-        },
-    ],
-}
-```
+## 6. SubAgent Design (`dandelion_core/subagent/`)
 
-### 5.2 skill
+`ISubAgent(ABC)`, `SubAgent`, `SubAgentPool`, `TOOLSET_REGISTRY`, and `dispatch_tool_calls` (`dandelion_core/subagent/dispatch.py`) support bounded recursive delegation (`SUB_DEPTH`), deterministic DAG & disjoint-file validation (`plan_tool`), parallel wave execution (`SUB_CONCURRENCY`), and per-model multimodal tool adaptation (`MediaToolBase`).
 
-`src/core/agent/skill.py` (`SkillManager`) is responsible for scanning files under `llm/skill/` and registering them into a `name -> description/content` catalog. `get_catalog()` inserts this `- name: description` list into the sysprompt. When the LLM needs to read the full text of a skill, it fetches it by name via the `load_skill` tool (`LoadSkillTool`).
+## 7. Tool Classes (`dandelion_core/tool/`)
 
-### 5.3 memory
+All tools inherit `BaseTool(ABC)` (`dandelion_core/tool/base_tool.py`) implementing `get_name()`, `get_description()`, `get_schema()`, and `execute(**kwargs)`. Delegation tools (`SpawnSubagentTool`, `RestrictedSpawnTool`, Remote's `SubmitTaskTool`) inherit `BaseDelegationTool(BaseTool, ABC)`.
 
-Dandelion's memory management can be briefly categorized into:
+Security boundaries at the tool layer:
 
-1. Indexing: `agent._render_dynamic_context()` -> `MemoryManager.get_index_text()`.
-2. Reading: `agent._get_memories()` -> `MemoryManager.load_memories_string()`.
-3. Writing: `MemoryTool.execute()` -> `MemoryManager.write_memory()`.
-
-Memories are split into two layers:
-
-1. Global: Stored in `llm/memory`, persistent across all sessions (coding style, architecture decisions, user preferences).
-2. Local (Session): Stored in `.log/sess_<id>/memory/`, isolated by session branch. When switching sessions using `checkout`, the `session_manager` dynamically resolves the directory without needing to rebuild the agent.
-
-The write directory (layer) is specified by the LLM via the `scope` parameter (`global`/`session`) in the `remember` tool. If the session layer isn't configured, attempting to write there explicitly raises an error rather than silently saving to global.
-
-Note that to facilitate easier LLM indexing (extraction), all memory contents must be written in English (ASCII language policy). `src/core/agent/memory.py` encapsulates memory read/writes within `class MemoryManager`. The tool layer (`remember`/`update_state`) rejects non-ASCII inputs, prompting translations, while `test/ascii_check.py` ensures the source code and memory files themselves contain no non-ASCII characters. Check the `@file` docstrings for detailed call chains.
-
-### 5.4 agent
-
-`src/core/agent/agent.py` defines all required functionalities of the Main Agent (`MyAgent`). As noted in the [CLI Section](#46-cli), the `step()` in the agent is not a traditional Agent Loop, but a specific Tools Loop/Iterate for a single turn. Therefore, let's look directly at `step()`.
-
-#### 5.4.1 `step()`
-
-1. Construct the sysprompt.
-2. If the latest message is a plain-text user message, inject the dynamic context (`[Dandelion Context]`). Tool iterations triggered by a `tool_result` latest message will skip re-injection.
-3. Manage Context: Check token budgets. If the soft limit is exceeded, execute compression (see 5.4.2).
-4. Build the payload.
-5. Send the API request.
-6. Upon LLM response (when `stop_reason == "tool_use"`), execute all tool calls sequentially, write results, and append them back to the history. If a single tool output exceeds 8000 characters, execute the large output offload (see 4.2).
-
-This completes a single `step()`. If the LLM's overarching task is unfinished, the CLI determines whether to invoke another `step()` based on the return value (`continue_loop`), or terminate the Agent Loop and return the terminal to the user.
-
-#### 5.4.2 Context Compression
-
-Context token calculation in Dandelion does not involve a heavy tokenizer; it uses heuristic estimation via `_estimate_tokens()` (~4 chars/token for ASCII, ~1.5 chars/token for CJK). The soft limit is computed in `_soft_token_limit()`:
-
-```py
-soft_limit = MAX_CONTEXT_TOKENS - MAX_TOKENS - fixed_overhead(sysprompt + tool schemas)
-```
-
-Namely, the context window is "shared" (Max Context = History + Configured Max Output + Current Input). Thus, the compression threshold reserves space for the output budget and fixed overhead in advance, preventing providers from returning `400 context-length` errors.
-
-Compression is executed in `_compact_context()`:
-
-1. Backup: The complete history is written as append-only JSON to `archives/history_<len>_<timestamp>.json` in the session folder.
-2. Select Compression Range: The `head` retains the first 5 messages (ensuring it doesn't end on an unpaired assistant `tool_use`). The `recent` tail retains the last 15 messages, seeking the "most recent plain-text user message" as a safe breakpoint (so `tool_use`/`tool_result` pairs are never split). If no safe breakpoint is found, it defaults to keeping `head + summary`.
-3. LLM Summary: Sends an independent request asking the LLM for a summary (XML format output: goals/completed/decisions/artifacts/pending). If the summary input exceeds 200k chars, the middle portion is truncated. Failure falls back to basic truncation.
-4. Rewrite: The history is rewritten and persisted in the format `head + summary (as a user role) + recent`. Memory caches are invalidated.
-5. Post-compression verification: If it still exceeds limits (e.g., `MAX_CONTEXT_TOKENS` is configured too small), an explicit warning is printed once to avoid triggering summary requests redundantly every loop.
-
-## 6. SubAgent Design
-
-The SubAgent design is structured as follows:
-
-```sh
-.
-├── pool.py             # SubAgent "Pool" (scheduler held by MyAgent)
-├── registry.py         # Toolset Registry (TOOLSET_REGISTRY + resolve_toolset)
-├── result.py           # Message passing structures between SubAgent and parent
-├── i_subagent.py       # Virtual Base Class (ISubAgent, reserves interfaces for specialized subagents)
-└── subagent.py         # "General" SubAgent (SubAgent, actual implementation)
-```
-
-`i_subagent` exists to reserve identical calling interfaces for specialized SubAgents (e.g., a specialized SubAgent specifically engineered to write report documents). Inside `subagent.py`, mechanisms like sysprompt and agent-loop exist similarly to the Main Agent, but complex context and memory management are stripped out:
-
-1. Every SubAgent completes all its work within `run()` (capped at 100 tool iterations), then wraps the outcome in `SubAgentResult` and returns.
-2. Depth is 1-based: Main Agent = 0, direct SubAgent = 1, sub-subagent = 2. The limit is `[Main] SUB_DEPTH` (default 1 in CLI, 2 in Remote; 0 disables SubAgents). Both `PlanTool` and `RestrictedSpawnTool` are injected when `depth < max_depth` and `SUB_LIST` is non-empty. `SubAgentPool.create_and_run()` rejects any spawn outside `1..SUB_DEPTH` or with an unknown `model` as the final non-bypassable gate.
-3. Each SubAgent has an exclusive ID (`sa-<hex>`) enabling the pool to manage them and boundary-defining outputs/logs for the parent.
-4. Media tools (`read_pdf`, `read_image`) are bound or pruned per SubAgent according to its own `model_spec` (`media_exts` / `media_limits`), while preserving logical toolset capabilities so a text-only parent SubAgent can still delegate media tasks to a multimodal nested SubSubAgent.
-5. LLM requests go through `subagent_request(model_alias, payload)` using the `model` explicitly chosen by the parent LLM based on `basic.description`. Multi-step decompositions are validated upfront via `plan_tool` (model, toolset, acyclic `depends_on` DAG, and disjoint parallel `target_files`) without making a separate context-blind LLM call.
-6. Concurrency: consecutive `spawn_subagent` calls in one response run in parallel via `src/core/subagent/dispatch.py` (bounded by `[Main] SUB_CONCURRENCY`, default 4), while top-level SubAgents not already inside a `subagent-worker` thread (such as Remote background jobs) can also run nested `spawn_subagent` waves in parallel.
-
-`pool.py` creates an agent pool (`SubAgentPool`, a singleton held by `MyAgent`) to manage SubAgents. The `registry.py` predefined five classes of toolsets (`minimal`/`filesystem`/`code_analysis`/`data_processing`/`full`) which the LLM refers to by name. The execution flow typically looks like:
-
-```sh
-Main Agent (Root)
-    # Single-level delegation
-    -> plan_tool:                               # Main Agent submits & validates structured TaskPlan
-    -> SpawnSubagentTool(model=...):            # Invokes Agent Pool with chosen model
-        -> pool.create_and_run:                 # Validates depth / model / toolset
-            -> resolve_toolset:                 # Resolves toolset & adapts per-model media tools
-            -> SubAgent.run:                    # SubAgent-Loop
-        <- parent.sub_results.append(result)    # Returns result (errors returned directly to parent)
-    
-    # Nested delegation (SUB_DEPTH >= 2, e.g. Remote background SubAgent)
-    -> plan_tool:
-    -> SpawnSubagentTool / SubmitTaskTool(model=...):
-        -> pool.create_and_run:
-            -> SubAgent.run (depth=1):
-                -> plan_tool:                               # Nested strict TaskPlan validation
-                -> RestrictedSpawnTool(model=...):          # Spawns sub-subagent (depth=2)
-                    -> pool.create_and_run:                 # SubSubAgent-Loop
-                    <- parent.sub_results.append(result)
-        <- parent.sub_results.append(result)
-```
-
-For detailed design, refer to the inline comments in the corresponding source files.
-
-## 7. Tool Classes
-
-All tool classes under `src/core/tool` derive from `base_tool.py` (`BaseTool`) and expose themselves to the Agent via four interfaces: `get_name()`, `get_description()`, `get_schema()`, and `execute()`. They are registered within `MyAgent._init_tools()`.
-
-The security model (sandbox protection) is the most crucial cross-cutting concern at the tool layer:
-
-1. `BaseTool` implements most path-based sandbox protections:
-    - Checks if the target path resides strictly inside the workspace root. Exceeding boundaries triggers an interactive y/N human approval prompt.
-    - `_prepare_path()` performs a secondary validation on resolved paths after approval.
-    - `_open_secure()` opens files using `O_NOFOLLOW` on POSIX systems, ensuring target components aren't swapped with symlinks after approval to escape the sandbox.
-2. A small number of specialized tools (like shells) employ additional member functions in their derived classes for defense:
-    - `bash` tool: Substring blacklists (e.g., `../`, `/etc`, `.env`, `~/`) + tokenized path sandbox checks. Includes a 120-second timeout and a 50KB output truncation.
-    - `ssh` tool: Used for remote control of embedded devices. Thus, it manages security via command matching rather than directory control (e.g., you might intentionally want to access various startup scripts under `/etc/init.d/`).
+1. `BaseTool` enforces workspace path checks, interactive approval via `runtime.approve()`, post-approval path re-verification (`_prepare_path()`), and `O_NOFOLLOW` opens (`_open_secure()`).
+2. Shell tools (`BashTool`, `SSHTool`) share `ShellCommandGuard` (`dandelion_core/tool/shell/shell_guard.py`) — a single-pass quote-aware shell lexer handling escapes, heredocs/here-strings, redirections, subshells, command/parameter substitutions, globs/braces, wrapper verbs, and normalized sensitive/device path checks.

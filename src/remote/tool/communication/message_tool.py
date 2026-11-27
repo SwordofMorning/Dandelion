@@ -89,7 +89,7 @@ class SendMessageTool(BaseTool):
      #
      # @return (success_bool, status_json_string) tuple.
      #
-    def execute(self, text="", session_id="", notify=True):
+    def execute(self, text="", session_id="", notify=True, **kwargs):
         body = str(text or "").strip()
         if not body:
             return False, "Error: 'text' must be non-empty."

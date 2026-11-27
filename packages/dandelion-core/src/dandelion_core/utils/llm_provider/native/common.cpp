@@ -15,6 +15,10 @@
 #include <random>
 #include <vector>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 namespace dandelion
 {
 namespace
@@ -52,28 +56,7 @@ const std::vector<FlavorHint> kHostHints = {
 };
 
 /**
- * @brief Check whether a lowercased model_id refers to an OpenAI o1/o3/o4 reasoning model.
- */
-bool IsOpenAIOSeries(const std::string& lowered_model)
-{
-    std::string m = lowered_model;
-    size_t slash = m.rfind('/');
-    if (slash != std::string::npos)
-    {
-        m = m.substr(slash + 1);
-    }
-    for (const char* prefix : {"o1", "o3", "o4"})
-    {
-        if (m == prefix || StartsWith(m, std::string(prefix) + "-"))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @brief Extract UTF-8 string bytes from a Python str, falling back to errors="replace" on lone surrogates.
+ * @brief Extract UTF-8 string bytes from a Python str, replacing lone UTF-16 surrogates safely.
  */
 std::string ExtractPythonStr(nb::handle obj)
 {
@@ -81,8 +64,15 @@ std::string ExtractPythonStr(nb::handle obj)
     {
         return nb::cast<std::string>(obj);
     }
-    catch (nb::python_error&)
+    catch (const nb::cast_error&)
     {
+        PyErr_Clear();
+        nb::bytes encoded = nb::cast<nb::bytes>(obj.attr("encode")("utf-8", "replace"));
+        return std::string(encoded.c_str(), encoded.size());
+    }
+    catch (const nb::python_error&)
+    {
+        PyErr_Clear();
         nb::bytes encoded = nb::cast<nb::bytes>(obj.attr("encode")("utf-8", "replace"));
         return std::string(encoded.c_str(), encoded.size());
     }
@@ -287,7 +277,48 @@ bool HasHeaderControlChars(const std::string& s)
 {
     for (char c : s)
     {
-        if (c == '\r' || c == '\n' || c == '\0')
+        unsigned char u = static_cast<unsigned char>(c);
+        if (u == '\r' || u == '\n' || u == '\0' || u == 0x7F || (u < 0x20 && u != '\t'))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string SanitizeBareModel(const std::string& model)
+{
+    std::string trimmed = Trim(model);
+    if (trimmed.empty() || HasHeaderControlChars(trimmed) || ContainsAny(trimmed, {"?", "#", "..", "\\"}))
+    {
+        std::string msg = "Invalid model_id for URL path: '" + model + "'";
+        throw nb::value_error(msg.c_str());
+    }
+    size_t slash = trimmed.rfind('/');
+    std::string bare = (slash != std::string::npos) ? trimmed.substr(slash + 1) : trimmed;
+    if (bare.empty() || bare == "." || bare == "..")
+    {
+        std::string msg = "Invalid model_id for URL path: '" + model + "'";
+        throw nb::value_error(msg.c_str());
+    }
+    return bare;
+}
+
+bool IsOpenAIReasoningModel(const std::string& model_id)
+{
+    std::string m = Lower(Trim(model_id));
+    size_t slash = m.rfind('/');
+    if (slash != std::string::npos)
+    {
+        m = m.substr(slash + 1);
+    }
+    if (StartsWith(m, "gpt-5") || StartsWith(m, "gpt-6"))
+    {
+        return true;
+    }
+    for (const char* prefix : {"o1", "o3", "o4"})
+    {
+        if (m == prefix || StartsWith(m, std::string(prefix) + "-"))
         {
             return true;
         }
@@ -309,13 +340,13 @@ nb::object JsonLoads(const std::string& text)
 std::string JsonDumps(nb::handle obj)
 {
     nb::object hook = nb::module_::import_((PackageName() + ".blocks").c_str()).attr("json_default");
-    nb::object out = nb::module_::import_("json").attr("dumps")(obj, "ensure_ascii"_a = false, "default"_a = hook);
+    nb::object out = nb::module_::import_("json").attr("dumps")(obj, "ensure_ascii"_a = false, "allow_nan"_a = false, "default"_a = hook);
     return TextOf(out);
 }
 
 std::string JsonDumpsPlain(nb::handle obj)
 {
-    nb::object out = nb::module_::import_("json").attr("dumps")(obj, "ensure_ascii"_a = false);
+    nb::object out = nb::module_::import_("json").attr("dumps")(obj, "ensure_ascii"_a = false, "allow_nan"_a = false);
     return TextOf(out);
 }
 
@@ -395,7 +426,7 @@ std::string ResolveFlavor(const std::string& compat, const std::string& model_id
         }
     };
 
-    if (IsOpenAIOSeries(model))
+    if (IsOpenAIReasoningModel(model))
     {
         emit_warn("openai");
         return "openai";
@@ -500,6 +531,15 @@ std::string ResultText(nb::object content)
 bool IsMainThread()
 {
     thread_local int t_is_main = -1;
+#ifndef _WIN32
+    thread_local pid_t t_cached_pid = 0;
+    pid_t cur_pid = ::getpid();
+    if (t_cached_pid != cur_pid)
+    {
+        t_is_main = -1;
+        t_cached_pid = cur_pid;
+    }
+#endif
     if (t_is_main < 0)
     {
         nb::module_ threading = nb::module_::import_("threading");

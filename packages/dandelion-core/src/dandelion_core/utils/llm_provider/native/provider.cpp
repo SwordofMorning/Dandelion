@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <thread>
 
 namespace dandelion
@@ -81,7 +80,9 @@ bool PollCancelled(bool is_main_thread, nb::object& cancel_cb, std::unique_ptr<n
  */
 bool BackoffSleep(const HttpResult& r, int attempt, bool is_main_thread, nb::object& cancel_cb)
 {
-    double wait = (r.retry_after > 0 && r.retry_after <= 60) ? r.retry_after : std::min(0.5 * std::pow(2.0, attempt), 8.0);
+    int shift = std::min(std::max(attempt, 0), 10);
+    double exp_wait = 0.5 * static_cast<double>(1u << shift);
+    double wait = (r.retry_after > 0 && r.retry_after <= 60) ? r.retry_after : std::min(exp_wait, 8.0);
     auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<long long>(wait * 1000));
     while (std::chrono::steady_clock::now() < until)
     {
@@ -158,11 +159,10 @@ std::unique_ptr<Codec> MakeCodec(const std::string& sdk_type, const ProviderConf
 }
 
 /**
- * @brief Convert string or list message content into a list of canonical content blocks.
+ * @brief Append non-empty canonical blocks extracted from content directly onto target list.
  */
-nb::list AsBlocks(nb::handle content)
+void AppendBlocks(nb::list& target, nb::handle content)
 {
-    nb::list out;
     if (IsStr(content))
     {
         std::string text = TextOf(content);
@@ -170,18 +170,21 @@ nb::list AsBlocks(nb::handle content)
         {
             nb::dict block;
             block["type"] = "text";
-            block["text"] = content;
-            out.append(block);
+            block["text"] = SafeUtf8Str(text);
+            target.append(block);
         }
     }
     else if (IsList(content))
     {
         for (nb::handle item : content)
         {
-            out.append(item);
+            if (IsDict(item) && TextOf(Field(item, "type")) == "text" && TextOf(Field(item, "text")).empty() && Field(item, "thought_signature").is_none())
+            {
+                continue;
+            }
+            target.append(item);
         }
     }
-    return out;
 }
 
 /**
@@ -223,6 +226,21 @@ bool LooksLikeJsonBody(const std::string& raw, const std::string& content_type)
     return !trimmed.empty() && (trimmed.front() == '{' || trimmed.front() == '[');
 }
 
+/**
+ * @brief Format a Python exception as a guaranteed non-empty diagnostic string.
+ */
+std::string FormatPythonError(const nb::python_error& e)
+{
+    std::string msg = TextOf(e.value());
+    if (!msg.empty())
+    {
+        return msg;
+    }
+    nb::object type_name = nb::getattr(e.type(), "__name__", nb::str("PythonError"));
+    std::string name = TextOf(type_name);
+    return name.empty() ? std::string("PythonError") : name;
+}
+
 } // namespace
 
 Provider::Provider(const std::string& sdk_type,
@@ -236,7 +254,7 @@ Provider::Provider(const std::string& sdk_type,
     std::string clean_key = Trim(api_key);
     if (HasHeaderControlChars(clean_key))
     {
-        throw nb::value_error("API key must not contain CR, LF, or NUL control characters.");
+        throw nb::value_error("API key must not contain CR, LF, NUL, or control characters.");
     }
     ProviderConfig cfg{clean_key, Trim(base_url), Trim(model_id), Lower(Trim(thinking)), Lower(Trim(effort)), Trim(compat)};
     m_codec = MakeCodec(sdk_type, cfg);
@@ -244,7 +262,7 @@ Provider::Provider(const std::string& sdk_type,
 
 nb::tuple Provider::SafeRequest(nb::dict payload, nb::object logger, const std::string& log_tag, nb::object cancelled)
 {
-    return Run(payload, logger, log_tag, m_codec->ForceStream(payload), false, cancelled);
+    return Run(payload, logger, log_tag, false, false, cancelled);
 }
 
 nb::tuple Provider::SafeStreamRequest(nb::dict payload, nb::object logger, const std::string& log_tag, bool echo, nb::object cancelled)
@@ -252,7 +270,7 @@ nb::tuple Provider::SafeStreamRequest(nb::dict payload, nb::object logger, const
     return Run(payload, logger, log_tag, true, echo, cancelled);
 }
 
-nb::tuple Provider::Run(nb::dict payload, nb::object logger, const std::string& log_tag, bool stream, bool echo, nb::object cancelled)
+nb::tuple Provider::Run(nb::dict payload, nb::object logger, const std::string& log_tag, bool force_stream, bool echo, nb::object cancelled)
 {
     bool echo_open = false;
     std::unique_ptr<StreamDecoder> dec;
@@ -279,6 +297,7 @@ nb::tuple Provider::Run(nb::dict payload, nb::object logger, const std::string& 
             return cancelled_failure();
         }
 
+        const bool stream = force_stream || m_codec->ForceStream(payload);
         Built built = m_codec->Build(payload, stream);
         if (!logger.is_none() && !log_tag.empty())
         {
@@ -302,6 +321,7 @@ nb::tuple Provider::Run(nb::dict payload, nb::object logger, const std::string& 
             dec = stream ? m_codec->Decoder(echo) : nullptr;
             SseParser sse;
             std::unique_ptr<nb::python_error> py_error;
+            bool has_decode_error = false;
             std::string decode_error;
             bool user_cancelled = false;
 
@@ -338,7 +358,9 @@ nb::tuple Provider::Run(nb::dict payload, nb::object logger, const std::string& 
                     }
                     catch (const std::exception& e)
                     {
-                        decode_error = e.what();
+                        has_decode_error = true;
+                        const char* what = e.what();
+                        decode_error = (what && *what) ? what : "Unknown stream decode error.";
                     }
                     return false;
                 };
@@ -358,9 +380,9 @@ nb::tuple Provider::Run(nb::dict payload, nb::object logger, const std::string& 
             {
                 return cancelled_failure();
             }
-            if (!decode_error.empty())
+            if (has_decode_error)
             {
-                throw ProtocolError(decode_error);
+                throw ProtocolError(decode_error.empty() ? std::string("Unknown stream decode error.") : decode_error);
             }
             if (IsRetryable(res) && attempt < kMaxRetries)
             {
@@ -404,24 +426,29 @@ nb::tuple Provider::Run(nb::dict payload, nb::object logger, const std::string& 
         {
             throw;
         }
-        return failure(SafeUtf8Str(TextOf(e.value())));
+        return failure(SafeUtf8Str(FormatPythonError(e)));
     }
     catch (const std::exception& e)
     {
         SafeCloseEcho(echo_open);
-        return failure(SafeUtf8Str(e.what()));
+        const char* what = e.what();
+        return failure(SafeUtf8Str((what && *what) ? what : "Native provider error."));
     }
 }
 
 nb::object Provider::ExtractText(nb::object content) const
 {
+    if (content.is_none())
+    {
+        return nb::str("");
+    }
     if (IsStr(content))
     {
-        return content;
+        return SafeUtf8Str(TextOf(content));
     }
     if (!IsList(content))
     {
-        return nb::str(content);
+        return SafeUtf8Str(TextOf(content));
     }
     std::string out;
     bool first = true;
@@ -448,6 +475,10 @@ nb::list NormalizeMessages(nb::object messages)
     {
         return merged;
     }
+
+    nb::list prev_blocks;
+    bool prev_has_owned_list = false;
+
     for (nb::handle msg : messages)
     {
         size_t n = nb::len(merged);
@@ -456,18 +487,26 @@ nb::list NormalizeMessages(nb::object messages)
             nb::object prev = merged[n - 1];
             if (Field(prev, "role").equal(Field(msg, "role")))
             {
-                nb::object prev_content = Field(prev, "content");
-                nb::object next_content = Field(msg, "content");
-                nb::list joined = AsBlocks(prev_content);
-                for (nb::handle item : AsBlocks(next_content))
+                if (!prev_has_owned_list)
                 {
-                    joined.append(item);
+                    prev_blocks = nb::list();
+                    AppendBlocks(prev_blocks, Field(prev, "content"));
+                    prev_has_owned_list = true;
                 }
-                prev["content"] = joined;
+                AppendBlocks(prev_blocks, Field(msg, "content"));
+                if (nb::len(prev_blocks) > 0)
+                {
+                    prev["content"] = prev_blocks;
+                }
+                else
+                {
+                    prev["content"] = nb::str("");
+                }
                 continue;
             }
         }
         merged.append(CopyDict(msg));
+        prev_has_owned_list = false;
     }
     return merged;
 }

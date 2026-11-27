@@ -1,14 +1,18 @@
 ##
  # @file packages/dandelion-core/src/dandelion_core/agent/runner.py
- # @date 2026/10/27
+ # @date 2026/11/28
  #
  # @brief Shared main-agent turn runner.
  # Repeats complete agent steps until a response finishes, an API error occurs,
  # or the caller requests cancellation at a boundary before or after a step.
+ # Resumes seamlessly when a mid-stream RequestCancelledError is cleared by
+ # should_stop() (for example, CLI user selecting [C]ontinue).
  #
  # @note Host callbacks own any rollback policy. The runner only returns the
  # completion/error tuple and does not modify history or session files itself.
  #
+
+from ..utils.llm_provider.blocks import RequestCancelledError
 
 
 ##
@@ -30,6 +34,11 @@ def run_agent_loop(agent, should_stop=None):
         cont, err = agent.step()
         if should_stop():
             return False, None
+        # End-if
+        if isinstance(err, RequestCancelledError):
+            # Interrupt was cleared by should_stop() (e.g. CLI user chose [C]ontinue);
+            # resume the interrupted LLM step immediately instead of aborting.
+            continue
         # End-if
         if err is not None:
             return False, err

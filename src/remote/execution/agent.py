@@ -53,10 +53,11 @@ repair_interrupted_tools = BaseAgentHost.repair_interrupted_tools
  # @param jobs Background job manager used by remote delegation tools.
  # @param hub Optional ChannelHub for SendMessageTool.
  # @param backups Optional shared BackupStore for synced session overview.
+ # @param config_dir Optional operator config directory (.env) for SSH devices.yaml/known_hosts.
  #
  # @return Callable creating a core agent for one conversation.
  #
-def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None):
+def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None, config_dir=None):
     ##
      # @brief Build or restore one remote conversation agent.
      #
@@ -140,6 +141,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
             runtime=runtime,
             tool_factory=tools,
             prompt_builder_cls=prompt_factory,
+            config_dir=config_dir,
         )
         BaseAgentHost.repair_interrupted_tools(agent)
         return agent

@@ -31,13 +31,13 @@ NB_MODULE(_native, m)
              "api_key"_a, "base_url"_a, "model_id"_a, "thinking"_a = "disabled", "effort"_a = "medium", "compat"_a = "auto")
         .def("safe_request", &Provider::SafeRequest, "payload"_a, "logger"_a = nb::none(), "log_tag"_a = "", "cancelled"_a = nb::none())
         .def("safe_stream_request", &Provider::SafeStreamRequest, "payload"_a, "logger"_a = nb::none(), "log_tag"_a = "", "echo"_a = true, "cancelled"_a = nb::none())
-        .def("extract_text", &Provider::ExtractText, "content"_a)
+        .def("extract_text", &Provider::ExtractText, "content"_a.none())
         .def_prop_ro("model_id", &Provider::ModelId)
         .def_prop_ro("thinking", &Provider::Thinking)
         .def_prop_ro("effort", &Provider::Effort)
         .def_prop_ro("flavor", &Provider::Flavor)
         .def_prop_ro("protocol", &Provider::Protocol);
 
-    m.def("normalize_messages", &dandelion::NormalizeMessages, "messages"_a);
+    m.def("normalize_messages", &dandelion::NormalizeMessages, "messages"_a.none());
     m.def("set_fallback_ca_bundle", &dandelion::HttpSetFallbackCaBundle, "path"_a);
 }

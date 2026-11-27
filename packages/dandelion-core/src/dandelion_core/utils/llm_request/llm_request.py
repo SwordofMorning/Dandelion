@@ -18,7 +18,7 @@ import threading
 
 from ...runtime import Runtime
 from ..llm_provider import create_provider, normalize_messages
-from ..llm_provider.blocks import RequestCancelledError
+from ..llm_provider.blocks import PartialStreamError, RequestCancelledError
 from ..llm_provider.effort import FLAVOR_AUTO
 from .model_registry import ModelRegistry
 
@@ -122,11 +122,10 @@ class SafeLLMClient:
      # @return Shallow-copied payload with normalized messages list.
      #
     def _with_normalized_messages(self, payload):
-        if not payload.get("messages"):
-            return payload
-        # End-if
         out = dict(payload)
-        out["messages"] = normalize_messages(payload["messages"])
+        if out.get("messages"):
+            out["messages"] = normalize_messages(out["messages"])
+        # End-if
         return out
     # End-def
 
@@ -296,7 +295,11 @@ class SafeLLMClient:
             if isinstance(err, RequestCancelledError):
                 return None, err
             # End-if
-            return None, f"SubAgent model '{spec.alias}' ({spec.model_id}) failed: {err}"
+            msg = f"SubAgent model '{spec.alias}' ({spec.model_id}) failed: {err}"
+            if isinstance(err, PartialStreamError):
+                return None, PartialStreamError(msg)
+            # End-if
+            return None, msg
         # End-if
         return resp, None
     # End-def

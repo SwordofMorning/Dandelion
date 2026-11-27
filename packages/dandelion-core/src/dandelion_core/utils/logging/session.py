@@ -228,6 +228,47 @@ class SessionManager:
     # End-def
 
     ##
+     # @brief Load task_state.json for the active session.
+     #
+     # @return Parsed task-state dictionary, or None when absent or unreadable.
+     #
+    def load_task_state(self):
+        state_file = self.get_task_state_file()
+        if not state_file or not os.path.exists(state_file):
+            return None
+        # End-if
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+            # End-with
+        except Exception as e:
+            print(f"[-] Warning: Failed to parse task state at {state_file}: {e}")
+            return None
+        # End-try
+    # End-def
+
+    ##
+     # @brief Atomically persist task_state.json for the active session.
+     #
+     # @param state Dictionary serialized into task_state.json.
+     #
+     # @return True on success, False when no active session exists.
+     #
+    def save_task_state(self, state):
+        state_file = self.get_task_state_file()
+        if not state_file:
+            return False
+        # End-if
+        self._ensure_session_layout(self.current_session_dir)
+        tmp_path = state_file + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        # End-with
+        os.replace(tmp_path, state_file)
+        return True
+    # End-def
+
+    ##
      # ========================================
      # @section III. Session Control
      # ========================================

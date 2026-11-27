@@ -862,7 +862,7 @@ class GoogleDriveTool(BaseTool):
      #
      # @return (success_bool, json_or_error_string) tuple.
      #
-    def execute(self, action, remote_path="", local_path="", as_google_doc=False):
+    def execute(self, action, remote_path="", local_path="", as_google_doc=False, **kwargs):
         try:
             client = self._client()
             if action == "backup":
