@@ -13,7 +13,6 @@ env/
 .log/
 .remote/
 workspace/
-.playfround/
 .playground_parsed/
 *.zip
 *.log
@@ -33,7 +32,17 @@ llm/memory/
 # Agent Playground
 .playground/
 
+# User runtime drop-in tools (keep src/tool/ tracked)
+/tool/
+
 # Build artifacts
 build/
+dist/
+dist-wheels/
+dist-sdist/
+upload_stage/
+*.egg-info/
 .nuitka-cache/
+.wheel-deps-cache/
+.uv-python/
 mk/lib/build_info.py

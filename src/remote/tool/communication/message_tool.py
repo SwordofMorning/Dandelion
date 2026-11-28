@@ -9,13 +9,15 @@
  #
 
 import json
-from src.core.tool.base_tool import BaseTool
+from dandelion_core.tool.base_tool import BaseTool
 
 
 ##
  # @brief Tool enabling Dandelion Remote to send messages to the user on demand.
  #
 class SendMessageTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Bind the communication tool to a conversation session and channel hub.
      #
@@ -89,7 +91,7 @@ class SendMessageTool(BaseTool):
      #
      # @return (success_bool, status_json_string) tuple.
      #
-    def execute(self, text="", session_id="", notify=True):
+    def execute(self, text="", session_id="", notify=True, **kwargs):
         body = str(text or "").strip()
         if not body:
             return False, "Error: 'text' must be non-empty."

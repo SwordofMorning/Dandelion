@@ -1,0 +1,68 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.2"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "dandelion-core"
+version = "0.1.0"
+description = "Dandelion reusable agent core with native C++17 multi-protocol LLM provider."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C++",
+]
+dependencies = [
+    "certifi>=2024.2.2",
+    "pyyaml>=6.0,<7.0",
+    "requests>=2.31.0,<3.0.0",
+    "paramiko>=3.4.0,<4.0.0",
+    "openpyxl>=3.0.0,<4.0.0",
+    "tabulate>=0.9.0,<1.0.0",
+    "tzdata>=2024.1; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+wheel.packages = ["src/dandelion_core"]
+wheel.exclude = ["**/native/**", "**/*.cpp", "**/*.hpp", "**/*.h"]
+wheel.py-api = "cp312"
+sdist.include = [
+    "CMakeLists.txt",
+    "README.md",
+    "src/dandelion_core/utils/llm_provider/native/*.cpp",
+    "src/dandelion_core/utils/llm_provider/native/*.hpp",
+]
+cmake.build-type = "Release"
+editable.rebuild = false
+editable.verbose = false
+build-dir = "build/{wheel_tag}"
+
+# ------------------------------------------------------------------
+# cibuildwheel: Ubuntu 18.04-26.04 (glibc >= 2.17) + Windows x64
+# Produces cp311-cp311 + cp312-abi3 wheels per platform.
+# ------------------------------------------------------------------
+[tool.cibuildwheel]
+build = ["cp311-*", "cp312-*"]
+skip = ["*-musllinux_*", "*-win32", "*-manylinux_i686", "*t-*"]
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
+build-verbosity = 1
+test-command = "python -c \"import dandelion_core.utils.llm_provider as lp; assert lp.create_provider('Message', 'k', '', 'claude').protocol == 'anthropic'; assert lp.create_provider('Chat Completions', 'k', '', 'gpt-5').protocol == 'openai'; assert lp.create_provider('Responses', 'k', '', 'gpt-5').protocol == 'responses'; assert lp.create_provider('Generate Content', 'k', '', 'gemini-4-neon').protocol == 'gemini'; assert lp.create_provider('Interactions', 'k', '', 'gemini-4-neon').protocol == 'interactions'\""
+
+[tool.cibuildwheel.linux]
+before-all = "if [ -f /repo/mk/scripts/build_curl_static.sh ]; then bash /repo/mk/scripts/build_curl_static.sh; elif [ -f {project}/../../mk/scripts/build_curl_static.sh ]; then bash {project}/../../mk/scripts/build_curl_static.sh; else echo 'ERROR: build_curl_static.sh not found' >&2; exit 1; fi"
+environment = { DANDELION_STATIC_PREFIX = "/opt/dandelion-deps" }
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]

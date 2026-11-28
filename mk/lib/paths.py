@@ -33,11 +33,26 @@ import sys
  # for stdlib top-level names from <fallback>/<pkg>/... on disk.
  #
 class StdlibFallbackFinder:
+    ##
+     # @brief Initialize finder with fallback root and stdlib module names.
+     #
+     # @param root Filesystem root of the fallback stdlib directory.
+     # @param names Optional iterable of top-level stdlib module names.
+     #
     def __init__(self, root, names=None):
         self.root = root
         self.names = frozenset(sys.stdlib_module_names if names is None else names)
     # End-def
 
+    ##
+     # @brief Locate a submodule spec inside the stdlib fallback directory.
+     #
+     # @param fullname Dotted module name to locate.
+     # @param path Optional parent search path.
+     # @param target Optional reload target module.
+     #
+     # @return ModuleSpec if found under the fallback root, else None.
+     #
     def find_spec(self, fullname, path=None, target=None):
         if "." not in fullname or fullname.partition(".")[0] not in self.names:
             return None
@@ -147,4 +162,151 @@ def config_path():
  #
 def remote_config_path():
     return os.path.join(config_dir(), "remote.cfg")
+# End-def
+
+
+##
+ # @brief Resolve symlinks in existing ancestor components while preserving non-existent leaves.
+ #
+ # @param path Target filesystem path (may not exist yet).
+ #
+ # @return Canonical absolute path string.
+ #
+def _resolve_stable_path(path):
+    abs_path = os.path.abspath(str(path))
+    tail = []
+    curr = abs_path
+    while not os.path.exists(curr):
+        parent, name = os.path.split(curr)
+        if parent == curr:
+            break
+        # End-if
+        if name:
+            tail.append(name)
+        # End-if
+        curr = parent
+    # End-while
+    resolved = os.path.realpath(curr)
+    if tail:
+        resolved = os.path.abspath(os.path.join(resolved, *reversed(tail)))
+    # End-if
+    return resolved
+# End-def
+
+
+##
+ # @brief Normalize extra operator-configured tool directories anchored to root_dir/config_dir.
+ #
+ # Never resolves relative entries against os.getcwd(), preventing untrusted CWD execution.
+ #
+ # @param extra_dirs Optional iterable or comma/semicolon-separated string of extra dirs.
+ # @param root       Anchored root directory (base_dir() or explicit root_dir).
+ #
+ # @return List of resolved path strings.
+ #
+def _resolve_extra_tool_dirs(extra_dirs, root):
+    if not extra_dirs:
+        return []
+    # End-if
+    if isinstance(extra_dirs, (str, os.PathLike)):
+        raw_items = [p.strip() for p in str(extra_dirs).replace(";", ",").split(",") if p.strip()]
+    else:
+        raw_items = [str(p).strip() for p in extra_dirs if p is not None and str(p).strip()]
+    # End-if
+
+    cfg_root = os.path.join(root, ".env")
+    resolved = []
+    for raw in raw_items:
+        expanded = os.path.expanduser(raw)
+        if os.path.isabs(expanded):
+            candidate = expanded
+        else:
+            cfg_candidate = os.path.join(cfg_root, expanded)
+            root_candidate = os.path.join(root, expanded)
+            if os.path.isdir(cfg_candidate) and not os.path.isdir(root_candidate):
+                candidate = cfg_candidate
+            else:
+                candidate = root_candidate
+            # End-if
+        # End-if
+        resolved.append(_resolve_stable_path(candidate))
+    # End-for
+    return resolved
+# End-def
+
+
+##
+ # @brief Resolve deduplicated hot-plug tool scan directories anchored to root_dir/base_dir().
+ #
+ # Never scans os.getcwd(). Returns ordered precedence directories:
+ #   1. <root>/src/tool
+ #   2. <root>/src/<host>/tool (when host is non-empty)
+ #   3. <root>/tool
+ #   4. Resolved extra_dirs (optional operator config [Main] TOOL_DIRS)
+ #
+ # @param host       Host identifier ("cli" or "remote").
+ # @param extra_dirs Optional extra directories from config.
+ # @param root_dir   Optional explicit root directory (defaults to base_dir()).
+ #
+ # @return Deduplicated list of resolved tool directory paths.
+ #
+def tool_dirs(host="cli", extra_dirs=None, root_dir=None):
+    root = _resolve_stable_path(root_dir if root_dir is not None else base_dir())
+    host_name = str(host or "").strip()
+
+    candidates = [os.path.join(root, "src", "tool")]
+    if host_name:
+        candidates.append(os.path.join(root, "src", host_name, "tool"))
+    # End-if
+    candidates.append(os.path.join(root, "tool"))
+    candidates.extend(_resolve_extra_tool_dirs(extra_dirs, root))
+
+    seen = set()
+    result = []
+    for path in candidates:
+        canonical = _resolve_stable_path(path)
+        key = os.path.normcase(canonical)
+        if key not in seen:
+            seen.add(key)
+            result.append(canonical)
+        # End-if
+    # End-for
+    return result
+# End-def
+
+
+##
+ # @brief Resolve deduplicated sandbox-protected config and plugin directories.
+ #
+ # Always includes <root>/.env, <root>/tool, <root>/src/tool, <root>/src/cli/tool,
+ # <root>/src/remote/tool, plus any resolved extra_dirs, even when leaf directories
+ # do not yet exist on disk.
+ #
+ # @param extra_dirs Optional extra directories from config ([Main] TOOL_DIRS).
+ # @param root_dir   Optional explicit root directory (defaults to base_dir()).
+ #
+ # @return Deduplicated list of canonical protected directory paths.
+ #
+def protected_plugin_dirs(extra_dirs=None, root_dir=None):
+    root = _resolve_stable_path(root_dir if root_dir is not None else base_dir())
+    candidates = [
+        os.path.join(root, ".env"),
+        os.path.join(root, "tool"),
+        os.path.join(root, "src", "tool"),
+        os.path.join(root, "src", "cli", "tool"),
+        os.path.join(root, "src", "remote", "tool"),
+    ]
+    candidates.extend(_resolve_extra_tool_dirs(extra_dirs, root))
+
+    seen = set()
+    result = []
+    for path in candidates:
+        canonical = _resolve_stable_path(path)
+        key = os.path.normcase(canonical)
+        if key not in seen:
+            seen.add(key)
+            result.append(canonical)
+        # End-if
+    # End-for
+    return result
 # End-def

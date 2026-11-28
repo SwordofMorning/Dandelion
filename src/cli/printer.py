@@ -66,6 +66,7 @@ class CLIPrinter:
         # End-if
             
         builtins.print(f"{prefix}{msg}", end=end)
+    # End-def
 
     ##
      # @brief Print an informational message (cyan [*]).
@@ -137,23 +138,25 @@ class CLIPrinter:
         line = char * length
         if color:
             line = f"{color}{line}{CLIPrinter.C_RESET}"
+        # End-if
         CLIPrinter.raw(line)
     # End-def
 
     ##
      # @brief Print a formatted header with title centered between dividers.
-     # 
+     #
      # @param title The header title text.
      # @param char Divider character.
      # @param length Total width of the header.
      # @param color Optional color for the dividers.
-     # 
+     #
      # @return None.
      #
     @staticmethod
     def header(title: str, char: str = "=", length: int = 50, color: str = None) -> None:
         if color is None:
             color = CLIPrinter.C_CYAN
+        # End-if
         CLIPrinter.divider(char, length, color)
         # Center the title
         padding = (length - len(title)) // 2
@@ -205,3 +208,4 @@ if __name__ == "__main__":
     print()
     cli.divider("-", 40, cli.C_BLUE)
     cli.raw("End of demo")
+# End-if

@@ -19,7 +19,7 @@ import uuid
 from urllib.parse import quote
 
 import requests
-from src.core.tool.base_tool import BaseTool
+from dandelion_core.tool.base_tool import BaseTool
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 DOC_MIME = "application/vnd.google-apps.document"
@@ -180,6 +180,8 @@ class _GoogleDriveClient:
  # @brief Tool confining all Google Drive operations to the 'Dandelion Remote' folder.
  #
 class GoogleDriveTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Bind the tool to the server config, workspace and synced session store.
      #
@@ -862,7 +864,7 @@ class GoogleDriveTool(BaseTool):
      #
      # @return (success_bool, json_or_error_string) tuple.
      #
-    def execute(self, action, remote_path="", local_path="", as_google_doc=False):
+    def execute(self, action, remote_path="", local_path="", as_google_doc=False, **kwargs):
         try:
             client = self._client()
             if action == "backup":

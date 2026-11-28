@@ -4,32 +4,34 @@ on:
   push:
     branches:
       - "master"
+      - "main"
+    tags:
+      - "v*"
   pull_request:
     branches:
       - "master"
+      - "main"
 
 permissions:
   contents: read
 
 jobs:
-  # 1. ASCII Check Job: gate all PRs and pushes targeting master.
-  #    Master must stay ASCII-Only: any non-ASCII character found under
-  #    src/ fails this job and blocks the merge / push.
+  # 1. ASCII Check Job: gate all PRs, pushes (master/main), and release tags.
+  #    Repository source/script/workflow files must stay 100% ASCII-Only.
   ascii-check:
     name: ASCII-Only Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: ASCII-Only Check
         shell: bash
         run: |
-          # test/ascii_check.py prints findings in clang-format style
-          # (<path>:<line>:<col>: non-ASCII 'x' (U+XXXX)) and exits 1
-          # when any is found; a non-zero exit fails this job.
-          python3 test/ascii_check.py src/
+          # mk/make.py ascii invokes mk.lib.ascii_check across .py/.cpp/.hpp/.h/
+          # .ps1/.sh/.yml/.yaml/CMakeLists.txt and exits 1 on any non-ASCII char.
+          python3 mk/make.py ascii

@@ -1,19 +1,27 @@
 ##
  # @file mk/make.py
  # @date 2026/08/07
- # 
- # @brief Makefile-style build entry for Dandelion (Nuitka standalone).
- # Coordinates build metadata, standalone compilation, dependency copying,
- # launcher generation and artifact cleanup through configuration-driven targets.
  #
- # @note CLI artifacts include src.cli and src.core; src.remote is excluded.
+ # @brief Unified Makefile-style build and script entry for Dandelion.
+ # Coordinates Nuitka standalone builds, dandelion-core native C++ builds and
+ # wheels, ASCII-only policy checks, dependency copying, launcher generation,
+ # and artifact cleanup through configuration-driven targets.
+ #
+ # @note CLI standalone artifacts include src.cli and dandelion_core (with
+ #       package data); src.remote is excluded.
  #
  # @usage
- #   python mk/make.py            : full build (same as 'all')
- #   python mk/make.py clean      : remove runtime caches and build artifacts
+ #   python mk/make.py            : full standalone build (same as 'all')
  #   python mk/make.py all        : build standalone executable into build/
+ #   python mk/make.py dev        : local-first editable install of dandelion-core + root [dev]
+ #   python mk/make.py native     : build & install packages/dandelion-core editable
+ #   python mk/make.py wheel      : build precompiled dandelion-core wheel into dist/
+ #   python mk/make.py sdist      : build dandelion-core source distribution into dist/
+ #   python mk/make.py ascii      : run ASCII-only check on code, scripts, and workflows
+ #   python mk/make.py clean      : remove caches, build/, dist/, build_info, egg-info, stale dirs
  #   python mk/make.py version    : print project name and version
  #   python mk/make.py sign       : sign Windows executable (placeholder)
+ #   python mk/make.py help       : show this help
  #
 
 import configparser
@@ -21,6 +29,7 @@ import datetime
 import importlib.util
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -37,19 +46,38 @@ MK_DIR = os.path.dirname(os.path.abspath(__file__))
  #
 ROOT_DIR = os.path.dirname(MK_DIR)
 
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+# End-if
+
+##
+ # @brief Legacy directories under src/ removed by `clean` when empty.
+ #
+STALE_SRC_DIRS = (
+    os.path.join("src", "core"),
+    os.path.join("src", "subagent"),
+    os.path.join("src", "utils"),
+)
+
 ##
  # @brief Usage help text.
  #
-USAGE = """Usage: python mk/make.py [target]
+USAGE = """Usage: python mk/make.py [target] [args...]
 
 Targets:
-  (none)   : full build (same as 'all')
+  (none)   : full standalone build (same as 'all')
   all      : build standalone executable into build/
-  clean    : remove runtime caches and build artifacts
+  dev      : local-first editable install of dandelion-core + root [dev]
+  native   : build & install packages/dandelion-core native C++ extension
+  wheel    : build precompiled dandelion-core .whl into dist/
+  sdist    : build dandelion-core source distribution (.tar.gz) into dist/
+  ascii    : run ASCII-only check on src/, packages/dandelion-core/, mk/, .github/workflows/, main.py
+  clean    : remove caches, build/, dist/, build_info, egg-info, and empty legacy src/ dirs
   version  : print project name and version
   sign     : sign Windows executable (placeholder, P3)
   help     : show this help
 """
+
 
 ##
  # @brief Load mk/config/build.config (INI).
@@ -69,6 +97,7 @@ def _load_config():
     return cfg
 # End-def
 
+
 ##
  # @brief Load root pyproject.toml (TOML).
  #
@@ -79,6 +108,7 @@ def _load_pyproject():
         return tomllib.load(f)
     # End-with
 # End-def
+
 
 ##
  # @brief Get project name and version (single source of truth).
@@ -101,16 +131,99 @@ def _project_meta():
     return name, version
 # End-def
 
+
 ##
  # @brief Check Nuitka availability in the current interpreter.
  #
 def _check_nuitka():
     if importlib.util.find_spec("nuitka") is None:
         print("[-] Nuitka is not installed.")
-        print("    Install with: pip install -e \".[dev]\"")
+        print("    Install with: python mk/make.py dev  (or: pip install -e packages/dandelion-core -e \".[dev]\")")
         sys.exit(1)
     # End-if
 # End-def
+
+
+##
+ # @brief Verify installed dandelion-core originates from this repository (PEP 610 direct_url.json).
+ #
+ # Rejects accidental PyPI installations unless DANDELION_ALLOW_EXTERNAL_CORE=1 is set.
+ # Accepts editable installs from packages/dandelion-core or local wheels from dist-wheels/ / dist/.
+ #
+def _verify_local_core_installed():
+    if os.environ.get("DANDELION_ALLOW_EXTERNAL_CORE", "").strip() == "1":
+        print("[!] Warning: DANDELION_ALLOW_EXTERNAL_CORE=1 set; skipping local dandelion-core provenance check.")
+        return
+    # End-if
+
+    import importlib.metadata as imeta
+    import json
+    from urllib.parse import urlparse
+    from urllib.request import url2pathname
+
+    try:
+        dist = imeta.distribution("dandelion-core")
+    except imeta.PackageNotFoundError:
+        print("[-] FATAL: dandelion-core is not installed.")
+        print("    Fix with: python mk/make.py dev")
+        sys.exit(1)
+    # End-try
+
+    raw = dist.read_text("direct_url.json")
+    if not raw:
+        print("[-] FATAL: Installed dandelion-core came from PyPI (missing PEP 610 direct_url.json).")
+        print("    Local builds must use packages/dandelion-core, dist-wheels/, or dist/.")
+        print("    Fix with: python mk/make.py dev  (or set DANDELION_ALLOW_EXTERNAL_CORE=1 to override)")
+        sys.exit(1)
+    # End-if
+
+    try:
+        info = json.loads(raw)
+    except Exception as exc:
+        print("[-] FATAL: Invalid direct_url.json for dandelion-core: " + str(exc))
+        sys.exit(1)
+    # End-try
+
+    url = info.get("url", "") if isinstance(info, dict) else ""
+    parsed = urlparse(url)
+    if parsed.scheme != "file":
+        print("[-] FATAL: Installed dandelion-core is not a local file:// install (" + str(url) + ").")
+        sys.exit(1)
+    # End-if
+
+    path_part = parsed.path
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        path_part = "//" + parsed.netloc + path_part
+    # End-if
+    local_path = os.path.realpath(url2pathname(path_part))
+
+    allowed_roots = (
+        os.path.realpath(os.path.join(ROOT_DIR, "packages", "dandelion-core")),
+        os.path.realpath(os.path.join(ROOT_DIR, "dist-wheels")),
+        os.path.realpath(os.path.join(ROOT_DIR, "dist")),
+    )
+    if not any(local_path == r or local_path.startswith(r + os.sep) for r in allowed_roots):
+        print("[-] FATAL: Installed dandelion-core points outside this repository: " + local_path)
+        print("    Fix with: python mk/make.py dev  (or set DANDELION_ALLOW_EXTERNAL_CORE=1 to override)")
+        sys.exit(1)
+    # End-if
+
+    print("[+] Verified local dandelion-core (" + dist.version + "): " + local_path)
+# End-def
+
+
+##
+ # @brief Check whether local PEP 517 native build dependencies are installed.
+ #
+ # @return True when scikit-build-core and nanobind are both importable.
+ #
+def _has_local_core_build_deps():
+    return (
+        importlib.util.find_spec("scikit_build_core") is not None
+        and importlib.util.find_spec("nanobind") is not None
+    )
+# End-def
+
 
 ##
  # @brief Generate mk/lib/build_info.py with build metadata.
@@ -120,13 +233,11 @@ def _check_nuitka():
 def _gen_build_info(version):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Optional CI override: target distro (e.g. "18.04" from the Docker
-    # matrix). When set, PLATFORM becomes e.g. "linux-x86_64-ubuntu18.04"
-    # so users can identify which Ubuntu release an artifact was built for.
+    # Optional CI override: target baseline (e.g. "manylinux2014").
     target = os.environ.get("DANDELION_TARGET", "").strip()
-    plat = platform.system().lower()
+    plat = "%s-%s" % (platform.system().lower(), platform.machine())
     if target:
-        plat = "%s-%s-ubuntu%s" % (plat, platform.machine(), target)
+        plat = "%s-%s" % (plat, target)
     # End-if
 
     lines = [
@@ -150,6 +261,33 @@ def _gen_build_info(version):
     print("[+] Generated " + os.path.relpath(path, ROOT_DIR))
 # End-def
 
+
+##
+ # @brief Extract a numeric X.Y.Z(.W) version suitable for Windows PE resources.
+ #
+ # @param version Build version string (may include dev/pre-release suffix).
+ #
+ # @return Pure numeric version string (e.g. "1.6.0").
+ #
+def _extract_numeric_pe_version(version):
+    candidates = (
+        os.environ.get("DANDELION_PE_VERSION", "").strip(),
+        str(version or "").strip(),
+        str(_load_pyproject()["project"].get("version", "")).strip(),
+    )
+    for raw in candidates:
+        if not raw:
+            continue
+        # End-if
+        match = re.match(r"^v?(\d+\.\d+\.\d+(?:\.\d+)?)", raw)
+        if match:
+            return match.group(1)
+        # End-if
+    # End-for
+    return "0.1.0"
+# End-def
+
+
 ##
  # @brief Assemble and run the Nuitka standalone build.
  #
@@ -170,15 +308,19 @@ def _run_nuitka(cfg, name, version):
     extra_args = shlex.split(cfg.get("nuitka", "extra_args", fallback=""))
 
     # ----- @par CLI / Core package boundary -----
-    # @note Explicit selection keeps src.remote out of CLI artifacts.
+    # @note Explicit selection includes dandelion_core (with package data) and
+    #       keeps src.remote out of standalone CLI artifacts.
     cmd = [
         sys.executable, "-m", "nuitka",
         "--mode=standalone",
         "--output-dir=" + output_dir,
         "--output-filename=" + name,
         "--include-package=src.cli",
-        "--include-package=src.core",
+        "--include-package=dandelion_core",
+        "--include-package-data=dandelion_core",
         "--nofollow-import-to=src.remote",
+        "--nofollow-import-to=src.tool",
+        "--include-module=_bisect",
         "--include-module=mk.lib.paths",
         "--include-module=mk.lib.build_info",
         "--assume-yes-for-downloads",
@@ -222,9 +364,9 @@ def _run_nuitka(cfg, name, version):
             cmd.append("--file-description=" + description)
         # End-if
 
-        # PE version resources must stay numeric (x.y.z); use the static
-        # pyproject version, not the CI tag override (e.g. 0.0.0-dev-...).
-        pe_version = _load_pyproject()["project"]["version"]
+        # PE version resources must stay purely numeric (x.y.z[.w]); extract
+        # the numeric base from DANDELION_PE_VERSION / tag / pyproject.toml.
+        pe_version = _extract_numeric_pe_version(version)
 
         cmd += [
             "--product-name=" + name,
@@ -258,11 +400,12 @@ def _run_nuitka(cfg, name, version):
     # End-if
 # End-def
 
+
 ##
  # @brief Copy a single python package/module and its dist-info metadata.
  #
- # @param import_name Top-level import name (e.g. 'pydantic_core').
- # @param dist_name   Canonical distribution name (e.g. 'pydantic-core').
+ # @param import_name Top-level import name (e.g. 'requests').
+ # @param dist_name   Canonical distribution name (e.g. 'requests').
  # @param dst_dir     Destination directory (bin/).
  # @param copied      Set of already-copied import names (dedup).
  #
@@ -279,7 +422,6 @@ def _copy_package(import_name, dist_name, dst_dir, copied):
     if spec.submodule_search_locations:
         src_dir = spec.submodule_search_locations[0]
         dst = os.path.join(dst_dir, import_name)
-        # Ignore raw pyc caches to keep size small, Python will re-generate them at runtime if needed
         shutil.copytree(src_dir, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
     elif spec.origin:
         dst = os.path.join(dst_dir, os.path.basename(spec.origin))
@@ -295,12 +437,7 @@ def _copy_package(import_name, dist_name, dst_dir, copied):
     try:
         import importlib.metadata as imeta
         dist = imeta.distribution(dist_name)
-        # Public API: distribution root (site-packages dir).
         root = str(dist.locate_file(""))
-        # Keep the installed dir name as-is. Renaming to a hyphen-canonical
-        # form breaks runtime lookups: path-derived name matching splits on
-        # '-' (e.g. charset-normalizer -> "charset"), so we locate the actual
-        # *.dist-info dir and copy it under its own name.
         name = dist.metadata["Name"].replace("_", "-").lower()
         version = dist.version
         for entry in sorted(os.listdir(root)):
@@ -317,20 +454,24 @@ def _copy_package(import_name, dist_name, dst_dir, copied):
             # End-if
             dst_info = os.path.join(dst_dir, entry)
             if not os.path.exists(dst_info):
-                shutil.copytree(os.path.join(root, entry), dst_info,
-                                ignore=shutil.ignore_patterns("__pycache__"))
+                shutil.copytree(
+                    os.path.join(root, entry),
+                    dst_info,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
             # End-if
             break
         # End-for
-    except Exception as e:
-        print("  [-] Warning: failed to copy .dist-info for " + dist_name + ": " + str(e))
+    except Exception as exc:
+        print("  [-] Warning: failed to copy .dist-info for " + dist_name + ": " + str(exc))
     # End-try
 # End-def
+
 
 ##
  # @brief Recursively copy a dependency closure from the current python env.
  #
- # @param roots   Root import names (e.g. 'anthropic', 'google').
+ # @param roots   Root import names (e.g. 'openpyxl', 'requests').
  # @param dst_dir Destination directory (bin/).
  #
 def _copy_dependency_closure(roots, dst_dir):
@@ -387,7 +528,7 @@ def _copy_dependency_closure(roots, dst_dir):
         for imp in imps:
             _copy_package(imp, dist, dst_dir, copied)
         # End-for
-    # End-for
+    # End-while
 
     # Fallback: ensure the roots themselves were copied (e.g. single modules).
     for imp in roots:
@@ -397,113 +538,87 @@ def _copy_dependency_closure(roots, dst_dir):
     # End-for
 # End-def
 
+
 ##
- # @brief Copy stdlib modules imported by the bypassed packages into a
- #   dedicated fallback directory (bin/_stdlib_fallback).
+ # @brief Bundle the lean pure-Python standard library into bin/_stdlib_fallback.
  #
- # Bypassed packages are not analyzed by Nuitka, so stdlib modules they
- # import (e.g. zoneinfo) may be missing from the artifact. Scan the copied
- # sources and copy the needed stdlib modules as an on-disk fallback.
- # Iterates to fixpoint so transitive stdlib imports (e.g. ssl -> _ssl)
- # are covered as well.
- #
- # The fallback dir is appended to sys.path LAST at runtime (see the module
- # level block in mk/lib/paths.py), so these plain-source copies never shadow
- # Nuitka-compiled modules. Parsing is incremental: each .py file is
- # ast-parsed at most once.
+ # Ensures both bypassed packages and post-build hot-plugged tools (e.g. imaplib,
+ # smtplib, poplib, ftplib, email.*, tomllib) work without rebuilding Nuitka,
+ # while excluding tests, GUI/tooling bloat, site-packages, and host binaries.
  #
  # @param bin_dir Destination directory (bin/).
  #
 def _copy_stdlib_fallback(bin_dir):
-    import ast
-    import sys as _sys
+    import sysconfig
 
-    stdlib_names = set(_sys.stdlib_module_names)
+    stdlib_dir = sysconfig.get_path("stdlib")
+    if not stdlib_dir or not os.path.isdir(stdlib_dir):
+        print("  [-] Warning: stdlib directory not found: " + str(stdlib_dir))
+        return
+    # End-if
+
     fallback_dir = os.path.join(bin_dir, "_stdlib_fallback")
     os.makedirs(fallback_dir, exist_ok=True)
 
-    copied = set()
-    scanned_files = set()
-    changed = True
-    rounds = 0
+    excluded_dirs = {
+        "test",
+        "tests",
+        "tkinter",
+        "idlelib",
+        "turtledemo",
+        "ensurepip",
+        "venv",
+        "lib2to3",
+        "pydoc_data",
+        "site-packages",
+        "dist-packages",
+        "lib-dynload",
+        "__pycache__",
+        "plat-linux",
+        "tools",
+    }
+    excluded_exts = (".so", ".pyd", ".dll", ".dylib", ".a", ".pyc", ".pyo", ".exe", ".lib")
 
-    while changed and rounds < 10:
-        changed = False
-        rounds += 1
-        found = set()
-
-        # Collect stdlib top-level imports from copied .py sources.
-        # Incremental: parse each file at most once; newly copied fallback
-        # files are discovered by the next round (transitive dependencies).
-        for dirpath, dirnames, filenames in os.walk(bin_dir):
-            if "__pycache__" in dirnames:
-                dirnames.remove("__pycache__")
+    copied_files = 0
+    for dirpath, dirnames, filenames in os.walk(stdlib_dir):
+        rel_dir = os.path.relpath(dirpath, stdlib_dir)
+        is_top = rel_dir == "."
+        filtered = []
+        for d in sorted(dirnames):
+            if d in excluded_dirs:
+                continue
             # End-if
-            for fn in filenames:
-                if not fn.endswith(".py"):
-                    continue
-                # End-if
-                path = os.path.join(dirpath, fn)
-                if path in scanned_files:
-                    continue
-                # End-if
-                scanned_files.add(path)
-                try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        tree = ast.parse(f.read())
-                    # End-with
-                except Exception:
-                    continue
-                # End-try
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            top = alias.name.split(".")[0]
-                            if top in stdlib_names:
-                                found.add(top)
-                            # End-if
-                        # End-for
-                    elif isinstance(node, ast.ImportFrom) and node.module:
-                        top = node.module.split(".")[0]
-                        if top in stdlib_names:
-                            found.add(top)
-                        # End-if
-                    # End-if
-                # End-for
-            # End-for
+            if d.startswith("config-") or d.startswith("."):
+                continue
+            # End-if
+            if is_top and d.lower() in ("site-packages", "dist-packages", "lib-dynload"):
+                continue
+            # End-if
+            filtered.append(d)
         # End-for
+        dirnames[:] = filtered
 
-        # Copy newly discovered stdlib modules into the fallback dir.
-        for mod in sorted(found):
-            if mod in copied:
+        for fn in sorted(filenames):
+            if not fn.endswith(".py"):
                 continue
             # End-if
-            spec = importlib.util.find_spec(mod)
-            if spec is None:
+            if fn.endswith(excluded_exts):
                 continue
             # End-if
-            if spec.submodule_search_locations:
-                src = spec.submodule_search_locations[0]
-                dst = os.path.join(fallback_dir, mod)
-                shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
-            elif spec.origin and spec.origin not in ("built-in", "frozen"):
-                dst = os.path.join(fallback_dir, os.path.basename(spec.origin))
-                if os.path.exists(dst):
-                    copied.add(mod)
-                    continue
-                # End-if
-                shutil.copy2(spec.origin, dst)
-            else:
+            src_path = os.path.join(dirpath, fn)
+            if os.path.islink(src_path) and not os.path.isfile(src_path):
                 continue
             # End-if
-            copied.add(mod)
-            changed = True
-            print("  [+] Stdlib fallback: " + mod)
+            dst_dir = fallback_dir if is_top else os.path.join(fallback_dir, rel_dir)
+            os.makedirs(dst_dir, exist_ok=True)
+            shutil.copy2(src_path, os.path.join(dst_dir, fn))
+            copied_files += 1
         # End-for
-    # End-while
+    # End-for
 
-    print("  [+] Stdlib fallbacks in: " + fallback_dir)
+    print("  [+] Bundled " + str(copied_files) + " pure-Python stdlib files into: " + fallback_dir)
 # End-def
+
 
 ##
  # @brief Strip unneeded symbols from ELF binaries and shared objects (Linux).
@@ -540,6 +655,7 @@ def _strip_binaries(bin_dir):
     print("  [+] Stripped " + str(stripped) + " ELF binaries/shared objects.")
 # End-def
 
+
 ##
  # @brief Post-process Nuitka output into build/<name>/ layout.
  #
@@ -552,11 +668,8 @@ def _postprocess(cfg, name, version):
     entry = os.path.join(ROOT_DIR, cfg.get("build", "entry", fallback="main.py"))
     entry_base = os.path.splitext(os.path.basename(entry))[0]
 
-    # Nuitka names the dist folder after the entry script (e.g. main.dist),
-    # while --output-filename only controls the executable name inside it.
     dist_dir = os.path.join(output_dir, entry_base + ".dist")
     if not os.path.isdir(dist_dir):
-        # Fallback: scan for a single *.dist folder in the output dir.
         if os.path.isdir(output_dir):
             candidates = [
                 d for d in os.listdir(output_dir)
@@ -576,18 +689,16 @@ def _postprocess(cfg, name, version):
         sys.exit(1)
     # End-if
 
-    # Rename <entry>.dist -> <name>/bin (C-style output layout).
     target_dir = os.path.join(output_dir, name)
     if os.path.isdir(target_dir):
         shutil.rmtree(target_dir)
     # End-if
     os.makedirs(target_dir)
-    
-    # Move the entire dist directory into the bin/ subfolder
+
     bin_dir = os.path.join(target_dir, "bin")
     os.rename(dist_dir, bin_dir)
 
-    # ----- @par 1. Copy bypassed heavy packages (recursive dependency closure) -----
+    # ----- @par 1. Copy bypassed packages (recursive dependency closure) -----
     copy_pkgs_str = cfg.get("nuitka", "copy_packages", fallback="")
     if copy_pkgs_str:
         roots = [p.strip() for p in copy_pkgs_str.split(",") if p.strip()]
@@ -603,40 +714,89 @@ def _postprocess(cfg, name, version):
 
     # ----- @par 2. Create required workspace directories -----
     print("[*] Creating workspace layout...")
-    workspace_dirs = [".env", "llm/memory", "llm/skill", "llm/sysprompt", ".log"]
+    workspace_dirs = [".env", "llm/memory", "llm/skill", "llm/sysprompt", "tool", ".log"]
     for d in workspace_dirs:
         d_path = os.path.join(target_dir, d.replace("/", os.sep))
         os.makedirs(d_path, exist_ok=True)
-        # Create a tiny .keep file so Git or ZIP archives preserve the empty folders
-        with open(os.path.join(d_path, ".keep"), "w") as f:
+        with open(os.path.join(d_path, ".keep"), "w", encoding="ascii") as f:
             f.write("")
         # End-with
     # End-for
-    print("  [+] Created directories: .env, llm, .log")
+    print("  [+] Created directories: .env, llm, tool, .log")
+
+    # Copy any drop-in plugin modules/packages from src/tool/ and src/cli/tool/
+    # into <target_dir>/tool/ while skipping bare __init__.py markers.
+    dst_tool_dir = os.path.join(target_dir, "tool")
+    copied_plugins = 0
+    for rel_tool_src in (os.path.join("src", "tool"), os.path.join("src", "cli", "tool")):
+        src_tool_dir = os.path.join(ROOT_DIR, rel_tool_src)
+        if not os.path.isdir(src_tool_dir):
+            continue
+        # End-if
+        for entry_name in sorted(os.listdir(src_tool_dir)):
+            if entry_name.startswith(".") or entry_name == "__pycache__":
+                continue
+            # End-if
+            src_item = os.path.join(src_tool_dir, entry_name)
+            dst_item = os.path.join(dst_tool_dir, entry_name)
+            if os.path.isfile(src_item):
+                if entry_name == "__init__.py" or not entry_name.endswith(".py"):
+                    continue
+                # End-if
+                shutil.copy2(src_item, dst_item)
+                copied_plugins += 1
+                print("  [+] Copied tool plugin: " + os.path.join(rel_tool_src, entry_name))
+            elif os.path.isdir(src_item):
+                shutil.copytree(
+                    src_item,
+                    dst_item,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".*"),
+                )
+                copied_plugins += 1
+                print("  [+] Copied tool plugin package: " + os.path.join(rel_tool_src, entry_name) + "/")
+            # End-if
+        # End-for
+    # End-for
+    if copied_plugins:
+        keep = os.path.join(dst_tool_dir, ".keep")
+        if os.path.exists(keep):
+            os.remove(keep)
+        # End-if
+    # End-if
 
     # Copy bundled subdirectories under llm/ (e.g. skill/, sysprompt/) into the
     # artifact while keeping runtime llm/memory/ empty.
     src_llm_dir = os.path.join(ROOT_DIR, "llm")
     dst_llm_dir = os.path.join(target_dir, "llm")
     if os.path.isdir(src_llm_dir):
-        for entry in sorted(os.listdir(src_llm_dir)):
-            if entry == "memory" or entry.startswith("."):
+        for entry_name in sorted(os.listdir(src_llm_dir)):
+            if entry_name == "memory" or entry_name.startswith("."):
                 continue
             # End-if
-            src_sub = os.path.join(src_llm_dir, entry)
-            dst_sub = os.path.join(dst_llm_dir, entry)
+            src_sub = os.path.join(src_llm_dir, entry_name)
+            dst_sub = os.path.join(dst_llm_dir, entry_name)
             if os.path.isdir(src_sub):
-                shutil.copytree(src_sub, dst_sub, dirs_exist_ok=True,
-                                ignore=shutil.ignore_patterns("__pycache__", ".*"))
+                ignore_patterns = ["__pycache__", ".*"]
+                if entry_name == "sysprompt":
+                    # CLI standalone excludes src.remote; omit Remote-only prompt template.
+                    ignore_patterns.append("remote.md")
+                # End-if
+                shutil.copytree(
+                    src_sub,
+                    dst_sub,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns(*ignore_patterns),
+                )
                 keep = os.path.join(dst_sub, ".keep")
                 if os.path.exists(keep) and len(os.listdir(dst_sub)) > 1:
                     os.remove(keep)
                 # End-if
-                print("  [+] Copied: llm/" + entry + "/")
+                print("  [+] Copied: llm/" + entry_name + "/")
             elif os.path.isfile(src_sub):
                 os.makedirs(dst_llm_dir, exist_ok=True)
-                shutil.copy2(src_sub, os.path.join(dst_llm_dir, entry))
-                print("  [+] Copied: llm/" + entry)
+                shutil.copy2(src_sub, os.path.join(dst_llm_dir, entry_name))
+                print("  [+] Copied: llm/" + entry_name)
             # End-if
         # End-for
     # End-if
@@ -664,13 +824,19 @@ def _postprocess(cfg, name, version):
         # End-with
         print("  [+] Created: " + entry_cmd)
     else:
-        # Wrapper script: exec the real binary from bin/ directly.
-        # Unlike a symlink, this avoids dual path resolution ($ORIGIN vs
-        # Nuitka module dir) which proved unreliable on Linux.
         entry_sh = os.path.join(target_dir, "dandelion.sh")
         content = (
             "#!/bin/sh\n"
-            "SCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+            "SOURCE=\"$0\"\n"
+            "while [ -L \"$SOURCE\" ]; do\n"
+            "    DIR=$(CDPATH= cd -- \"$(dirname -- \"$SOURCE\")\" && pwd)\n"
+            "    TARGET=$(readlink \"$SOURCE\")\n"
+            "    case \"$TARGET\" in\n"
+            "        /*) SOURCE=\"$TARGET\" ;;\n"
+            "        *)  SOURCE=\"$DIR/$TARGET\" ;;\n"
+            "    esac\n"
+            "done\n"
+            "SCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$SOURCE\")\" && pwd)\n"
             "exec \"$SCRIPT_DIR/bin/" + name + "\" \"$@\"\n"
         )
         with open(entry_sh, "w", encoding="ascii", newline="\n") as f:
@@ -679,19 +845,17 @@ def _postprocess(cfg, name, version):
         os.chmod(entry_sh, 0o755)
         print("  [+] Created: " + entry_sh)
 
-        # Strip debug symbols from ELF binaries and shared objects before RPATH fix.
         _strip_binaries(bin_dir)
 
-        # Force DT_RPATH (instead of DT_RUNPATH) so the bundled libs in bin/
-        # (libpython etc.) are searched BEFORE LD_LIBRARY_PATH. Without this,
-        # a foreign libpython from the environment can be loaded and crash
-        # the binary (SystemError in codeobject).
+        # Force DT_RPATH (instead of DT_RUNPATH) so bundled libs in bin/
+        # (libpython etc.) are searched BEFORE LD_LIBRARY_PATH.
         patchelf = shutil.which("patchelf")
         if patchelf:
             exe_path = os.path.join(bin_dir, name)
             result = subprocess.run(
                 [patchelf, "--force-rpath", "--set-rpath", "$ORIGIN", exe_path],
-                capture_output=True, text=True
+                capture_output=True,
+                text=True,
             )
             if result.returncode == 0:
                 print("  [+] RPATH forced on " + exe_path + ": $ORIGIN (before LD_LIBRARY_PATH)")
@@ -706,16 +870,14 @@ def _postprocess(cfg, name, version):
     # Write version file.
     with open(os.path.join(target_dir, "version.txt"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
-        # Optional CI override: record the target distro the artifact was
-        # built for (e.g. "target=ubuntu18.04" from the Docker matrix).
         target = os.environ.get("DANDELION_TARGET", "").strip()
         if target:
-            f.write("target=ubuntu" + target + "\n")
+            f.write("target=" + target + "\n")
         # End-if
     # End-with
 
     # ----- @par 4. Strip pyc caches from the artifact -----
-    for dirpath, dirnames, filenames in os.walk(target_dir):
+    for dirpath, dirnames, _filenames in os.walk(target_dir):
         if "__pycache__" in dirnames:
             shutil.rmtree(os.path.join(dirpath, "__pycache__"), ignore_errors=True)
         # End-if
@@ -727,10 +889,38 @@ def _postprocess(cfg, name, version):
     print("[+] Nuitka intermediate kept at: " + os.path.join(output_dir, entry_base + ".build"))
 # End-def
 
+
+##
+ # @brief Recursively remove empty directories under root (bottom-up).
+ #
+ # @param root Directory path to prune if empty.
+ #
+ # @return Count of removed directories.
+ #
+def _remove_empty_dirs(root):
+    if not os.path.isdir(root):
+        return 0
+    # End-if
+    removed = 0
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+                removed += 1
+            # End-if
+        except OSError:
+            pass
+        # End-try
+    # End-for
+    return removed
+# End-def
+
+
 ##
  # @brief Target: build standalone executable (default).
  #
 def target_all():
+    _verify_local_core_installed()
     name, version = _project_meta()
     cfg = _load_config()
 
@@ -746,21 +936,171 @@ def target_all():
     _postprocess(cfg, name, version)
 # End-def
 
+
 ##
- # @brief Target: remove bytecode caches and build artifacts.
+ # @brief Target: atomic local-first editable install of dandelion-core + root [dev].
+ #
+def target_dev():
+    cfg = _load_config()
+    core_rel = cfg.get("core", "package_dir", fallback=os.path.join("packages", "dandelion-core"))
+    core_dir = os.path.join(ROOT_DIR, core_rel)
+    if not os.path.isdir(core_dir):
+        print("[-] Core package directory not found: " + core_dir)
+        sys.exit(1)
+    # End-if
+
+    cmd = [sys.executable, "-m", "pip", "install"]
+    if _has_local_core_build_deps():
+        cmd.append("--no-build-isolation")
+    # End-if
+    cmd.extend(["-e", core_dir, "-e", ".[dev]"])
+
+    print("[*] Installing local dandelion-core + root dev dependencies (local-first)...")
+    print("[*] Executing: " + " ".join(cmd))
+    result = subprocess.run(cmd, cwd=ROOT_DIR)
+    if result.returncode != 0:
+        print("[-] Local dev install failed with exit code " + str(result.returncode))
+        sys.exit(result.returncode)
+    # End-if
+    _verify_local_core_installed()
+    print("[+] Local dev environment ready in: " + sys.executable)
+# End-def
+
+
+##
+ # @brief Target: build and install packages/dandelion-core native C++ extension.
+ #
+def target_native():
+    cfg = _load_config()
+    core_rel = cfg.get("core", "package_dir", fallback=os.path.join("packages", "dandelion-core"))
+    core_dir = os.path.join(ROOT_DIR, core_rel)
+    if not os.path.isdir(core_dir):
+        print("[-] Core package directory not found: " + core_dir)
+        sys.exit(1)
+    # End-if
+
+    cmd = [sys.executable, "-m", "pip", "install"]
+    if _has_local_core_build_deps():
+        cmd.append("--no-build-isolation")
+    # End-if
+    cmd.extend(["--no-deps", "-e", core_dir])
+
+    print("[*] Building and installing dandelion-core native extension...")
+    print("[*] Executing: " + " ".join(cmd))
+    result = subprocess.run(cmd, cwd=ROOT_DIR)
+    if result.returncode != 0:
+        print("[-] Native build failed with exit code " + str(result.returncode))
+        sys.exit(result.returncode)
+    # End-if
+    print("[+] Native dandelion-core extension installed into: " + sys.executable)
+# End-def
+
+
+##
+ # @brief Target: build a precompiled .whl of packages/dandelion-core into dist/.
+ #
+def target_wheel():
+    cfg = _load_config()
+    core_rel = cfg.get("core", "package_dir", fallback=os.path.join("packages", "dandelion-core"))
+    wheel_rel = cfg.get("core", "wheel_dir", fallback="dist")
+    core_dir = os.path.join(ROOT_DIR, core_rel)
+    wheel_dir = os.path.join(ROOT_DIR, wheel_rel)
+
+    if not os.path.isdir(core_dir):
+        print("[-] Core package directory not found: " + core_dir)
+        sys.exit(1)
+    # End-if
+
+    os.makedirs(wheel_dir, exist_ok=True)
+    cmd = [sys.executable, "-m", "pip", "wheel"]
+    if _has_local_core_build_deps():
+        cmd.append("--no-build-isolation")
+    # End-if
+    cmd.extend(["--no-deps", "--wheel-dir", wheel_dir, core_dir])
+
+    print("[*] Building dandelion-core wheel into " + os.path.relpath(wheel_dir, ROOT_DIR) + "/...")
+    print("[*] Executing: " + " ".join(cmd))
+    result = subprocess.run(cmd, cwd=ROOT_DIR)
+    if result.returncode != 0:
+        print("[-] Wheel build failed with exit code " + str(result.returncode))
+        sys.exit(result.returncode)
+    # End-if
+
+    built = sorted(fn for fn in os.listdir(wheel_dir) if fn.endswith(".whl"))
+    for fn in built:
+        print("[+] Built wheel: " + os.path.join(wheel_rel, fn))
+    # End-for
+# End-def
+
+
+##
+ # @brief Target: build a source distribution (.tar.gz) of packages/dandelion-core into dist/.
+ #
+def target_sdist():
+    cfg = _load_config()
+    core_rel = cfg.get("core", "package_dir", fallback=os.path.join("packages", "dandelion-core"))
+    wheel_rel = cfg.get("core", "wheel_dir", fallback="dist")
+    core_dir = os.path.join(ROOT_DIR, core_rel)
+    out_dir = os.path.join(ROOT_DIR, wheel_rel)
+
+    if not os.path.isdir(core_dir):
+        print("[-] Core package directory not found: " + core_dir)
+        sys.exit(1)
+    # End-if
+
+    if importlib.util.find_spec("build") is None:
+        print("[-] The 'build' package is not installed.")
+        print("    Install with: " + sys.executable + " -m pip install build")
+        sys.exit(1)
+    # End-if
+
+    os.makedirs(out_dir, exist_ok=True)
+    cmd = [sys.executable, "-m", "build", "--sdist"]
+    if _has_local_core_build_deps():
+        cmd.append("--no-isolation")
+    # End-if
+    cmd.extend(["--outdir", out_dir, core_dir])
+    print("[*] Building dandelion-core sdist into " + os.path.relpath(out_dir, ROOT_DIR) + "/...")
+    print("[*] Executing: " + " ".join(cmd))
+    result = subprocess.run(cmd, cwd=ROOT_DIR)
+    if result.returncode != 0:
+        print("[-] Sdist build failed with exit code " + str(result.returncode))
+        sys.exit(result.returncode)
+    # End-if
+
+    built = sorted(fn for fn in os.listdir(out_dir) if fn.endswith(".tar.gz"))
+    for fn in built:
+        print("[+] Built sdist: " + os.path.join(wheel_rel, fn))
+    # End-for
+# End-def
+
+
+##
+ # @brief Target: run ASCII-only check across Python, C/C++, script, and workflow files.
+ #
+def target_ascii():
+    from mk.lib.ascii_check import DEFAULT_PATHS, check_paths
+
+    paths = sys.argv[2:] if len(sys.argv) > 2 else list(DEFAULT_PATHS)
+    rc = check_paths(paths, base_dir=ROOT_DIR)
+    if rc != 0:
+        sys.exit(rc)
+    # End-if
+# End-def
+
+
+##
+ # @brief Target: remove bytecode caches, build artifacts, and empty legacy dirs.
  #
 def target_clean():
     print("[*] Cleaning bytecode caches...")
     removed = 0
+    skip_walk = {".git", ".log", "venv", ".venv", ".uv-python", ".wheel-deps-cache"}
     for dirpath, dirnames, filenames in os.walk(ROOT_DIR):
-        if ".git" in dirnames:
-            dirnames.remove(".git")
-        # End-if
-        if ".log" in dirnames:
-            dirnames.remove(".log")
-        # End-if
+        dirnames[:] = [d for d in dirnames if d not in skip_walk]
         if "__pycache__" in dirnames:
             shutil.rmtree(os.path.join(dirpath, "__pycache__"), ignore_errors=True)
+            dirnames.remove("__pycache__")
             removed += 1
         # End-if
         for fn in filenames:
@@ -772,23 +1112,59 @@ def target_clean():
     # End-for
     print("[+] Removed " + str(removed) + " bytecode items.")
 
-    # Remove build artifacts.
+    # Remove build and packaging artifacts.
     cfg = _load_config()
-    for key in ("output_dir", "cache_dir"):
-        path = os.path.join(ROOT_DIR, cfg.get("build", key, fallback=""))
+    core_rel = cfg.get("core", "package_dir", fallback=os.path.join("packages", "dandelion-core"))
+    wheel_rel = cfg.get("core", "wheel_dir", fallback="dist")
+    artifact_paths = [
+        cfg.get("build", "output_dir", fallback="build"),
+        cfg.get("build", "cache_dir", fallback=".nuitka-cache"),
+        wheel_rel,
+        os.path.join(core_rel, "build"),
+        "dist-wheels",
+        "dist-sdist",
+        "upload_stage",
+    ]
+    for rel in artifact_paths:
+        if not rel:
+            continue
+        # End-if
+        path = os.path.join(ROOT_DIR, rel)
         if os.path.exists(path):
             shutil.rmtree(path, ignore_errors=True)
             print("[+] Removed " + os.path.relpath(path, ROOT_DIR))
         # End-if
     # End-for
 
-    # Legacy dist/ directory.
-    legacy = os.path.join(ROOT_DIR, "dist")
-    if os.path.exists(legacy):
-        shutil.rmtree(legacy, ignore_errors=True)
-        print("[+] Removed dist/ (legacy)")
+    # Remove generated build_info.py and *.egg-info metadata directories.
+    build_info_file = os.path.join(MK_DIR, "lib", "build_info.py")
+    if os.path.isfile(build_info_file):
+        os.remove(build_info_file)
+        print("[+] Removed " + os.path.relpath(build_info_file, ROOT_DIR))
+    # End-if
+    for egg_parent in (ROOT_DIR, os.path.join(ROOT_DIR, core_rel), os.path.join(ROOT_DIR, core_rel, "src")):
+        if not os.path.isdir(egg_parent):
+            continue
+        # End-if
+        for entry_name in sorted(os.listdir(egg_parent)):
+            if entry_name.endswith(".egg-info"):
+                egg_path = os.path.join(egg_parent, entry_name)
+                shutil.rmtree(egg_path, ignore_errors=True)
+                print("[+] Removed " + os.path.relpath(egg_path, ROOT_DIR))
+            # End-if
+        # End-for
+    # End-for
+
+    # Remove stale empty legacy directories under src/.
+    stale_removed = 0
+    for rel in STALE_SRC_DIRS:
+        stale_removed += _remove_empty_dirs(os.path.join(ROOT_DIR, rel))
+    # End-for
+    if stale_removed:
+        print("[+] Removed " + str(stale_removed) + " empty stale legacy directories.")
     # End-if
 # End-def
+
 
 ##
  # @brief Target: print project name and version.
@@ -797,6 +1173,7 @@ def target_version():
     name, version = _project_meta()
     print("[+] " + name + " " + version)
 # End-def
+
 
 ##
  # @brief Target: sign Windows executable (placeholder for P3).
@@ -813,12 +1190,14 @@ def target_sign():
     sys.exit(1)
 # End-def
 
+
 ##
  # @brief Target: print usage help.
  #
 def target_help():
     print(USAGE)
 # End-def
+
 
 ##
  # @brief Entry point: dispatch make targets.
@@ -828,6 +1207,11 @@ def main():
 
     handlers = {
         "all": target_all,
+        "dev": target_dev,
+        "native": target_native,
+        "wheel": target_wheel,
+        "sdist": target_sdist,
+        "ascii": target_ascii,
         "clean": target_clean,
         "version": target_version,
         "sign": target_sign,
@@ -846,5 +1230,7 @@ def main():
     handler()
 # End-def
 
+
 if __name__ == "__main__":
     main()
+# End-if

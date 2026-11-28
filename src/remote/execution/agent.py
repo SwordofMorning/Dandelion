@@ -10,114 +10,26 @@
 
 import hashlib
 import json
-import threading
 from pathlib import Path
 
+from dandelion_core.host import BaseAgentHost
+from mk.lib.paths import tool_dirs as resolve_tool_dirs
+
+from ..runtime import RemoteRuntime
 from ..sysprompt import RemotePromptBuilder
 from ..tool import SubmitTaskTool, TaskControlTool, SendMessageTool, GoogleDriveTool
 
-MAIN_DIRECT_TOOLS = (
-    "bash",
-    "ssh",
-    "tavily_search",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "list_directory",
-    "grep_search",
-    "markdown_editor",
-    "read_image",
-    "read_pdf",
-    "load_skill",
-    "get_time",
-    "remember",
-    "forget",
-    "memory_search",
-    "update_state",
-    "prune_context",
-    "plan_tool",
-)
+# Tools excluded from the Remote main agent (delegated to background workers
+# via submit_task instead of synchronous inline execution). Any built-in or
+# hot-plugged extension tool not in this denylist passes through automatically.
+EXCLUDED_REMOTE_MAIN_TOOLS = frozenset({
+    "spawn_subagent",
+    "read_excel",
+    "write_excel",
+})
 
-
-##
- # @brief Close persisted tool calls without replaying unknown external actions.
- #
- # @param agent Agent whose runtime, session and history are used.
- #
- # @return Identifiers of repaired tool calls.
- #
-def repair_interrupted_tools(agent):
-    ##
-     # @brief Read a block field from a mapping or SDK object.
-     #
-     # @param block Dictionary or SDK content block.
-     # @param key Field name to read.
-     # @param default Fallback value when the requested field is absent.
-     #
-     # @return Block field value, or the supplied default.
-     #
-    def field(block, key, default=None):
-        return block.get(key, default) if isinstance(block, dict) else getattr(block, key, default)
-    # End-def
-
-    repaired = []
-    index = 0
-    while index < len(agent.history):
-        message = agent.history[index]
-        content = message.get("content", [])
-        if message.get("role") != "assistant" or not isinstance(content, list):
-            index += 1
-            continue
-        # End-if
-        ids = list(dict.fromkeys(
-            field(block, "id") for block in content
-            if field(block, "type") == "tool_use" and field(block, "id")
-        ))
-        if not ids:
-            index += 1
-            continue
-        # End-if
-        following = agent.history[index + 1] if index + 1 < len(agent.history) else None
-        results = following.get("content", []) if following and following.get("role") == "user" else []
-        present = {
-            field(block, "tool_use_id") for block in results
-            if field(block, "type") == "tool_result"
-        } if isinstance(results, list) else set()
-        missing = [tool_id for tool_id in ids if tool_id not in present]
-        if missing:
-            interrupted = [{
-                "type": "tool_result",
-                "tool_use_id": tool_id,
-                "is_error": True,
-                "content": json.dumps({
-                    "status": "interrupted",
-                    "side_effects_unknown": True,
-                    "message": (
-                        "Server stopped before the tool result was saved. "
-                        "This call was not replayed. Inspect existing jobs/artifacts "
-                        "before explicitly resubmitting; actions were not rolled back."
-                    ),
-                }),
-            } for tool_id in missing]
-            if following and following.get("role") == "user" and isinstance(results, list):
-                following["content"] = results + interrupted
-            else:
-                agent.history.insert(index + 1, {"role": "user", "content": interrupted})
-            # End-if
-            repaired.extend(missing)
-        # End-if
-        index += 1
-    # End-while
-    if repaired:
-        agent.session.log_api_call("REMOTE INTERRUPTED TOOL RECOVERY", {
-            "tool_use_ids": repaired,
-            "status": "interrupted",
-            "side_effects_unknown": True,
-        })
-        agent.session.save_history(agent.history)
-    # End-if
-    return repaired
-# End-def
+# Re-export shared interrupted tool recovery from Core BaseAgentHost.
+repair_interrupted_tools = BaseAgentHost.repair_interrupted_tools
 
 
 ##
@@ -129,10 +41,21 @@ def repair_interrupted_tools(agent):
  # @param jobs Background job manager used by remote delegation tools.
  # @param hub Optional ChannelHub for SendMessageTool.
  # @param backups Optional shared BackupStore for synced session overview.
+ # @param config_dir Optional operator config directory (.env) for SSH devices.yaml/known_hosts.
+ # @param tool_dirs Optional ordered directories scanned for hot-plugged Remote tools.
  #
  # @return Callable creating a core agent for one conversation.
  #
-def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None):
+def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None,
+                       config_dir=None, tool_dirs=None):
+    extra_tool_dirs = config.get("TOOL_DIRS") if isinstance(config, dict) else None
+    remote_root = str(Path(__file__).resolve().parents[3])
+    remote_tool_dirs = (
+        list(tool_dirs)
+        if tool_dirs is not None
+        else resolve_tool_dirs("remote", extra_tool_dirs, root_dir=remote_root)
+    )
+
     ##
      # @brief Build or restore one remote conversation agent.
      #
@@ -141,40 +64,14 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
      # @return Restored agent with unrestricted runtime, communication and delegation tools.
      #
     def create(session_id):
-        from src.core.agent import MyAgent, TurnInterrupt
-        from src.core.agent.tools import build_tools
-        from src.core.runtime import Runtime
-        from src.core.utils.logging.session import SessionManager
+        from dandelion_core.agent import MyAgent
+        from dandelion_core.agent.tools import build_tools
+        from dandelion_core.utils.logging.session import SessionManager
 
         scope = hashlib.sha256(str(session_id).encode()).hexdigest()
         root = Path(data_dir) / "sessions" / scope
         session = SessionManager(log_dir=str(root))
-        interrupt = TurnInterrupt()
-        sess_str = str(session_id)
-
-        ##
-         # @brief Forward Core step progress output to Telegram when active.
-         #
-         # @param text Emitted runtime status text.
-         #
-         # @return None.
-         #
-        def emit_output(text):
-            if sess_str.startswith("telegram:") and hub is not None:
-                tg = getattr(hub, "telegram", None)
-                if tg is not None and hasattr(tg, "on_progress"):
-                    tg.on_progress(sess_str.split(":", 1)[1], text)
-                # End-if
-            # End-if
-        # End-def
-
-        runtime = Runtime(
-            output=emit_output,
-            cancelled=interrupt.is_requested,
-            approve=lambda action, target, ws: True,
-            echo=False,
-            sandbox=False,
-        )
+        runtime = RemoteRuntime(session_id=session_id, hub=hub)
 
         ##
          # @brief Construct RemotePromptBuilder bound to the shared BackupStore.
@@ -199,7 +96,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
         # End-def
 
         ##
-         # @brief Mount direct shell/SSH/search/file/memory/pruning tools plus Remote delegation and communication tools.
+         # @brief Mount direct shell/SSH/search/file/memory/pruning/extension tools plus Remote delegation and communication tools.
          #
          # @param agent Agent whose runtime, session and history are used.
          #
@@ -218,13 +115,22 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
             # End-def
 
             result = {
-                name: shared[name]
-                for name in MAIN_DIRECT_TOOLS
-                if name in shared
+                name: tool
+                for name, tool in shared.items()
+                if name not in EXCLUDED_REMOTE_MAIN_TOOLS
             }
+            pool_ts_reg = getattr(getattr(agent, "pool", None), "toolset_registry", None)
+            if pool_ts_reg is not None and hasattr(jobs, "toolset_registry"):
+                jobs.toolset_registry = pool_ts_reg
+            # End-if
             if agent.pool.max_depth > 0 and agent.client.registry.get_all_specs():
                 result["submit_task"] = SubmitTaskTool(
-                    jobs, str(session_id), workspace, context, registry=agent.client.registry
+                    jobs,
+                    str(session_id),
+                    workspace,
+                    context,
+                    registry=agent.client.registry,
+                    toolset_registry=pool_ts_reg,
                 )
             # End-if
             result["task_control"] = TaskControlTool(jobs, str(session_id))
@@ -242,9 +148,11 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
             runtime=runtime,
             tool_factory=tools,
             prompt_builder_cls=prompt_factory,
+            config_dir=config_dir,
+            host="remote",
+            tool_dirs=remote_tool_dirs,
         )
-        agent._remote_cancel_event = interrupt
-        repair_interrupted_tools(agent)
+        BaseAgentHost.repair_interrupted_tools(agent)
         return agent
     # End-def
     return create

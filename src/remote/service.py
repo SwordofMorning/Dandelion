@@ -21,8 +21,8 @@ import sys
 import threading
 import time
 
-from mk.lib.paths import base_dir, remote_config_path
-from src.core.utils.config import load_remote_config
+from mk.lib.paths import base_dir, remote_config_path, tool_dirs
+from dandelion_core.utils.config import load_remote_config
 from .channels.telegram import Telegram
 from .storage.replies import ChannelHub
 from .storage.backups import BackupStore
@@ -170,10 +170,31 @@ def _serve(args, parser, config, store, data_dir, workspace):
         parser.error("Set ALLOWED_CHATS in [Telegram] section of " + str(args.config))
     # End-if
 
+    config_dir = str(Path(args.config).resolve().parent)
+    root_override = os.environ.get("DR_ROOT_DIR")
+    remote_root = str(Path(root_override).resolve()) if root_override else str(Path(__file__).resolve().parents[2])
+    remote_tool_dirs = tool_dirs("remote", config.get("TOOL_DIRS"), root_dir=remote_root)
+
     backups = BackupStore(str(data_dir), workspace_dir=workspace)
-    jobs = JobManager(store, JobExecutor(config, str(data_dir)), max_workers=workers)
+    executor = JobExecutor(
+        config,
+        str(data_dir),
+        config_dir=config_dir,
+        tool_dirs=remote_tool_dirs,
+        workspace_dir=workspace,
+    )
+    jobs = JobManager(store, executor, max_workers=workers)
     hub = ChannelHub(store)
-    factory = make_agent_factory(config, str(data_dir), workspace, jobs, hub=hub, backups=backups)
+    factory = make_agent_factory(
+        config,
+        str(data_dir),
+        workspace,
+        jobs,
+        hub=hub,
+        backups=backups,
+        config_dir=config_dir,
+        tool_dirs=remote_tool_dirs,
+    )
     loop = RemoteLoop(store, jobs, factory, hub.notify, backups=backups)
     server = make_server(host, port, store, jobs, loop, hub, access_key, backups=backups)
     telegram = (

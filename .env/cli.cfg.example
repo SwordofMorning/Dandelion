@@ -10,15 +10,22 @@ SUB_LIST=[
     ]
 SUB_DEPTH=1
 SUB_CONCURRENCY=4
+; Optional comma-separated extra directories for hot-plugged BaseTool modules:
+; TOOL_DIRS=
 ; Search Tool
 TAVILY_API_KEY=tvly-
 
 ; ============================================================
 ; Part 2: Provider Profiles & Model Registries
 ;
-; @ SDK_TYPE:
-;   "Message" (Anthropic) or "Chat Completions" (OpenAI).
-;   do not support "Responses" (OpenAI New), "Interactions" (Gemini New) or "Generate Content"(Gemini)
+; @ SDK_TYPE (5 native C++17 protocols):
+;   - "Message"          : Anthropic Messages API (/v1/messages)
+;   - "Chat Completions" : OpenAI Chat Completions (/v1/chat/completions)
+;   - "Responses"        : OpenAI Responses API (/v1/responses, stateless store=false)
+;   - "Generate Content" : Gemini generateContent/streamGenerateContent
+;                          (recommended for Gemini; supports native PDF + thoughtSignature
+;                          on both AI Studio and Sub2API)
+;   - "Interactions"     : Gemini v1beta/interactions
 ; @ BASE_URL:
 ;   URL to LLM provider.
 ; ============================================================
@@ -153,11 +160,34 @@ PASSIVE_TOP_K=5
 MIN_SIMILARITY=0.35
 
 [Embedding]
+; Set PROVIDER=gemini for Google AI Studio vector memory (recommended model:
+; gemini-embedding-001; legacy embedding-001 / text-embedding-004 are deprecated):
+; PROVIDER=gemini
+; MODEL=gemini-embedding-001
+; DIMENSIONS=768
+; BASE_URL=https://generativelanguage.googleapis.com
+; API_KEY=
+; API_KEY_ENV=GEMINI_API_KEY
+; TIMEOUT_MS=3000
+; BATCH_SIZE=32
 PROVIDER=disabled
-MODEL=mock-semantic-v1
-DIMENSIONS=8
+MODEL=gemini-embedding-001
+DIMENSIONS=768
 BASE_URL=
 API_KEY=
 API_KEY_ENV=
-TIMEOUT_MS=1500
+TIMEOUT_MS=3000
 BATCH_SIZE=32
+
+; ============================================================
+; Part 4: Optional Hot-Plugged Tool Configuration ([Tool:<name>])
+; ============================================================
+; Drop a BaseTool module into src/tool/, src/cli/tool/, or tool/ and configure
+; its credentials here (read via context.tool_config("<name>") or
+; config["TOOL_CONFIG"]["<name>"]).
+; [Tool:imap]
+; HOST=imap.example.com
+; PORT=993
+; USERNAME=user@example.com
+; PASSWORD=app-password
+; FOLDER=INBOX

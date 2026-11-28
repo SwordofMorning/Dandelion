@@ -19,11 +19,11 @@ from urllib.parse import urlsplit
 
 import requests
 
-CHUNK_SIZE = 256 * 1024
+from dandelion_core.sync_protocol import (
+    CHUNK_SIZE, OPTIONAL_FILES, REQUIRED_FILES, key_digest, snapshot_id,
+)
+
 MAX_REQUEST_SIZE = 1024 * 1024
-REQUIRED_SESSION_FILES = ("history.log", "meta.log")
-OPTIONAL_SESSION_FILES = ("task_state.json",)
-ALL_SESSION_FILES = REQUIRED_SESSION_FILES + OPTIONAL_SESSION_FILES
 
 
 ##
@@ -103,7 +103,7 @@ class SessionSync:
 
         content = {}
         files = {}
-        for name in REQUIRED_SESSION_FILES:
+        for name in REQUIRED_FILES:
             path = directory / name
             if not path.is_file() or path.resolve().parent != directory:
                 raise ValueError(f"Session '{session_id}' is missing required file '{name}'.")
@@ -113,7 +113,7 @@ class SessionSync:
             files[name] = {"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
         # End-for
 
-        for name in OPTIONAL_SESSION_FILES:
+        for name in OPTIONAL_FILES:
             path = directory / name
             if path.is_file() and path.resolve().parent == directory:
                 raw = path.read_bytes()
@@ -133,8 +133,7 @@ class SessionSync:
         # End-if
 
         manifest = {"device": device, "project": self.project, "session_id": session_id, "files": files}
-        canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        manifest["snapshot_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        manifest["snapshot_id"] = snapshot_id(manifest)
         return manifest, content
     # End-def
 
@@ -151,8 +150,7 @@ class SessionSync:
         if len(body) >= MAX_REQUEST_SIZE:
             raise ValueError("Session backup request exceeds maximum payload size.")
         # End-if
-        raw_key = str(self.remote.get("access_key") or self.remote.get("token") or "").strip()
-        key_md5 = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+        key_md5 = key_digest(self.remote.get("access_key") or self.remote.get("token") or "")
         response = requests.post(
             url + "/sync",
             data=body,

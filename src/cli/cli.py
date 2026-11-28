@@ -19,14 +19,13 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 
-from .interrupt import (
-    request as request_stop,
-    is_requested as stop_requested,
-    reason as stop_reason,
-    clear as clear_stop,
-)
-from src.core.utils.logging.backup import SessionBackup
+from dandelion_core.host import BaseAgentHost
+from dandelion_core.utils.llm_provider.blocks import RequestCancelledError
+from dandelion_core.utils.logging.backup import SessionBackup
+
+from .runtime import INTERRUPT
 
 ##
  # @note import toolkit
@@ -41,23 +40,22 @@ try:
     HAS_PTK = True
 except ImportError:
     HAS_PTK = False
+# End-try
 
 from .printer import CLIPrinter
 
 ##
  # @brief Interactive CLI for Dandelion workspace management.
  #
-class InteractiveCLI:
+class InteractiveCLI(BaseAgentHost):
     ##
      # @brief Constructor.
-     # 
+     #
      # @param agent_instance instance of class MyAgent.
      # @param session_manager instance of SessionManager.
-     # 
+     #
     def __init__(self, agent_instance, session_manager):
-        # Assignment object.
-        self.agent = agent_instance
-        self.session = session_manager
+        super().__init__(agent=agent_instance, session=session_manager)
         # Init printer.
         self.cli = CLIPrinter()
 
@@ -67,20 +65,40 @@ class InteractiveCLI:
         self.staged_message = self.session.load_staged()
         if self.staged_message.strip():
             self.cli.info(f"Restored pending draft ({len(self.staged_message.strip())} chars) from this branch.")
+        # End-if
 
         # ----- @par Interrupt / rollback runtime flags -----
         # @note _turn_active  : a turn is running, so SIGINT is ours to record.
         #       _backup_ready : this turn has a complete backup and may be
         #                       rolled back (reset on rollback / checkout).
+        #       _turn_backup  : SessionBackup captured before commit, retained
+        #                       across mid-turn session rollovers.
         self._turn_active = False
         self._backup_ready = False
+        self._turn_backup = None
 
-        # Initialize prompt_toolkit session with in-memory history
-        if HAS_PTK:
+        # Recover any orphaned tool_use calls left by a prior hard crash.
+        if self.agent is not None and self.session is not None:
+            self.repair_interrupted_tools(self.agent)
+        # End-if
+
+        # Initialize prompt_toolkit session with in-memory history (interactive TTY only)
+        if HAS_PTK and sys.stdin.isatty():
             self.prompt_session = PromptSession(history=InMemoryHistory())
         else:
             self.prompt_session = None
         # End-if
+    # End-def
+
+    ##
+     # @brief Resolve the active TurnInterrupt controller from agent.runtime.
+     #
+     # @return TurnInterrupt controller instance.
+     #
+    def _interrupt(self):
+        runtime = getattr(self.agent, "runtime", None)
+        interrupt = getattr(runtime, "interrupt", None)
+        return interrupt if interrupt is not None else INTERRUPT
     # End-def
 
     ##
@@ -91,6 +109,7 @@ class InteractiveCLI:
     def _build_completer(self):
         if not HAS_PTK:
             return None
+        # End-if
 
         # Gather session's info, used for `checkout` and `branch`.
         sessions = self.session.list_sessions()
@@ -113,6 +132,8 @@ class InteractiveCLI:
             'vim': None,
             'load': PathCompleter(expanduser=True),
             'status': None,
+            'tools': None,
+            'reload': None,
             'commit': None,
             'sync': {'--session': session_targets},
             'remote': {'-v': None},
@@ -141,6 +162,8 @@ class InteractiveCLI:
             "   load <filepath>       : Load a local file into the prompt buffer.\n\n"
             " Core Operations:\n"
             "   status                : View current session and staged buffer.\n"
+            "   tools                 : List active built-in and hot-plugged tools.\n"
+            "   reload                : Reload hot-plugged tools without restarting.\n"
             "   commit                : Send the staged buffer to LLM.\n"
             "   clear                 : Clear the staged buffer.\n"
             "   sync                  : Back up all sessions to the configured Remote.\n"
@@ -167,6 +190,7 @@ class InteractiveCLI:
         for s in sessions:
             if target == s['id'] or target == s['name']:
                 return s['id']
+            # End-if
         # End-for
         return None
     # End-def
@@ -190,7 +214,6 @@ class InteractiveCLI:
                 self.cli.raw(f" {mark} {s['name']:<20} | {s['id']}")
             # End-for
             self.cli.raw("")
-        # End-if
 
         # ----- 2. Delete branch <name/id> -----
         elif args[0] == '-d':
@@ -218,15 +241,14 @@ class InteractiveCLI:
                     self.cli.success(msg)
                 else:
                     self.cli.error(msg)
+                # End-if
             else:
                 self.cli.error("Deletion aborted.")
             # End-if
-        # End-elif
-
         # ----- 3. Others -----
         else:
             self.cli.error(f"Unknown branch argument: {args[0]}. Try 'branch -a' or 'branch -d'.")
-        # End-else
+        # End-if
     # End-def
 
     ##
@@ -272,6 +294,7 @@ class InteractiveCLI:
             # The backup belongs to the session directory: a new branch always
             # starts without rollback capability until its first commit.
             self._backup_ready = False
+            self._turn_backup = None
             # Print success.
             self.cli.success(f"Switched to a new session branch: '{new_name}'")
             return
@@ -290,13 +313,16 @@ class InteractiveCLI:
         # Try to switch/checkout session
         if self.session.switch_session(session_id):
             self.agent.reload_history()
+            self.repair_interrupted_tools(self.agent)
             # Switch the staged buffer to the target branch's draft.
             self.staged_message = self.session.load_staged()
             # The backup belongs to the session directory, so a switch always
             # invalidates the current turn's rollback capability.
             self._backup_ready = False
+            self._turn_backup = None
             if self.staged_message.strip():
                 self.cli.info(f"Restored pending draft ({len(self.staged_message.strip())} chars) in this branch.")
+            # End-if
             self.cli.success(f"Switched to session branch: '{target}'")
         else:
             self.cli.error(f"Error: Failed to switch to '{target}'. Directory might be corrupted.")
@@ -355,6 +381,7 @@ class InteractiveCLI:
             self.cli.success("Buffer successfully updated via editor.")
         else:
             self.cli.info("Buffer unchanged.")
+        # End-if
         return True
     # End-def
 
@@ -391,11 +418,13 @@ class InteractiveCLI:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.staged_message = f.read().strip()
+            # End-with
             # Persist the buffer to the session-scoped staged file.
             self.session.save_staged(self.staged_message)
             self.cli.success(f"Successfully loaded {os.path.getsize(filepath)} bytes into buffer.")
         except Exception as e:
             self.cli.error(f"Error loading file: {e}")
+        # End-try
     # End-def
 
     ##
@@ -504,8 +533,82 @@ class InteractiveCLI:
         # Cut-off
         if len(self.staged_message) > 300:
             self.cli.raw("\n... [Truncated]")
+        # End-if
         self.cli.raw("-" * 50)
         self.cli.raw(f"    (Total: {len(self.staged_message)} chars)\n")
+    # End-def
+
+    ##
+     # @brief `tools` command handle.
+     # List active built-in and hot-plugged tools plus registered SubAgent toolsets.
+     #
+    def _cmd_tools(self):
+        tools = getattr(self.agent, "tools", None) or {}
+        ext_tools = (
+            getattr(self.agent, "extension_tools", None)
+            or getattr(getattr(self.agent, "prompt_builder", None), "extension_tools", None)
+            or {}
+        )
+        ext_names = set(ext_tools.keys()) if isinstance(ext_tools, dict) else set(ext_tools)
+        builtin_names = sorted(name for name in tools if name not in ext_names)
+        plugin_names = sorted(name for name in tools if name in ext_names)
+
+        self.cli.success(f"\nActive Tools ({len(tools)} total):")
+        if builtin_names:
+            self.cli.info("Built-in   : " + ", ".join(builtin_names))
+        # End-if
+        if plugin_names:
+            self.cli.info("Hot-plugged: " + ", ".join(plugin_names))
+        else:
+            self.cli.info("Hot-plugged: (none)")
+        # End-if
+
+        pool = getattr(self.agent, "pool", None)
+        registry = getattr(pool, "toolset_registry", None)
+        if registry is not None and hasattr(registry, "names"):
+            self.cli.info("Toolsets   : " + ", ".join(registry.names()))
+        # End-if
+
+        errors = getattr(self.agent, "tool_load_errors", None) or []
+        for err in errors:
+            self.cli.warning(f"Tool load warning: {err}")
+        # End-for
+        self.cli.raw("")
+    # End-def
+
+    ##
+     # @brief `reload` command handle.
+     # Re-scan configured tool directories and rebuild agent tools without restarting.
+     #
+    def _cmd_reload(self):
+        if not hasattr(self.agent, "reload_tools"):
+            self.cli.error("Current agent does not support live tool reload.")
+            return
+        # End-if
+
+        result = self.agent.reload_tools()
+        tools = getattr(self.agent, "tools", None) or {}
+        ext_tools = (
+            getattr(self.agent, "extension_tools", None)
+            or getattr(getattr(self.agent, "prompt_builder", None), "extension_tools", None)
+            or {}
+        )
+        ext_names = sorted(ext_tools.keys()) if isinstance(ext_tools, dict) else sorted(ext_tools)
+        self.cli.success(f"Reloaded tools: {len(tools)} active ({len(ext_names)} hot-plugged).")
+        if ext_names:
+            self.cli.info("Hot-plugged: " + ", ".join(ext_names))
+        # End-if
+
+        errors = []
+        if isinstance(result, dict):
+            errors = result.get("errors") or []
+        # End-if
+        if not errors:
+            errors = getattr(self.agent, "tool_load_errors", None) or []
+        # End-if
+        for err in errors:
+            self.cli.warning(f"Tool load warning: {err}")
+        # End-for
     # End-def
 
     ##
@@ -542,18 +645,25 @@ class InteractiveCLI:
         # Stale requests from a previous turn must not leak into this one, and
         # the clear must happen BEFORE the backup copy so that a SIGINT arriving
         # during the copy is preserved and honoured by the checkpoint below.
-        clear_stop()
+        self._interrupt().clear()
 
         # ----- Turn backup (the Ctrl+C rollback anchor) -----
         # @note The backup is taken BEFORE the raw input is appended, so it
         #       holds exactly "the state before this commit" - including the
         #       staged draft, which is what the user gets back after a rollback.
-        # @note A retried commit (same pending turn after an API failure) reuses
-        #       the existing backup instead of re-snapshotting a history that
-        #       already contains the message.
-        if not self._backup_ready:
-            ok, msg = SessionBackup(self.session.current_session_dir).create(
-                "commit", history_messages=len(self.agent.history))
+        # @note Retained in self._turn_backup so mid-turn session rollovers
+        #       (prune_context(rollover=True)) still roll back to the original
+        #       pre-commit session cleanly.
+        if not self._backup_ready or self._turn_backup is None:
+            captured = self.capture_turn_backup(note="commit")
+            if isinstance(captured, tuple):
+                backup, ok, msg = captured
+            else:
+                backup = captured
+                ok = backup.is_valid()
+                msg = "ok" if ok else "backup creation failed"
+            # End-if
+            self._turn_backup = backup if ok else None
             self._backup_ready = ok
             if not ok:
                 self.cli.warning(f"Backup failed: this turn cannot be rolled back ({msg}).")
@@ -593,6 +703,16 @@ class InteractiveCLI:
                     self.session.clear_staged()
                     self.staged_message = ""
                     break
+                # End-if
+
+                # Mid-stream cooperative interrupt: consult [S]top/[R]ollback/[C]ontinue.
+                # If the user chooses [C]ontinue (_try_stop returns False), resume
+                # immediately without opening the API error recovery menu.
+                if isinstance(err, RequestCancelledError):
+                    if self._try_stop():
+                        return
+                    # End-if
+                    continue
                 # End-if
 
                 # Stop requested during this step: never open a recovery menu
@@ -639,7 +759,7 @@ class InteractiveCLI:
                     self.staged_message = ""
                     self.cli.info("Draft discarded.")
                     return
-                # End-elif
+                # End-if
             except (KeyboardInterrupt, EOFError):
                 # Interrupt BEFORE acceptance: roll back the never-accepted
                 # message and keep the draft for later.
@@ -660,29 +780,35 @@ class InteractiveCLI:
         # End-if
 
         if cont:
-            try:
-                _, err = self._run_agent_loop()
-            except (KeyboardInterrupt, EOFError):
-                self.cli.info("\nSend aborted mid-execution. The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
-                return
-            # End-try
-            if err is not None:
-                self.cli.error(f"Tool loop interrupted by API error: {err}")
-                self.cli.info("The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
-            # End-if
+            while True:
+                try:
+                    _, err = self._run_agent_loop()
+                except (KeyboardInterrupt, EOFError):
+                    self.cli.info("\nSend aborted mid-execution. The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+                    return
+                # End-try
+                if isinstance(err, RequestCancelledError):
+                    if self._try_stop():
+                        return
+                    # End-if
+                    continue
+                # End-if
+                if err is not None:
+                    self.cli.error(f"Tool loop interrupted by API error: {err}")
+                    self.cli.info("The pending tool turn will auto-resume at the next prompt, or be dropped if it keeps failing.")
+                # End-if
+                break
+            # End-while
         # End-if
 
         # Last checkpoint of the turn: also covers a stop request that landed
         # on the final step (a plain-text reply with nothing left to run).
         self._try_stop()
 
-        # @note _backup_ready is turn-scoped and must not survive a finished
-        #       turn: the next commit has to take a fresh snapshot, otherwise an
-        #       interrupt in a later turn would roll back this completed turn.
-        #       (Paths that keep the pending message - a retried commit after an
-        #       API failure or an aborted send - intentionally return early and
-        #       keep reusing the existing backup.)
+        # @note _backup_ready / _turn_backup are turn-scoped and must not survive
+        #       a finished turn.
         self._backup_ready = False
+        self._turn_backup = None
     # End-def
 
     ##
@@ -692,7 +818,7 @@ class InteractiveCLI:
      # @retval (False, err) an API error occurred (all bounded retries exhausted).
      #
     def _run_agent_loop(self):
-        from src.core.agent.runner import run_agent_loop
+        from dandelion_core.agent.runner import run_agent_loop
         return run_agent_loop(self.agent, should_stop=self._try_stop)
     # End-def
 
@@ -719,7 +845,7 @@ class InteractiveCLI:
                 return 'V'
             elif choice in ('d', 'discard'):
                 return 'D'
-            # End-elif
+            # End-if
             self.cli.error("Invalid choice. Please enter R / S / V / D.")
         # End-while
     # End-def
@@ -737,19 +863,7 @@ class InteractiveCLI:
         if not hist:
             return
         # End-if
-        changed = False
-        while hist and hist[-1].get("role") == "assistant":
-            tail_content = hist[-1].get("content", [])
-            has_unpaired_tool = isinstance(tail_content, list) and any(
-                (b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_use"
-                for b in tail_content
-            )
-            if not has_unpaired_tool:
-                break
-            # End-if
-            hist.pop()
-            changed = True
-        # End-while
+        changed = self.agent.pop_unpaired_tool_use_tail()
         if hist and hist[-1].get("role") == "user" and not isinstance(hist[-1].get("content", ""), list):
             hist.pop()
             changed = True
@@ -797,10 +911,11 @@ class InteractiveCLI:
         if not self._turn_active:
             raise KeyboardInterrupt
         # End-if
-        request_stop("sigint")
+        intr = self._interrupt()
+        intr.request("sigint")
         self.cli.warning(
-            f"Interrupt requested ({stop_reason()}): finishing the current step, "
-            f"then pausing for [S]top / [R]ollback / [C]ontinue."
+            f"Interrupt recorded ({intr.reason()}): aborting in-flight step "
+            f"and pausing for [S]top / [R]ollback / [C]ontinue..."
         )
     # End-def
 
@@ -851,37 +966,42 @@ class InteractiveCLI:
      # @retval False Nothing requested, or the user chose Continue (or rollback failed).
      #
     def _try_stop(self):
-        if not stop_requested():
+        intr = self._interrupt()
+        if not intr.is_requested():
             return False
         # End-if
 
-        trig = stop_reason()
+        trig = intr.reason()
         choice = self._prompt_interrupt_action(trig)
         if choice == "C":
-            clear_stop()
+            intr.clear()
             self.cli.info("Resuming turn execution...")
             return False
         # End-if
 
         if choice == "S":
             self._do_stop(trig)
-            clear_stop()
+            intr.clear()
             return True
         # End-if
 
-        if not SessionBackup(self.session.current_session_dir).is_valid():
+        backup = getattr(self, "_turn_backup", None)
+        if backup is None:
+            backup = SessionBackup(self.session.current_session_dir)
+        # End-if
+        if not backup.is_valid():
             self.cli.error("Rollback failed: no usable backup for this turn, continuing.")
-            clear_stop()
+            intr.clear()
             return False
         # End-if
 
-        if not self._do_rollback():
+        if not self._do_rollback(backup):
             self.cli.error("Stop failed: the rollback could not be completed, continuing.")
-            clear_stop()
+            intr.clear()
             return False
         # End-if
 
-        clear_stop()
+        intr.clear()
         return True
     # End-def
 
@@ -898,12 +1018,14 @@ class InteractiveCLI:
             # message and keep the draft in staged.md.
             self._rollback_pending_message()
             self._backup_ready = False
+            self._turn_backup = None
             self.cli.info("Turn stopped before first step completed. Staged draft preserved.")
             return True
         # End-if
 
-        self.agent.stop_turn("[Turn stopped by user.]")
+        self.stop_active_turn("[Turn stopped by user.]")
         self._backup_ready = False
+        self._turn_backup = None
         self.cli.success(
             f"Stopped at current step boundary (trigger: {trigger or 'sigint'}). "
             f"Completed progress ({len(self.agent.history)} messages) is preserved in this session."
@@ -916,11 +1038,15 @@ class InteractiveCLI:
     ##
      # @brief Restore the session state captured before the last commit.
      #
+     # @param backup Optional pre-turn SessionBackup captured before commit.
+     #
      # @return True when the rollback completed (state reloaded); False when
      #         nothing was rolled back and the turn should keep running.
      #
-    def _do_rollback(self):
-        ok, restored, failed = self.agent.rollback_turn(trigger=stop_reason())
+    def _do_rollback(self, backup=None):
+        intr = self._interrupt()
+        target_backup = backup if backup is not None else getattr(self, "_turn_backup", None)
+        ok, restored, failed = self.rollback_active_turn(target_backup, trigger=intr.reason())
         if not ok:
             self.cli.error("Rollback could not be completed: " + ", ".join(failed))
             self.cli.info("Nothing was rolled back; the turn keeps running.")
@@ -929,9 +1055,10 @@ class InteractiveCLI:
 
         self.staged_message = self.session.load_staged()
         self._backup_ready = False
+        self._turn_backup = None
 
         self.cli.success(
-            f"Rolled back to before the last commit (trigger: {stop_reason()}): "
+            f"Rolled back to before the last commit (trigger: {intr.reason()}): "
             + ", ".join(restored))
         self.cli.info(
             f"Original input restored to the staged buffer "
@@ -955,9 +1082,9 @@ class InteractiveCLI:
         signal.signal(signal.SIGINT, self._on_sigint)
 
         # Try to load HAS_PTK (tab completion)
-        if HAS_PTK:
+        if HAS_PTK and self.prompt_session is not None:
             self.cli.success("Bash-style Tab completion enabled (Powered by prompt_toolkit).")
-        else:
+        elif not HAS_PTK:
             self.cli.error("prompt_toolkit not found. Fallback to basic input. (pip install prompt_toolkit)")
         # End-if
 
@@ -985,7 +1112,17 @@ class InteractiveCLI:
 
                         self._turn_active = True
                         try:
-                            ok, err = self._run_agent_loop()
+                            while True:
+                                ok, err = self._run_agent_loop()
+                                if isinstance(err, RequestCancelledError):
+                                    if self._try_stop():
+                                        err = None
+                                        break
+                                    # End-if
+                                    continue
+                                # End-if
+                                break
+                            # End-while
                         finally:
                             self._turn_active = False
                         # End-try
@@ -993,8 +1130,9 @@ class InteractiveCLI:
                         # All retries exhausted: drop the pending tool turn
                         # (tool_result + its assistant tool_use pair) so history
                         # never ends with a dangling tool_use that would 400 the
-                        # next commit. The pair was never seen by the model.
-                        if err is not None:
+                        # next commit. Never delete completed tool outputs on a
+                        # cooperative RequestCancelledError!
+                        if err is not None and not isinstance(err, RequestCancelledError):
                             self.cli.error(f"\nFATAL: Background execution blocked by an API Error: {err}")
                             self._drop_pending_tool_turn()
                             self.cli.error("Dropping the pending tool turn to prevent infinite API retry loop.")
@@ -1025,7 +1163,7 @@ class InteractiveCLI:
 
                 # 3. ----- @par Read user input -----
 
-                if HAS_PTK:
+                if HAS_PTK and self.prompt_session is not None:
                     cmd_input = self.prompt_session.prompt(
                         ANSI(prompt_str_ansi),
                         completer=self._build_completer(),
@@ -1040,6 +1178,7 @@ class InteractiveCLI:
 
                 if not cmd_input:
                     continue
+                # End-if
 
                 # 4. ----- @par Parse and Dispatch-----
 
@@ -1071,6 +1210,10 @@ class InteractiveCLI:
                     self._cmd_load(args)
                 elif command == 'status':
                     self._cmd_status()
+                elif command == 'tools':
+                    self._cmd_tools()
+                elif command == 'reload':
+                    self._cmd_reload()
                 elif command == 'sync':
                     self._cmd_sync(args)
                 elif command == 'remote':
@@ -1086,13 +1229,13 @@ class InteractiveCLI:
                     finally:
                         self._turn_active = False
                         self._backup_ready = False
+                        self._turn_backup = None
                     # End-try
                 elif command == 'clear':
                     self._cmd_clear()
                 else:
                     self.cli.error(f"Unknown command '{command}'. Type 'help' for available commands.")
                 # End-if
-            # End-try
 
             # 5. ----- @par Exception Handle -----
 
@@ -1110,9 +1253,11 @@ class InteractiveCLI:
                 if consecutive_errors >= 3:
                     self.cli.warning("FATAL: Too many consecutive errors. Terminating shell to prevent infinite loop.")
                     break
+                # End-if
 
                 self.cli.info("Shell recovered. Your staged message and session are preserved.")
                 continue
+            # End-try
         # End-while
     # End-def
 # End-class

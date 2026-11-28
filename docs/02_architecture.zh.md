@@ -1,457 +1,233 @@
 # Architecture of Dandelion
 
-本文档旨在划定整个 dandelion 工程的架构，重点讲述 `src` 和 `mk` 的机制，这可以让你快速了解本工程的调用结构、构建逻辑。
+本文档概述 Dandelion Monorepo 工程的整体架构，重点说明 `packages/dandelion-core/`、`src/` 与 `mk/` 三层的调用关系、原生 C++17 多协议引擎以及跨平台构建发布流程。
 
 ## 一、主体架构
 
 ### 1.1 概览
 
-暂时忽略 `.gitignore`、`.env` 等"辅助文件"，dandelion 可以被最简单地概括为：
+暂时忽略 `.gitignore`、`.env` 等辅助文件，Dandelion 采用清晰的三层 Monorepo 分层结构：
 
 ```sh
-1. main.py      # main() 函数入口
-    -> src/         # 各个子模块的源码
-2. mk/          # 编译构建脚本，同时 mk/lib/paths.py 还用于向 main.py 提供工作区根目录定位
+1. main.py                              # CLI 与 Remote 统一入口（支持 -h/--help、-v/--version、remote ...）
+    -> packages/dandelion-core/         # 独立 PyPI 包 dandelion-core（导入名 dandelion_core）
+    -> src/cli/                         # 本地终端宿主前端
+    -> src/remote/                      # 24/7 远端守护进程宿主（不打入 CLI 独立产物）
+2. mk/                                  # 本地开发与 CI 共用的统一构建脚本中心及路径定位
 ```
 
-加上其他的文件夹，那么工程可以表示为：
+包含工作区与 CI 目录的完整结构如下：
 
 ```sh
-1. main.py      # main() 函数入口
-    -> src/         # 各个子模块的源码
-    -> llm/         # 保存 skill、全局持久化记忆（llm/memory、llm/skill）
-    -> .log/        # 保存会话（sess_xxx/）、日志
-    -> .env/        # 存储 API Key、routing、SSH 设备配置（api.cfg、devices.yaml）
-2. mk/          # 编译构建脚本（Nuitka），同时提供路径定位
-3. test/        # 测试代码/用例
-4. docs/        # 项目文档
-5. .github/     # GHA workflow
+1. main.py                              # 程序入口
+    -> packages/dandelion-core/         # 独立内核 + 原生 C++17 / nanobind 多协议引擎
+    -> src/cli/                         # 终端 CLI 宿主（InteractiveCLI、CLIRuntime）
+    -> src/remote/                      # 远端服务宿主（RemoteLoop、RemoteRuntime）
+    -> src/tool/                        # 共享热插拔工具落盘目录（CLI 与 Remote 零重建自动发现）
+    -> llm/                             # Skill（llm/skill）、全局记忆（llm/memory）与提示词模板
+    -> .log/                            # 持久化会话目录（sess_xxx/）与日志
+    -> .env/                            # 运维配置（cli.cfg、remote.cfg、devices.yaml、known_hosts）
+2. mk/                                  # 统一构建与脚本中心（make.py、config/、lib/、scripts/）
+3. docs/                                # 项目文档
+4. .github/workflows/                   # GitHub Actions 工作流（ascii-check.yml、release.yml）
 ```
 
 ### 1.2 主函数
 
-`main.py` 代码相对简洁，其中主要做如下几件事：
+`main.py` 保持简洁，完成入口分发与初始化：
 
-1. 定位工作区根目录（`mk/lib/paths.py::base_dir()`）：源码运行取仓库根目录（由 `__file__` 逐级上推得到）；Nuitka 二进制运行取 `bin/` 的父目录（产物布局为 `<root>/bin/dandelion`）。该根目录是沙箱边界，且刻意不支持任何运行时环境变量/配置覆盖。
-    > 换句话说，dandelion 默认只允许对工作区根目录下的文件进行操作。越过边界的访问会触发 `BaseTool.check_workspace_permission()` 的交互式 y/N 人工审批（见[第七章](#七工具类)），而不是静默放行。
-2. 加载 `.env/` 下的配置文件（`load_api_config()`）；
-3. 初始化会话管理器（`SessionManager`，自动恢复最近使用的会话分支）；
-4. 依据配置内容构造 Main Agent（`MyAgent`，含工具注册、SubAgent 池、记忆与 Skill 管理器）；
-5. 将 Agent 和会话管理器赋值给 CLI（`InteractiveCLI`）并启动。
+1. 将 `python main.py remote ...` 分发到 `src/remote/service.py`，并直接处理 `-h`/`--help` 与 `-v`/`--version`。
+2. 定位工作区根目录（`mk/lib/paths.py::base_dir()`）：源码运行取仓库根目录，Nuitka 独立二进制运行取 `bin/` 的父目录（`<root>/bin/dandelion`）。该目录作为 CLI 沙箱边界，不支持运行时环境变量覆盖。
+   > CLI 默认仅允许访问工作区目录内的文件；越界操作会通过 `BaseTool.check_workspace_permission()` 与 `CLIRuntime.approve()` 触发交互式 y/N/C 审批（详见[第七章](#七工具类)）。
+3. 通过 `dandelion_core.utils.config.load_api_config()` 加载 `.env/cli.cfg`（兼容回退 `.env/api.cfg`）。
+4. 初始化 `SessionManager`（自动恢复最近使用的会话分支）。
+5. 构造 `MyAgent`，注入 `cli_runtime()`（`CLIRuntime`）、`CLIPromptBuilder` 与 `config_dir=config_dir()`。
+6. 启动继承 `BaseAgentHost` 的 `InteractiveCLI`。
 
-整体请求路径（各环节在后续章节展开）：
+整体调用路径：
 
 ```sh
 main.py
-  -> InteractiveCLI.run()       # CLI Loop（交互层）
-    -> _run_agent_loop()        # CLI 的停止/回滚适配
-      -> core.run_agent_loop() # 共用 Agent Loop（多轮 tool 迭代）
-        -> MyAgent.step()      # 单轮 Round-Trip（Tools Loop 的迭代）
+  -> InteractiveCLI.run()                 # CLI 宿主循环（继承 BaseAgentHost）
+    -> _run_agent_loop()                  # Stop / Rollback / Continue 中断检查点适配
+      -> dandelion_core.agent.runner.run_agent_loop()
+        -> MyAgent.step()                 # 单轮 LLM 请求与工具调度迭代
 ```
 
-Remote 以 `python -m src.remote` 启动，用阻塞 Event Loop 调用同一个 Core Agent Loop；不经过 CLI，也不自动加载终端模块。两种入口通过 `src/core/runtime.py` 注入输出、审批和取消接口。
+Remote 通过 `python main.py remote ...` 或 `python -m src.remote ...` 启动，由 `RemoteLoop(BaseAgentHost)` 注入 `RemoteRuntime(BaseRuntime)`（`sandbox=False`、`echo=False`）驱动同一个 `run_agent_loop()`，不依赖任何终端模块。
 
-## 二、构建脚本
+## 二、统一构建与脚本中心（`mk/`）
 
-`mk/` 相对简单，并且 `mk/lib/paths.py` 还为程序提供了工作区根目录定位的工作，因此我们先从项目的构建流程入手。如果你对工程构建没有兴趣，可以直接跳转到[下一章](#三src概览)。
-
-构建工具选用 Nuitka（standalone 模式），只对项目中的"小文件"进行编译；较大的文件则采用拷贝 Python 源码的方式添加到构建产物中。
-
-对于本地的构建，可以直接使用命令：
+`mk/` 是本地开发与 GitHub Actions CI 的唯一构建与脚本中心。常用本地命令如下：
 
 ```bash
-#   python mk/make.py            : full build (same as 'all')
-#   python mk/make.py clean      : remove runtime caches and build artifacts
-#   python mk/make.py all        : build standalone executable into build/
-#   python mk/make.py version    : print project name and version
-#   python mk/make.py sign       : sign Windows executable (placeholder, P3)
+python mk/make.py            # 全量 Nuitka 独立构建（等同于 all）
+python mk/make.py all        # 校验本地 dandelion-core 溯源并构建独立可执行程序到 build/dandelion/
+python mk/make.py dev        # 本地优先原子安装 packages/dandelion-core 与根项目 [dev] 依赖
+python mk/make.py native     # 编译并可编辑安装 packages/dandelion-core 原生扩展
+python mk/make.py wheel      # 打包预编译 dandelion-core .whl 到 dist/
+python mk/make.py sdist      # 打包 dandelion-core .tar.gz 源码包到 dist/
+python mk/make.py ascii      # 检查 .py/.cpp/.hpp/.h/.ps1/.sh/.yml/CMakeLists.txt 100% ASCII 规范
+python mk/make.py clean      # 清理缓存、build/、dist/、build_info.py、*.egg-info 与遗留空目录
+python mk/make.py version    # 打印项目名与版本号
+python mk/make.py sign       # Windows 可执行文件签名（占位，P3）
 ```
 
-其输出结果将输出到 `build` 文件夹下。
+Windows 本地可通过 `powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target dev|build|wheel|clean` 自动定位 MSVC 并以 CMake + Ninja 编译原生扩展。
 
-对于 GHA 构建，则通过 `.github/workflows/release.yml -> mk/make.py` 的顺序来调用（详见[2.4 节](#24-ci-构建发布)）。
-
-### 2.1 mk 的架构
-
-`mk` 文件夹下主要有如此的内容：
+### 2.1 `mk/` 目录架构
 
 ```sh
-.
-├── config                  # 配置文件夹
-│   ├── build.config            # Nuitka 配置文件（INI）
-│   └── dandelion.ico           # 二进制程序图标
-├── __init__.py             # 导出包，主要用于 main.py 读取
-├── lib                     # 辅助函数
-│   ├── build_info.py           # 构建元数据常量（由 make.py 生成，勿手改）
-│   ├── __init__.py             # 导出包
-│   └── paths.py                # 为`源码`或者`二进制`程序定位工作区根目录
-└── make.py                 # 构建主函数（Makefile 风格的 target 分发）
-```
-
-### 2.2 Nuitka 配置
-
-`mk/config/build.config` 中定义了一些基本配置，其中值得注意的是：
-
-```sh
-# Nuitka config: Do not compile these heavy SDKs and libraries to C.
-nofollow_imports = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
-
-# Custom config: Manually copy these packages to the dist folder (bypassing Nuitka).
-copy_packages = pydantic,anthropic,openai,openpyxl,tabulate,httpx,anyio,certifi,urllib3,idna,charset_normalizer,requests
-
-# Custom config: Force compile standard libraries required by the bypassed packages.
-include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree
-```
-
-为了减少编译时间，对上述的 package 指定了不编译与手动拷贝。如果需要"全编译"，可以删除这几行配置。
-
-同时，配置中的：
-
-```sh
-windows_jobs = 2
-```
-
-这里是为了避免 GHA 的 Windows 平台潜在的内存不足（MSVC 对单个编译单元堆占用大，会触发 "C1002: compiler is out of heap space"），而手动限制 `make -j` 的任务数量。
-
-此外，`[build]` 段还定义了 `entry = main.py`、`output_dir = build`、`cache_dir = .nuitka-cache`、`icon`、`company/description`（写入 Windows PE 版本资源）等；`[sign]` 段目前 `enabled = false`，对应 `make sign` 预留的软件签名。
-
-### 2.3 `mk/make.py`
-
-在文件的最下方的 `main()` 中，根据用户的输入进行不同的函数分发。对于核心构建函数 `target_all()` 来说，它按顺序执行如下的三个工作：
-
-#### 2.3.1 前置信息
-
-1. 读取元数据：通过 `_project_meta()` 从 `pyproject.toml` 中读取项目的名称、版本号；如果设置了 `DANDELION_VERSION` 环境变量（CI 中由 git tag 计算后注入，带前导 `v` 则剥离），则以其覆盖版本号。
-2. 生成静态信息：通过 `_gen_build_info()` 生成 `mk/lib/build_info.py`，该文件将编译时间、版本等放入其中作为常量，以类似于 C/C++ 中 `.h` 的方式暴露给 `main.py`，例如：
-    ```py
-        VERSION = "0.0.0-dev-260807-abc123-ci"
-        BUILD_MODE = "standalone"
-        BUILD_DATE = "2026-08-10 09:30:28"
-        PLATFORM = "linux"
-    ```
-    > 在 CI 中若设置了 `DANDELION_TARGET`（目标发行版，如 `18.04`），`PLATFORM` 会变成 `linux-x86_64-ubuntu18.04` 之类的形式，用于标识产物对应的 glibc 目标。
-
-#### 2.3.2 核心编译
-
-对于函数 `_run_nuitka()` 来说，其核心功能是将 Python 代码转换为二进制产物。对于这个函数来说：
-
-1. 首先读取相应的配置，对于 Windows 平台，则确保其 `make -j` 为 `windows_jobs`（2），避免内存溢出；
-2. 显式的配置 `anti-bloat` 插件与 `--noinclude-*-mode=nofollow`，去除 `pytest/unittest/setuptools` 等不必要的测试/构建库；
-3. 通过 `nofollow_imports` 明确 Nuitka 不应该追踪哪些大文件（`--nofollow-import-to`）；
-4. 通过 `include_std_modules` 引入哪些标准库必须包含，避免后期 C 编译时的错误；
-5. Windows 下追加 PE 版本资源（`--product-name/--product-version/--file-version`，版本号必须为纯数字，故使用 pyproject 静态版本而非 CI tag）与图标参数；
-6. 最后通过 `subprocess.run` 调用 Nuitka（`--mode=standalone`、`--include-package=src.cli`、`--include-package=src.core`、`--nofollow-import-to=src.remote`、`--include-module=mk.lib.*`），生成构建产物。
-
-#### 2.3.3 后处理
-
-由于在上一节中，为了节约编译时间和资源，我们手动排除了一些库，因此在这里我们需要重新将其引入到构建产物中。我们通过函数 `_postprocess()` 来实现这些工作。
-
-1. 目录迁移：将 Nuitka 默认生成的 `<entry>.dist`，重命名并拷贝到 `build/<name>/bin` 下；
-    > 外层是工作区，将 bin 文件包裹在内层。最终产物布局为：
-    > ```sh
-    > build/Dandelion/
-    > ├── bin/                  # 实际二进制 + 拷贝的依赖
-    > ├── .env/                 # cli.cfg（由 cli.cfg.example 预填）
-    > ├── llm/                  # memory/、skill/（空目录以 .keep 占位）
-    > ├── .log/
-    > ├── dandelion.sh/.cmd     # 启动脚本
-    > └── version.txt           # 版本号 + 可选 target=ubuntu18.04 标识
-    > ```
-2. 将之前排除的依赖项重新拷贝到 `bin` 中；
-    > `_copy_dependency_closure()` 利用 BFS 搜索相应的库、被其调用的底层库、以及 `.dist-info`，确保运行时不会出现版本校验错误。
-3. 重新引入标准库（`_copy_stdlib_fallback()`）；
-    > 以 `requests` 为例，假如我们让 Nuitka 忽略构建这个库，而这个库用到了 `ssl`。如果我们在核心代码中没有用到 `ssl`，那么可能出现遗失的问题。
-    > 因此，我们利用 Python 内置的 `ast` 扫描在 (2) 中拷贝的依赖，然后将其中被使用的标准库放入 `bin/_stdlib_fallback` 目录中）。
-4. 构建工作区：为实现"开箱即用"，在 `build/Dandelion` "根目录"下创建 `.env`、`llm/memory`、`llm/skill` 和 `.log/` 等文件夹。
-5. 生成运行脚本：为了可以在 `build/Dandelion` 这一层中运行程序，而不需要进到 `build/Dandelion/bin` 中，在外层放置了 `dandelion.cmd` 和 `dandelion.sh`，用于执行 `bin` 中的实际二进制程序；
-    > Linux 侧采用 `exec` 包装脚本而非符号链接，以避免双路径解析（`$ORIGIN` 与 Nuitka 模块目录）不一致导致的崩溃；同时若环境存在 `patchelf`，会对二进制强制 `--force-rpath --set-rpath $ORIGIN`，保证 `bin/` 内置的 libpython 等库先于 `LD_LIBRARY_PATH` 被搜索，防止外部 libpython 抢先加载。
-6. 收尾：写入 `version.txt`；遍历产物清理 `__pycache__`。
-
-### 2.4 CI 构建发布
-
-`.github/workflows/release.yml` 实现"版本计算 + 矩阵构建 + 上传产物"：
-
-1. `meta` job 计算版本：push tag 时用 `git describe --tags --match "v*"`；否则生成 `v0.0.0-dev-<yyMMdd>-<short-sha>`；非正式发布（CI中的workflow）追加 `-ci` 后缀。版本通过 `DANDELION_VERSION` 注入 `mk/make.py`。
-2. `build` job 矩阵：
-    - Windows x86_64：GitHub host runner（Nuitka + MSVC + clcache）；
-    - Linux x86_64 与 arm64：各 5 个 Ubuntu 目标（18.04/20.04/22.04/24.04/26.04），全部走 `docker-build.sh` 容器构建。
-3. 缓存策略：venv 与 Nuitka 缓存均按 `os_name-arch-distro` 隔离。
-
-## 三、src 概览
-
-`src/` 下仅有三个主包：
-
-1. `core`，公共支柱：`core/agent` 收纳 Main Agent、同步 Agent Loop、工具装配、上下文压缩、记忆与提示词；`core/runtime.py` 定义两种宿主共用的回调接口，`core/subagent` 管理子代理，`core/tool` 实现工具，`core/utils` 提供配置、日志、模型路由与 API 请求；
-2. `cli`，终端交互、命令处理、Ctrl+C 回滚，以及 `cli/sync.py` 中的手动会话备份客户端；
-3. `remote`，服务器事件循环、后台任务、会话备份接收、Telegram 和调度。
-
-CLI 和 Remote 分别依赖 Core，Core 不导入它们。Nuitka 仅显式包含 `src.cli` 和 `src.core`（连同其子包），并排除 `src.remote`。Remote 的用法见[部署说明](03_remote.zh.md)。
-
-## 四、通用类
-
-`src/core/utils` 提供配置读取、日志和 API 请求等通用方法；终端交互单独放在 `src/cli`。这里先介绍通用接口，再介绍 CLI 对共享 Agent Loop 的调用。
-
-在本章节中的[CLI 小节](#46-cli)中了解 Agent Loop 是如何实现之后，我们进入[下一章](#五agent核心设计)，查看 Agent 类的具体实现。
-
-```sh
-.
-├── config              # 配置加载
+mk/
+├── config/
+│   ├── build.config            # Nuitka 与核心包构建配置（INI）
+│   └── dandelion.ico           # Windows 二进制图标
+├── lib/
+│   ├── ascii_check.py          # 统一 ASCII 检查器（覆盖源码、脚本、CMake 与 Workflow）
+│   ├── build_info.py           # 构建元数据常量（由 make.py 生成，clean 自动清理）
+│   ├── __init__.py
+│   └── paths.py                # 源码/二进制工作区根目录定位与 stdlib fallback 挂载
+├── scripts/
+│   ├── build_curl_static.sh    # manylinux2014 静态 zlib 1.3.1 + OpenSSL 3.0.15 + libcurl 8.11.1 构建
+│   ├── build_native.ps1        # Windows MSVC（vswhere）+ CMake + Ninja 辅助脚本
+│   └── docker_build.sh         # manylinux2014 Nuitka 容器构建脚本（直接消费预编译 wheel）
 ├── __init__.py
-├── llm_provider        # API SDK 动态配置
-├── logging             # 日志/会话管理
-├── embedding.py        # 向量嵌入接口
-└── llm_request         # LLM request 与 SubAgent 模型注册表
+└── make.py                     # Makefile 风格构建入口
 ```
 
-### 4.1 配置加载 config
+### 2.2 Nuitka 配置（`mk/config/build.config`）
 
-`src/core/utils/config/config.py` 提供了读取 `.env/` 下各项配置的函数。其中：
+由于 `openai`、`anthropic`、`httpx`、`pydantic`、`anyio` 等重型 Python SDK 已彻底移除并由原生 C++17 引擎替代，`mk/config/build.config` 仅旁路拷贝少量轻量依赖与数据模块：
 
-1. `load_api_config()` 读取 `api.cfg`：
-2. `load_devices_config()` 读取 `devices.yaml`，包含 SSH 设备的别名、地址、认证方式等，在 `src/core/tool/shell/ssh_tool.py` 中的执行阶段被调用（LLM 只可见别名，不可见凭据）。
+```ini
+nofollow_imports = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
+copy_packages = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
+include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree,ssl,hmac,uuid,decimal,lzma,bz2
+```
 
-### 4.2 日志与会话 logging
+Windows 下通过 `windows_jobs = 2` 限制 MSVC 并行编译单元，避免触发 `C1002: compiler is out of heap space`。
 
-`src/core/utils/logging/logger.py`（`AgentLogger`）主要职责是将程序运行中的数据写入日志文件（按天 `YYYY_MM_DD.log`），供上层 `SessionManager` 复用同一套序列化逻辑：
+### 2.3 `mk/make.py` 独立构建流程（`target_all`）
+
+1. **本地内核溯源校验（`_verify_local_core_installed`）**：检查 `dandelion-core` 的 PEP 610 `direct_url.json`，强制确保其来自本仓库 `packages/dandelion-core`、`dist-wheels/` 或 `dist/`（防止误打入 PyPI 版本；显式设置 `DANDELION_ALLOW_EXTERNAL_CORE=1` 可豁免）。
+2. **元数据生成（`_gen_build_info`）**：读取 `pyproject.toml`（CI 可通过 `DANDELION_VERSION` / `DANDELION_TARGET` 覆盖），生成 `mk/lib/build_info.py`。
+3. **核心编译（`_run_nuitka`）**：调用 Nuitka `--mode=standalone`，显式包含 `--include-package=src.cli`、`--include-package=dandelion_core`、`--include-package-data=dandelion_core`、`--include-module=_bisect`、`--include-module=mk.lib.*`，并排除 `--nofollow-import-to=src.remote` 与 `--nofollow-import-to=src.tool`（保持插件工具可编辑热插拔）。Windows PE 版本号通过 `_extract_numeric_pe_version()` 提取纯数字版本。
+4. **后处理（`_postprocess`）**：
+   - 将 `main.dist` 迁入 `build/dandelion/bin/`；
+   - 复制 `copy_packages` 依赖闭包与精简纯 `.py` 标准库（排除 `test/`、`tkinter/`、`site-packages/`、`lib-dynload/` 与原生动态库）到 `bin/_stdlib_fallback/`，使构建后零重建落盘的工具可直接 `import imaplib`/`smtplib`/`email.*` 等标准库；
+   - 初始化 `.env/`、`llm/{memory,skill,sysprompt}/`、`tool/`、`.log/`，复制 `src/tool/` 与 `src/cli/tool/` 中的用户插件到 `tool/`，预填 `.env/cli.cfg`，并跳过 Remote 专属的 `llm/sysprompt/remote.md`；
+   - 生成支持符号链接解引用的 `dandelion.sh`（Linux）或 `dandelion.cmd`（Windows），strip ELF 并用 `patchelf` 强制 `DT_RPATH=$ORIGIN`。
+
+### 2.4 CI 构建、PyPI 发布与 3 产物发行矩阵
+
+`.github/workflows/release.yml` 串联完整发布流水线：
+
+1. **`meta`**：tag 推送时精确取 `${GITHUB_REF_VALUE#refs/tags/}`，严格校验 PEP 440 版本与数字 PE 版本，并对 `-alpha`/`-beta`/`-rc` 自动标记 `prerelease`。
+2. **`build-core-wheels` 与 `build-core-sdist`**：基于 `pypa/cibuildwheel@v4.3` 在 `manylinux2014`（`glibc 2.17`，`x86_64` & `aarch64`，通过 `mk/scripts/build_curl_static.sh` 静态链接缓存的 `zlib 1.3.1` + `OpenSSL 3.0.15` + 极简 HTTP/HTTPS `libcurl 8.11.1`）与 `windows-latest`（`AMD64`，系统 WinHTTP）产出 `cp311-cp311` 与向后/向前兼容的 `cp312-abi3` Wheel，随后在 `ubuntu:18.04`、`almalinux:8`、`ubuntu:24.04`（不装 `libcurl4`，直接按本地 `.whl` 路径安装并校核 PEP 610 `direct_url.json` 与 SHA-256、`ldd`、`importlib.resources`、`SSHTool`、5 协议与真实 OS CA TLS 握手）及 Windows Python 3.11/3.13 隔离环境中全量验证。
+3. **`build`（精简 3 产物 Nuitka 矩阵）**：分别构建 `dandelion-win-x86_64`、`dandelion-linux-x86_64`（`quay.io/pypa/manylinux2014_x86_64`）与 `dandelion-linux-aarch64`（`quay.io/pypa/manylinux2014_aarch64`）。Linux 侧通过 `mk/scripts/docker_build.sh` 直接消费预编译 `cp311` Wheel（零 C++ 重复编译、校验 `direct_url.json`、保留 `prompt-toolkit`），并将同一份二进制依次放入 `ubuntu:18.04`、`almalinux:8`、`ubuntu:24.04` 容器中落盘临时 `tool/smoke_imap_tool.py` 执行热插拔冒烟测试。
+4. **`publish-pypi` 与 `release`**：仅当全部 Wheel 验证、sdist 与 3 份独立产物冒烟均通过后，在 `v*` tag 上先由 `publish-pypi` 通过 OIDC Trusted Publishing 发布 `dandelion-core` 至 PyPI，再由 `release` 将 3 份独立 zip 压缩包连同 Wheel/sdist 上传至 GitHub Releases。
+
+## 三、包分层概览
+
+1. **`packages/dandelion-core/src/dandelion_core/`（`dandelion-core`）**：前端无关内核，包含 `agent/`、`subagent/`、`tool/`、`utils/`、`data/sysprompt/`、`runtime.py`（`BaseRuntime`、`DefaultRuntime`）、`host.py`（`BaseAgentHost`）与 `sync_protocol.py`。
+2. **`src/cli/`**：终端宿主（`InteractiveCLI(BaseAgentHost)`、`CLIRuntime(BaseRuntime)`、`CLIPromptBuilder(BasePromptBuilder)`、`SessionSync`、`CLIPrinter`）。
+3. **`src/remote/`**：服务器守护进程宿主（`RemoteLoop(BaseAgentHost)`、`RemoteRuntime(BaseRuntime)`、`RemotePromptBuilder(BasePromptBuilder)`、SQLite WAL 存储、Telegram/HTTP 通道、后台作业与 Remote 工具）。
+
+CLI 与 Remote 单向依赖 `dandelion_core`；`dandelion_core` 不导入任何 `src.*` 或 `mk.*`。
+
+## 四、通用能力（`dandelion_core/utils`）
 
 ```sh
-Agent/SubAgent -> log_api_call() -> `.log/`
+dandelion_core/utils/
+├── config/             # load_api_config()、load_remote_config()、load_devices_config()
+├── embedding.py        # 可插拔文本向量嵌入接口
+├── llm_provider/       # 原生 C++17 + nanobind 多协议 HTTP/SSE 引擎
+│   ├── __init__.py     # create_provider() 与 certifi CA 兜底挂载
+│   ├── blocks.py       # 规范 Block、PartialStreamError、RequestCancelledError
+│   ├── effort.py       # 跨协议 effort 与 Sub2API flavor 映射（含 xhigh）
+│   └── native/         # 14 个 C++17 源码/头文件（5 协议编解码 + libcurl/WinHTTP 传输）
+├── llm_request/        # SafeLLMClient 与 SubAgent ModelRegistry
+└── logging/            # SessionManager 与原子 SessionBackup
 ```
 
-`src/core/utils/logging/session.py`（`SessionManager`）则为 CLI 实现了会话管理功能，每一个会话都以 `sess_yyyymmdd_hhmmss_ms` 的格式存放在 `.log/` 下。每一个会话文件夹下的内容有如下内容：
+### 4.1 配置加载（`config`）
 
-```log
-.
-├── api.log
-├── archives/            # （压缩时产生）上下文完整备份，追加式、可恢复
-├── artifacts
-│   ├── call_00_52wgHo88lnWaSbwa1LVi0390.txt
-│   ├── call_00_d3RYUb6puaMqEbF6qHPz5544.txt
-│   ├── ...
-│   └── call_01_QwIjMQ4IxwJxKq6P2WP18965.txt
-├── history.log
-├── memory
-│   ├── feat_staged_retry_decisions.md
-│   ├── feat_staged_retry_impl_status.md
-│   ├── feat_staged_retry_recheck_status.md
-│   └── MEMORY.md
-├── meta.log
-├── staged.md            # （有草稿时产生）CLI 暂存区草稿
-└── task_state.json
+`dandelion_core/utils/config/config.py` 提供 `load_api_config()`、`load_remote_config()` 以及支持显式注入 `config_dir`（默认 `<workspace_dir>/.env`，彻底解耦 `mk.lib.paths`）的 `load_devices_config()`。
+
+### 4.2 日志与会话（`logging`）
+
+运行期请求/响应记录由 `SessionManager.log_api_call()` 追加写入当前会话的 `api.log`（超过 20 MB 自动轮转为 `api.log.old`）：
+
+```sh
+Agent/SubAgent -> SessionManager.log_api_call() -> .log/sess_xxx/api.log
 ```
 
-其中：
+`dandelion_core/utils/logging/session.py`（`SessionManager`）管理会话分支目录（`api.log`、`archives/`、`artifacts/`、`history.log`、`memory/`、`meta.log`、`staged.md`、`task_state.json`）；`backup.py`（`SessionBackup`）支持包括跨 `prune_context(rollover=True)` 会话轮转在内的原子回滚恢复。
 
-1. `api.log` 记录了每一次 Agent 向 LLM 的 request 以及其回复的原始数据（json 格式）；
-2. `artifacts/` 下是 tool call 的大输出产物。`agent.step()` 对任何工具输出超过 8000 字符（`MAX_INLINE_CHARS`）时，将完整结果落盘为 `<tool_use_id>.txt`，上下文内只保留截断后的前 8000 字符加"输出已保存到 <绝对路径>"的指针，LLM 可用 read_file 按需分次读取，从而避免上下文爆炸、推迟压缩；
-3. `history.log` 是完整的消息数组（`messages`，含 user/assistant/tool_result 块以及注入的 `[Dandelion Context]` 块），是每次构建 payload 的持久化来源，压缩与恢复均基于它；
-4. `memory/` 下包含了 LLM 认为需要存放的 session（local）层记忆，随会话分支隔离；
-5. `meta.log` 保留了会话本身的信息；
-6. `task_state.json` 是 LLM 自己规划的任务，包含目标（target）、代办（todos）、已完成（completed）三个内容，用于保持 LLM 的注意力；
-7. `archives/` 与 `staged.md` 并非所有会话都有：前者在上下文压缩时产生，后者在 `vim`/`load` 编辑草稿后产生。
+### 4.3 原生多协议引擎（`llm_provider`）
 
-### 4.3 各 API 请求 llm_provider
+`dandelion_core/utils/llm_provider/` 以 C++17 + `nanobind`（Python >= 3.12 启用 `cp312-abi3` 稳定 ABI）直接通过 `libcurl`（POSIX，运行时自动探测系统 CA 并以 `certifi` 兜底）或 `WinHTTP`（Windows）实现五大协议：
 
-`src/core/utils/llm_provider` 下针对 OpenAI 和 Anthropic 的不同 SDK/API 请求格式进行了派生。其中 `base.py` 提供了通用的基类方法，剩下的几个类由它派生而来，`SafeLLMClient._create_provider()` 按 `SDK_TYPE` 选择。
+1. `api_messages.cpp`：Anthropic Messages API（`/v1/messages`）
+2. `api_chat_completions.cpp`：OpenAI Chat Completions（`/v1/chat/completions`，含 DeepSeek `reasoning_content` 完整回放与 OpenAI 推理模型参数适配）
+3. `api_responses.cpp`：OpenAI Responses API（`/v1/responses`，无状态 `store=false` + `reasoning.encrypted_content`）
+4. `api_generate_content.cpp`：Gemini `generateContent` / `streamGenerateContent`
+5. `api_interactions.cpp`：Gemini `v1beta/interactions`
 
-对于 Anthropic API 来说，其中 DeepSeek 使用的 Reasoning Effort (Think Level) 采用 OpenAI 风格的 `low`、`med`、`high` 等字符，而不是像 Anthropic 一样使用 Think Budget（`thinking/effort` 注入逻辑在 Provider 内完成）。
+五大协议统一支持约 75ms 级协作中断轮询（`cancelled` 回调 -> `RequestCancelledError`）及跨协议 `compat` / `effort`（`low`/`medium`/`high`/`xhigh`/`max`，支持 `gemini-4-neon` 的 `xhigh` 档位）注入。
 
-对于 OpenAI 来说，其实现了基本的框架与内容，后续需要更新为 Response API（TODO）。注：Google/Gemini 已全部通过 OpenAI-compatible 规范接入，移除了原生 Google SDK。
+### 4.4 SubAgent 模型注册表与请求层（`llm_request`）
 
-### 4.4 SubAgent 模型注册表 model_registry
+`dandelion_core/utils/llm_request/model_registry.py` 将 `[Main] SUB_LIST` 模型清单通过 `BaseDelegationTool` 暴露为工具 Schema 枚举与目录（Let LLM Decide）。`SafeLLMClient` 在发送前执行原生 `normalize_messages()`，将 `self.runtime.cancelled` 透传至 `_native.Provider`，并在 SubAgent 侧严格不做静默跨模型 fallback。
 
-`src/core/utils/llm_request/model_registry.py`（`ModelRegistry` 与 `RegistryModelSpec`）遵循 Let LLM Decide 设计原则：不再通过程序侧的关键词正则猜测模型类别，而是按 `[Main] SUB_LIST` 顺序保存每个可用子模型的 `name`、`description`（`basic.description`）、输出上限 `max_tokens`、思考模式以及多模态能力配置（`media_exts` / `media_limits`）。
+### 4.5 CLI 宿主（`src/cli/`）
 
-子模型的名称与 `description` 会像工具/Skill 目录一样直接注入到委派工具（`spawn_subagent` 与 Remote 的 `submit_task`）的描述与 `model` 枚举 Schema 中，由调用方 Agent LLM 结合当前完整上下文自主决定调用哪一个子模型。
+`InteractiveCLI(BaseAgentHost)`（`src/cli/cli.py`）结合 `prompt_toolkit` 与 `CLIRuntime(BaseRuntime)`（`src/cli/runtime.py`）提供 Git 风格会话操作、启动/`checkout` 自动悬挂工具修复以及统一 `SIGINT` 菜单（`[S]top` / `[R]ollback` / `[C]ontinue`），支持实时中止在途原生流并在选择 `[C]ontinue` 时无损续跑。
 
-### 4.5 LLM 请求 llm_request
-
-`src/core/utils/llm_request` 核心职责是为程序发送 request 到 LLM，其流程如下：
-
-```py
-# - Main Agent
-#      MyAgent.step() -> payload -> SafeLLMClient.safe_stream_request() -> default provider (Main Agent's Model) -> request to LLM
-# - Sub Agent
-#      SubAgent.run() -> SafeLLMClient.subagent_request(model_alias, payload) -> cached provider -> request to LLM
-```
-
-其中：
-
-1. Main Agent 将在它自身的 Tool iterate 中直接通过 `safe_stream_request()` 向 LLM 发起 request 请求；
-2. SubAgent 则通过 `subagent_request(model_alias, payload)` 精确调用父 Agent 选定的目标模型，自动限制在该子模型自身的 `spec.max_tokens` 范围内；
-3. 无论哪条路径，发送前都会做消息归一化 `_normalize_messages()`：将相邻的同 role 消息合并（例如压缩摘要产生的连续 user 消息），满足 Anthropic/Gemini 对严格角色交替的要求；
-4. 错误处理策略：
-    - Main Agent：1 次初始 + `_LLM_RETRY_COUNT=3` 次重试，指数退避 `(2, 4, 8)` 秒；
-    - SubAgent：不做跨模型静默 fallback。若选定的子模型请求失败，直接将包含模型名与原因的错误消息原样返回给父级 Agent（CLI/子代理工具结果或 Remote 的 `job_done` 事件），由上级 LLM 自主决定重试、切换其他子模型或自行处理。
-
-### 4.6 CLI
-
-`src/cli/printer.py` 提供了终端彩色打印的功能，无其他核心功能。
-
-`src/cli/cli.py` 基于 `prompt_toolkit`（缺失时降级为普通 `input`），模仿 git 风格的命令行控制，提供了一套交互式的 CLI。其中值得关注的点有：
-
-1. `_build_completer()` 中定义了命令以及其补全的次级命令；
-2. `run()` 中通过死循环实现"CLI Loop"，其内部又分为两层：
-    ```sh
-        # Interactive **CLI** Loop
-        run(True)
-            # **Agent** Loop
-            -> _run_agent_loop()
-                # Call **Tools** Loop/Iterate
-                -> agent.step()
-    ```
-    其中 `_run_agent_loop()` 在两种时机被调用：`commit` 命令发送消息后的工具循环；以及 `run()` 每次等待输入前对 history 尾部的"后台检查"——若发现最后一条是 tool_result（上次中断遗留的未完成工具轮次），则先自动续跑 Agent Loop，失败则丢弃该悬挂的 "tool_use/tool_result 对"，避免下一次请求 400；
-3. staged 暂存区：`vim`/`load` 编辑的消息先写入当前会话的 `staged.md`，提示符中以 `*` 显示脏标记。
-
-## 五、Agent 核心设计
-
-`src/core/agent/` 集中保存 Main Agent 的实现：`agent.py` 执行单轮请求与工具迭代，`runner.py` 提供同步 Agent Loop，`tools.py` 装配 Main 与 Worker 工具，其余模块负责提示词、记忆、上下文压缩与 Skill。跨宿主的输出、审批和取消接口仍独立放在 `src/core/runtime.py`；手动备份客户端归入 `src/cli/sync.py`。下面从 `sysprompt` 入手介绍，再阅读 SubAgent 的设计。
+## 五、Agent 核心设计（`dandelion_core/agent/`）
 
 ```text
-src/core/
-├── agent/       # Main Agent、循环、上下文与工具装配
-├── subagent/    # 同步委派、路由结果与并发分发
-├── tool/        # 具体工具及工具基类
-├── utils/       # 配置、日志、LLM 请求与模型路由
-├── runtime.py   # 宿主提供的输出、审批、取消回调
-└── __init__.py  # 按需导出的公共入口
+packages/dandelion-core/src/dandelion_core/
+├── agent/              # MyAgent、runner、tools、sysprompt、memory、skill、compress、prune、interrupt
+├── data/sysprompt/     # 通过 importlib.resources 加载的内置模板（remote.md）
+├── subagent/           # ISubAgent、SubAgent、SubAgentPool、dispatch、registry、result
+├── tool/               # BaseTool、BaseDelegationTool、MediaToolBase、ShellCommandGuard 与具体工具
+├── utils/              # config、logging、embedding、llm_provider（_native）、llm_request
+├── runtime.py          # BaseRuntime(ABC)、DefaultRuntime / Runtime
+├── host.py             # BaseAgentHost(ABC)
+├── sync_protocol.py    # CLI <-> Remote 共用的会话同步线协议
+└── __init__.py         # 延迟加载的公共导出
 ```
 
-### 5.1 sysprompt
+### 5.1 系统提示词（`sysprompt.py`）
 
-Dandelion 的 sysprompt 被以常量的方式定义在 `src/core/agent/sysprompt.py`（`PromptBuilder`）中，而不是采用文件加载的方式来实现。对于 sysprompt，其中的拼接方式是：
+`BasePromptBuilder(ABC)`（`dandelion_core/agent/sysprompt.py`）保持静态系统提示词字节级恒定以最大化 KV 前缀缓存命中率，动态上下文（记忆索引、被动召回与 `task_state.json`）由 `MyAgent._inject_dynamic_context()` 渲染为 `[Dandelion Context]` 附加在最新纯文本 user 消息尾部。`DefaultPromptBuilder`、`CLIPromptBuilder` 与 `RemotePromptBuilder` 共享 `_build_subagent_orchestration_section()`、`_build_skills_section()`、`_build_language_section()` 与 `_build_memory_section()`，模板加载优先读 `<workspace_dir>/llm/sysprompt/`，缺省回退至 `importlib.resources` 打包资源。
 
-1. 首先，定义 `[Dandelion]` 身份与环境信息，以便于 LLM 使用正确的 shell 命令；
-2. 其次，如果启用了 SubAgent，那么添加相应的 SubAgent 调用规则；
-3. 接着，拼接 Skill 目录；
-4. 然后，定义安全规则、语言策略、回复文本风格；
-5. 最后，明确 Memory 系统使用指南（双层记忆、`[Dandelion Context]` 块语义、`remember`/`update_state` 工具用法）。
+### 5.2 Skill、双层记忆与上下文治理
 
-需要强调的是：为了最大程度提高缓存命中率，**动态内容**（记忆索引、相关记忆摘要、task state）并没有直接插入到 `system` 中，而是由 `agent._inject_dynamic_context()` 渲染为 `[Dandelion Context]` 块追加在最新纯文本 user 消息的结尾。这样，system prompt 在整个会话期间保持字节级不变，DeepSeek 等提供方的前缀缓存可以在工具循环的各轮迭代间持续命中。整个 request 的构建就像是：
+- **Skill（`dandelion_core/agent/skill.py`）**：扫描 `llm/skill/` 目录，由 `LoadSkillTool` 按需加载全文。
+- **双层记忆（`dandelion_core/agent/memory.py`）**：全局（`llm/memory/`）+ 会话隔离（`.log/sess_<id>/memory/`）混合向量/关键词检索；全仓源码、脚本与工作流的 ASCII 规范由 `python mk/make.py ascii`（`mk/lib/ascii_check.py`）统一守门。
+- **上下文压缩与裁剪（`compress.py`、`prune.py`）**：响应式溢出/预算压缩（`ContextCompressor`）配合 LLM 主动调用的 `prune_context`（含支持原子回滚的 `rollover=True` 会话轮转）。
 
-```json
-{
-    "system": "You are Dandelion, ......",
-    "messages": [
-        {
-            "role": "user",
-            "content": "用户输入或者 Tools 调用结果。[Dandelion Context (auto-injected reference data)]\nRelevant Memories: ...... [Dandelion Context End]"
-        },
-    ],
-}
-```
+## 六、子代理设计（`dandelion_core/subagent/`）
 
-### 5.2 skill
+`ISubAgent(ABC)`、`SubAgent`、`SubAgentPool`、`TOOLSET_REGISTRY` 与并发调度器 `dandelion_core/subagent/dispatch.py` 支持有界递归委派（`SUB_DEPTH`）、零 LLM 确定性 DAG 与互斥文件校验（`plan_tool`）、波次并行执行（`SUB_CONCURRENCY`）以及按子模型能力动态裁剪/重绑定的多模态工具（`MediaToolBase`）。
 
-`src/core/agent/skill.py`（`SkillManager`）负责将 `llm/skill` 下的各 skill 文件扫描注册为"名称 -> 描述/内容"的目录，`get_catalog()` 将 `- name: description` 列表插入到 sysprompt 中。如果 LLM 需要读取 skill 全文，则通过 `load_skill` 工具（`LoadSkillTool`）按名称获取。
+## 七、工具类（`dandelion_core/tool/`）
 
-### 5.3 memory
+所有工具继承 `BaseTool(ABC)`（`dandelion_core/tool/base_tool.py`），统一实现 `get_name()`、`get_description()`、`get_schema()` 与 `execute(**kwargs)`；委派类工具（`SpawnSubagentTool`、`RestrictedSpawnTool` 与 Remote 的 `SubmitTaskTool`）继承 `BaseDelegationTool(BaseTool, ABC)`。
 
-Dandelion 的记忆管理可以简要地分为：
+工具层安全防线分为两类：
 
-1. 索引：`agent._render_dynamic_context()` -> `MemoryManager.get_index_text()`；
-2. 读取：`agent._get_memories()` -> `MemoryManager.load_memories_string()`；
-3. 写入：`MemoryTool.execute()` -> `MemoryManager.write_memory()`；
+1. `BaseTool` 提供通用路径沙箱检查、通过 `runtime.approve()` 触发的交互审批、审批后路径二次核验（`_prepare_path()`）以及 POSIX `O_NOFOLLOW` 安全打开（`_open_secure()`），并在 CLI 沙箱下额外保护 `.env/`、`tool/`、`src/tool/`、`src/cli/tool/`、`src/remote/tool/` 及自定义 `TOOL_DIRS`。
+2. Shell 工具（`BashTool`、`SSHTool`）共享 `ShellCommandGuard`（`dandelion_core/tool/shell/shell_guard.py`），以单趟引号感知词法分析器精确处理转义、heredoc/here-string、重定向、子 Shell、命令/参数替换、通配符/花括号、包装动词以及归一化敏感/设备/插件目录路径拦截。
 
-同时，记忆分为两层：
+### 7.1 零重建热插拔工具架构（`src/tool/`）
 
-1. Global：存放在 `llm/memory` 下，跨会话持久（编码风格、架构决策、用户偏好）；
-2. Local：存放在 `.log/sess_<id>/memory/` 下，随会话分支隔离，`checkout` 切换会话时通过 `session_manager` 动态解析目录，无需重建 agent。
+无需修改 `packages/dandelion-core` 或重新构建 C++/Nuitka，只需编写单个 `.py` 文件或子包并放入以下任一锚定目录（永不扫描不可信 `os.getcwd()`）：
 
-记忆写入的目录（层级）由 LLM 通过 `remember` 工具的 `scope` 参数（`global`/`session`）指定；session 层未配置时写入 session 层会明确报错，而不是落盘在 global 中。
+1. `<root>/src/tool/`：CLI 与 Remote 共享的扩展工具；
+2. `<root>/src/cli/tool/` 或 `<root>/src/remote/tool/`：宿主专属扩展工具；
+3. `<root>/tool/`（如 Nuitka 独立产物 `dandelion.sh` / `dandelion.cmd` 同级目录）与 `[Main] TOOL_DIRS` 自定义目录。
 
-值得注意的是，为了方便 LLM 进行索引（提取），记忆中的内容均采用英文（ASCII）撰写（语言策略）。在 `src/core/agent/memory.py` 中，以 `class MemoryManager` 的形式将记忆的读、写进行了封装；工具层（`remember`/`update_state`）会拒绝非 ASCII 输入并提示翻译，`test/ascii_check.py` 则保证源码/记忆文件本身不混入非 ASCII。详细的函数调用链可以在 `@file` 部分注释中查看。
-
-### 5.4 agent
-
-`src/core/agent/agent.py` 中定义了 Main Agent（`MyAgent`）所需要的全部功能。在前述的[CLI 小节](#46-cli)中我们可以看到，agent 中的 `step()` 并不是传统意义上的 Agent Loop，而是每一次 Agent Loop 中的、针对 Tools 的 Loop/Iterate。因此，让我们直接从 `step()` 开始阅读。
-
-#### 5.4.1 step()
-
-1. 首先，我们构造 sysprompt；
-2. 其次，如果最新消息是纯文本 user 消息，则注入动态上下文（`[Dandelion Context]`）；工具循环迭代因最新消息是 tool_result 则不会重复注入；
-3. 然后，进行上下文管理：检查 token 预算，如果超过软上限则压缩（详见 5.4.2）；
-4. 接着，构建 payload；
-5. 之后，进行 request；
-6. 最后，根据 LLM 的返回结果（`stop_reason == "tool_use"` 时），顺序执行所有工具调用，将结果写入 result 并追加回 history；单个工具输出超过 8000 字符时执行大输出 Offload（见 4.2）。
-
-于是，我们完成了这一次的 `step()`。如果 LLM 任务没有到结束，那么通过 `step()` 的返回值（`continue_loop`），CLI 会判断：是发起下一次 `step()`，继续循环；还是将结束 Agent Loop，将终端交还给用户。
-
-#### 5.4.2 上下文压缩
-
-Dandelion 上下文的 token 计算并没有引入分词器，而是简单地通过 `_estimate_tokens()` 进行启发式估算（ASCII 约 4 字符/token，CJK 约 1.5 字符/token）。上下文的软上限在 `_soft_token_limit()` 中计算：
-
-```py
-soft_limit = MAX_CONTEXT_TOKENS - MAX_TOKENS - 固定开销(sysprompt + tool schemas)
-```
-
-即：上下文窗口是"共享"的（最大上下文 = 历史上下文 + 为LLM设置的最大输出 + 本次输入），因此压缩阈值提前为输出预算与固定开销留出空间，避免 provider 返回 400 context-length 错误。
-
-压缩在 `_compact_context()` 中实现：
-
-1. 备份：将完整 history 以追加式 JSON 写入会话的 `archives/history_<len>_<时间戳>.json`；
-2. 选择压缩范围：head 取前 5 条（并确保不以未配对的 assistant tool_use 结尾），recent 取最近 15 条之内、以"最近的纯文本 user 消息"为安全断点（保证 tool_use/tool_result 配对不被拆散）；找不到安全断点则只保留 head + summary；
-3. 通过 LLM 构建摘要（独立请求，XML 格式输出：goals/completed/decisions/artifacts/pending，摘要输入超过 200k 字符时截断中间部分；失败则回落基础剪断）；
-4. 以 `head + summary(user 角色) + recent` 的形式重写 history 并持久化，同时失效记忆缓存；
-5. 压缩后校验：若仍超限（如 MAX_CONTEXT_TOKENS 配置过小），打印一次显式告警，避免每轮重复触发摘要调用。
-
-## 六、子代理设计
-
-子 agent 的设计大致如下：
-
-```sh
-.
-├── pool.py             # SubAgent "池"（调度器，由 MyAgent 持有）
-├── registry.py         # 工具集注册机（TOOLSET_REGISTRY + resolve_toolset）
-├── result.py           # SubAgent 与 parent 之间传递消息的数据结构
-├── i_subagent.py       # 虚基类（ISubAgent，为特化 subagent 保留接口）
-└── subagent.py         # "通用" subagent（SubAgent，实际实现）
-```
-
-`i_subagent` 旨在为特化 subagent 保留相同的调用接口，例如，我们期望通过特化的 subagent 来撰写相应的报告文档。在 `subagent.py` 内部，同样与 Main Agent 一样有 sysprompt、agent-loop 等机制，但是省去了复杂的上下文、记忆管理：
-
-1. 每一个 subagent 都在 `run()` 中完成它的全部工作（上限 100 轮工具迭代），然后将结果封装为 `SubAgentResult` 返回；
-2. 深度采用 1-based 语义：Main Agent 为 0，直接子代理为 1，subsubagent 为 2；上限由配置文件的 `[Main] SUB_DEPTH` 指定（默认 1，Remote 默认 2，0 表示禁用子代理）。只有 `depth < max_depth` 且 `SUB_LIST` 非空时才会同时注入 `PlanTool` 与受限的 `RestrictedSpawnTool`；`SubAgentPool.create_and_run()` 对超出 `1..SUB_DEPTH` 或未知 `model` 的派生一律返回失败结果，作为不可绕过的最后防线；
-3. 每个 subagent 有一个专属的 ID（`sa-<hex>`），以便于 pool 进行管理、为 parent 界定返回值与日志记录；
-4. 子代理按所选 `model_spec` 的多模态能力（`media_exts` / `media_limits`）独立挂载或裁剪 `read_pdf` 与 `read_image`，同时保留逻辑工具集以便纯文本父级子代理仍可将多模态子任务继续委派给多模态下级子代理；
-5. LLM 请求走 `subagent_request(model_alias, payload)`，模型由父级 Agent 根据 `SUB_LIST` 各模型的 `basic.description` 显式选定，复杂拆解由调用方 Agent 先经 `plan_tool` 完成模型、工具集、DAG 无环依赖以及并行写文件冲突校验；
-6. 并发：同一轮响应中连续的多个 `spawn_subagent` 由 `src/core/subagent/dispatch.py` 并行执行（上限 `[Main] SUB_CONCURRENCY`，默认 4），其他工具作为屏障按原顺序串行执行。若当前子代理未运行在并行 worker 线程内（如 Remote 后台任务），其派生的下一层子代理同样支持有界并发；已在并行 worker 线程内的嵌套调用则自动降为串行以防线程膨胀。
-
-`pool.py` 创建了一个 agent 池（`SubAgentPool`，`MyAgent` 持有的单例）来管理 subagents。工具集注册表 `registry.py` 预定义了五类（`minimal`/`filesystem`/`code_analysis`/`data_processing`/`full`），LLM 通过名称引用。通常来说，subagent 的调用方式为：
-
-```sh
-Main Agent (Root)
-    # 不生成 subsubagent
-    -> plan_tool:                               # 主 Agent 基于完整上下文提交计划并完成严格校验
-    -> SpawnSubagentTool(model=...):            # 显式指定子模型并调用 agent 池
-        -> pool.create_and_run:                 # 校验 depth / model / toolset
-            -> resolve_toolset:                 # 获取工具集并按子模型裁剪媒体工具
-            -> SubAgent.run:                    # SubAgent-Loop
-        <- parent.sub_results.append(result)    # 返回结果（失败亦原样回灌供上级决策）
-    # 生成 subsubagent (SUB_DEPTH >= 2，如 Remote 后台子代理)
-    -> plan_tool:
-    -> SpawnSubagentTool / SubmitTaskTool(model=...):
-        -> pool.create_and_run:
-            -> SubAgent.run (depth=1):
-                -> plan_tool:                               # 二级编排严格校验
-                -> RestrictedSpawnTool(model=...):          # 生成 subsubagent（depth=2）
-                    -> pool.create_and_run:                 # SubSubAgent-Loop
-                    <- parent.sub_results.append(result)
-        <- parent.sub_results.append(result)
-```
-
-详细设计可以参考相应代码中的注释部分。
-
-## 七、工具类
-
-`src/core/tool` 下的工具类都由 `base_tool.py`（`BaseTool`）派生而来，通过 `get_name()/get_description()/get_schema()/execute()` 四个接口向 Agent 暴露，注册于 `MyAgent._init_tools()`。
-
-安全模型（沙箱保护）是工具层最重要的横切关注点：
-
-1. `BaseTool` 中实现了大部分基于路径的沙箱保护：
-    - 检查目标路径是否严格位于工作区根目录内，越界时弹出交互式 y/N 人工审批；
-    - `_prepare_path()` 在审批后对解析路径做二次校验；
-    - `_open_secure()` 在 POSIX 下使用 `O_NOFOLLOW` 打开文件，防止审批后最终组件被符号链接交换而逃逸；
-2. 少部分针对特殊工具（比如 shell）的防护则在派生类中增加额外的成员函数进行保护：
-    - `bash` 工具：黑名单子串（`../`、`/etc`、`.env`、`~/` 等）+ 分词后的路径 token 沙箱检查；120 秒超时、输出 50KB 截断；
-    - `ssh` 工具：适用于对嵌入式设备的远程控制，因此采用命令匹配而非目录控制的方式来进行管理（比如，我可能想要访问 `/etc/init.d/` 下的各种启动脚本）。
+内核侧由 `ToolContext`、`BaseTool.create_instance()`（按 `__init__` 签名自动依赖注入）、`ToolLoader`（基于 `importlib.util.spec_from_file_location` 故障隔离加载与防内置覆盖）及实例级 `ToolsetRegistry` 统一驱动；插件可在 `.env/cli.cfg` 或 `.env/remote.cfg` 中使用 `[Tool:<name>]` 声明配置。CLI 提供 `tools` 与 `reload` 实时热重载命令，Remote 在 `JobManager.submit()` 遇新 `toolset` 时自动刷新注册表且后台 Worker 每次执行均动态发现工具。
