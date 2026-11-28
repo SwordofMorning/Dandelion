@@ -24,7 +24,7 @@ CURL_VER="8.11.1"
 CURL_TAG="8_11_1"
 CURL_SHA256="a889ac9dbba3644271bd9d1302b5c22a088893719b72be3487bc3d401e5c4e80"
 
-STAMP="${PREFIX}/.built-zlib${ZLIB_VER}-ssl${OPENSSL_VER}-curl${CURL_VER}-v2-$(uname -m)"
+STAMP="${PREFIX}/.built-zlib${ZLIB_VER}-ssl${OPENSSL_VER}-curl${CURL_VER}-v3-$(uname -m)"
 
 if [ -f "$STAMP" ] \
     && [ -f "${PREFIX}/lib/libz.a" ] \
@@ -36,9 +36,16 @@ if [ -f "$STAMP" ] \
 fi
 
 # Perl modules required by OpenSSL 3.x Configure on CentOS 7 (manylinux2014).
+# Align with pypa/manylinux's own build-openssl.sh by installing perl-core on yum-based images
+# (CentOS 7 bundles FindBin inside base perl rather than a separate perl-FindBin RPM).
 echo "[*] Ensuring Perl build modules for OpenSSL 3.x on CentOS 7 (manylinux2014)"
 if ! perl -MIPC::Cmd -MData::Dumper -MFindBin -MTime::Piece -e '1' 2>/dev/null; then
-    yum install -y -q perl-IPC-Cmd perl-Data-Dumper perl-FindBin perl-Time-Piece
+    if command -v yum >/dev/null 2>&1; then
+        if ! yum install -y -q perl-core; then
+            command -v fixup-mirrors >/dev/null 2>&1 && fixup-mirrors || true
+            yum install -y -q perl-core
+        fi
+    fi
 fi
 if ! perl -MIPC::Cmd -MData::Dumper -MFindBin -MTime::Piece -e '1' 2>/dev/null; then
     echo "[-] FATAL: Required Perl modules (IPC::Cmd, Data::Dumper, FindBin, Time::Piece) are missing for OpenSSL 3.x Configure." >&2
@@ -84,9 +91,9 @@ curl -fsSL --retry 3 --max-time 300 \
 verify_sha256 openssl.tar.gz "$OPENSSL_SHA256"
 tar -xzf openssl.tar.gz
 cd "openssl-${OPENSSL_VER}"
-./Configure no-shared no-dso no-tests no-docs no-apps -fPIC -fvisibility=hidden \
+./Configure no-shared no-dso no-afalgeng no-tests -fPIC -fvisibility=hidden \
     --prefix="${PREFIX}" --libdir=lib --openssldir=/etc/ssl
-make -j"${NPROC}"
+make -j"${NPROC}" build_sw
 make install_sw
 
 # 3. Static minimal HTTP/HTTPS-only libcurl 8.11.1
@@ -112,7 +119,6 @@ CFLAGS="-O2 -fPIC -fvisibility=hidden" \
     --prefix="${PREFIX}" \
     --libdir="${PREFIX}/lib" \
     --disable-shared --enable-static \
-    --disable-curl \
     --with-openssl="${PREFIX}" \
     --with-zlib="${PREFIX}" \
     --disable-ldap --disable-ldaps --disable-ftp --disable-file \
@@ -122,8 +128,10 @@ CFLAGS="-O2 -fPIC -fvisibility=hidden" \
     --without-libidn2 --without-libpsl --without-librtmp --without-gssapi \
     --without-brotli --without-zstd --without-nghttp2 --without-libssh2 \
     --without-ca-bundle --without-ca-path
-make -j"${NPROC}"
-make install
+make -j"${NPROC}" -C lib
+make -C lib install
+make -C include install
+make install-pkgconfigDATA
 
 touch "$STAMP"
 echo "[+] Static zlib ${ZLIB_VER} + OpenSSL ${OPENSSL_VER} + libcurl ${CURL_VER} installed to ${PREFIX}"
