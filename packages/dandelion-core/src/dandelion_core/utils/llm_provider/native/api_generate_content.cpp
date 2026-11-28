@@ -621,6 +621,29 @@ public:
                 gen["thinkingConfig"] = tc;
             }
         }
+        else if (m_cfg.thinking == "disabled" && m_flavor != "none")
+        {
+            std::string bare_low = Lower(m_bare_model);
+            if (StartsWith(bare_low, "gemini-2.5-flash"))
+            {
+                nb::dict tc;
+                tc["thinkingBudget"] = 0;
+                gen["thinkingConfig"] = tc;
+            }
+            else if (IsGemini25(m_bare_model))
+            {
+                nb::dict tc;
+                tc["thinkingBudget"] = 128;
+                gen["thinkingConfig"] = tc;
+            }
+            else if (!IsLegacyGemini(m_bare_model))
+            {
+                const char* level = (Contains(bare_low, "gemini-3") && Contains(bare_low, "flash")) ? "MINIMAL" : "LOW";
+                nb::dict tc;
+                tc["thinkingLevel"] = level;
+                gen["thinkingConfig"] = tc;
+            }
+        }
         if (nb::len(gen) > 0)
         {
             body["generationConfig"] = gen;

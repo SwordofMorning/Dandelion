@@ -14,7 +14,7 @@ import uuid
 from ..runtime import Runtime
 from .subagent import SubAgent
 from .result import SubAgentResult
-from .registry import resolve_toolset
+from .registry import ToolsetRegistry
 
 
 ##
@@ -24,12 +24,34 @@ class SubAgentPool:
     ##
      # @brief Constructor.
      #
-    def __init__(self, safe_client, logger, config, all_tools, max_depth=1, runtime=None, workspace_dir=None):
+     # @param safe_client SafeLLMClient used for worker requests.
+     # @param logger SessionManager or compatible API call logger.
+     # @param config Loaded configuration dictionary.
+     # @param all_tools Mapping of tool_name -> BaseTool available to workers.
+     # @param max_depth Maximum SubAgent delegation recursion depth.
+     # @param runtime Optional Runtime callbacks for output, cancellation and approval.
+     # @param workspace_dir Optional workspace root directory.
+     # @param toolset_registry Optional instance-scoped ToolsetRegistry.
+     #
+     # @return None.
+     #
+    def __init__(
+        self,
+        safe_client,
+        logger,
+        config,
+        all_tools,
+        max_depth=1,
+        runtime=None,
+        workspace_dir=None,
+        toolset_registry=None,
+    ):
         self.safe_client = safe_client
         self.logger = logger
         self.config = config
         self.all_tools = all_tools
         self.runtime = runtime if runtime is not None else Runtime()
+        self.toolset_registry = toolset_registry if toolset_registry is not None else ToolsetRegistry()
         if workspace_dir:
             self.workspace_dir = workspace_dir
         else:
@@ -125,7 +147,7 @@ class SubAgentPool:
 
         # 3. Toolset gate.
         try:
-            tools = resolve_toolset(toolset_name, self.all_tools, parent_tools)
+            tools = self.toolset_registry.resolve(toolset_name, self.all_tools, parent_tools)
         except ValueError as e:
             err_msg = f"{e!s}"
             self.logger.log_api_call(f"SUBAGENT:{subagent_id} INIT ERROR", {"error": err_msg})
@@ -134,7 +156,7 @@ class SubAgentPool:
                 "Failed to initialize SubAgent. Invalid toolset.",
                 err_msg, start_time, model_spec.alias,
             )
-        # End-except
+        # End-try
 
         # 4. Construct and run SubAgent.
         subagent = None

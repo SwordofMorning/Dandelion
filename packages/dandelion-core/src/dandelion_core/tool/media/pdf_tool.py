@@ -129,7 +129,9 @@ class ReadPdfTool(MediaToolBase):
 
         # Page probe + conservative cost. The page count is also the page limit gate.
         cost_factor = float(self.media_limits.get("pdf_cost_factor", 1.2))
-        cost, pages, page_source = estimate_pdf_cost(resolved, factor=cost_factor)
+        tokens_per_page = int(self.media_limits.get("pdf_tokens_per_page", TOKENS_PER_PDF_PAGE))
+        cost, pages, page_source = estimate_pdf_cost(
+            resolved, factor=cost_factor, tokens_per_page=tokens_per_page)
 
         max_pages = int(self.media_limits.get("max_pdf_pages", 100))
         if pages > max_pages:
@@ -156,6 +158,7 @@ class ReadPdfTool(MediaToolBase):
      # @param size_bytes File size.
      #
     def _too_many_pages_message(self, display_path, pages, max_pages, size_bytes):
+        tokens_per_page = int(self.media_limits.get("pdf_tokens_per_page", TOKENS_PER_PDF_PAGE))
         return (
             f"Error: '{display_path}' has {pages} pages ({human_size(size_bytes)}), "
             f"above the single-request limit of {max_pages} pages. This tool cannot "
@@ -163,7 +166,7 @@ class ReadPdfTool(MediaToolBase):
             f"(toolset=\"filesystem\") and ask the SubAgent to read the file and "
             f"extract only the needed parts; (2) ask the user which page matters so a "
             f"smaller extract can be provided. Do NOT call read_pdf on the same file "
-            f"again. (For reference the model charges about {TOKENS_PER_PDF_PAGE} "
+            f"again. (For reference the model charges about {tokens_per_page} "
             f"tokens per page.)"
         )
     # End-def

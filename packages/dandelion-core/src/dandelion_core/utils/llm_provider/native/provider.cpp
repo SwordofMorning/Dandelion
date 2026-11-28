@@ -458,11 +458,16 @@ nb::object Provider::ExtractText(nb::object content) const
         {
             continue;
         }
+        std::string text = TextOf(Field(block, "text"));
+        if (text.empty())
+        {
+            continue;
+        }
         if (!first)
         {
             out += "\n";
         }
-        out += TextOf(Field(block, "text"));
+        out += text;
         first = false;
     }
     return SafeUtf8Str(out);

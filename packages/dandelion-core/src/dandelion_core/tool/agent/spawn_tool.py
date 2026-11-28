@@ -8,7 +8,7 @@
  #
 
 from .base_delegation_tool import BaseDelegationTool
-from ...subagent.registry import TOOLSET_REGISTRY
+from ...subagent.registry import ToolsetRegistry
 
 
 ##
@@ -59,6 +59,8 @@ class SpawnSubagentTool(BaseDelegationTool):
      # @return JSON Schema dictionary.
      #
     def get_schema(self):
+        ts_registry = getattr(self.pool, "toolset_registry", None)
+        toolset_names = ts_registry.names() if ts_registry is not None else ToolsetRegistry().names()
         return {
             "type": "object",
             "properties": {
@@ -69,7 +71,7 @@ class SpawnSubagentTool(BaseDelegationTool):
                 },
                 "toolset": {
                     "type": "string",
-                    "enum": list(TOOLSET_REGISTRY.keys()),
+                    "enum": toolset_names,
                     "description": "Name of the pre-defined toolset for this subagent.",
                 },
                 "role_prompt": {
@@ -183,6 +185,8 @@ class RestrictedSpawnTool(BaseDelegationTool):
      # @return JSON Schema dictionary.
      #
     def get_schema(self):
+        ts_registry = getattr(self.pool, "toolset_registry", None)
+        toolset_names = ts_registry.names() if ts_registry is not None else ToolsetRegistry().names()
         return {
             "type": "object",
             "properties": {
@@ -193,7 +197,7 @@ class RestrictedSpawnTool(BaseDelegationTool):
                 },
                 "toolset": {
                     "type": "string",
-                    "enum": list(TOOLSET_REGISTRY.keys()),
+                    "enum": toolset_names,
                     "description": "Name of the pre-defined toolset for this nested subagent.",
                 },
                 "role_prompt": {

@@ -10,7 +10,14 @@
 
 import sys
 
-from mk.lib.paths import base_dir, config_dir, config_path, log_dir
+from mk.lib.paths import (
+    base_dir,
+    config_dir,
+    config_path,
+    log_dir,
+    protected_plugin_dirs,
+    tool_dirs,
+)
 
 # Build metadata
 try:
@@ -71,6 +78,7 @@ def main(argv=None):
     session_mgr = SessionManager(log_dir=log_dir())
 
     # 3. Init Agent
+    extra_tool_dirs = config.get("TOOL_DIRS")
     agent = MyAgent(
         config=config,
         session_manager=session_mgr,
@@ -78,6 +86,9 @@ def main(argv=None):
         runtime=cli_runtime(),
         prompt_builder_cls=CLIPromptBuilder,
         config_dir=config_dir(),
+        host="cli",
+        tool_dirs=tool_dirs("cli", extra_tool_dirs),
+        protected_dirs=protected_plugin_dirs(extra_tool_dirs),
     )
 
     print(f"[+] Agent Initialization Successful. Model: {config.get('NAME', config['MODEL_ID'])}")

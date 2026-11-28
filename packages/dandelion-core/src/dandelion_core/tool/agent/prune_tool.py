@@ -26,6 +26,8 @@ from ..base_tool import BaseTool
  # @brief Tool enabling the Agent to proactively prune or roll over its conversation session.
  #
 class PruneContextTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #

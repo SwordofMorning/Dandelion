@@ -23,6 +23,7 @@ Including workspace and CI directories, the repository layout is:
     -> packages/dandelion-core/         # Standalone Core + native C++17/nanobind LLM engine
     -> src/cli/                         # Terminal CLI host (InteractiveCLI, CLIRuntime)
     -> src/remote/                      # Remote server daemon host (RemoteLoop, RemoteRuntime)
+    -> src/tool/                        # Shared zero-rebuild hot-plug tool drop-in directory
     -> llm/                             # Skills (llm/skill), global memories (llm/memory), prompt templates
     -> .log/                            # Persisted sessions (sess_xxx/) and logs
     -> .env/                            # Operator configs (cli.cfg, remote.cfg, devices.yaml, known_hosts)
@@ -63,7 +64,8 @@ Common local commands:
 
 ```bash
 python mk/make.py            # Full Nuitka standalone build (same as 'all')
-python mk/make.py all        # Build standalone executable into build/dandelion/
+python mk/make.py all        # Verify local dandelion-core provenance & build standalone into build/dandelion/
+python mk/make.py dev        # Atomic local-first editable install of packages/dandelion-core + root [dev]
 python mk/make.py native     # Build & editable-install packages/dandelion-core native extension
 python mk/make.py wheel      # Build precompiled dandelion-core .whl into dist/
 python mk/make.py sdist      # Build dandelion-core .tar.gz source distribution into dist/
@@ -73,7 +75,7 @@ python mk/make.py version    # Print project name and version
 python mk/make.py sign       # Sign Windows executable (placeholder, P3)
 ```
 
-On Windows, local MSVC + CMake + Ninja builds can also use `powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target build|wheel|clean`.
+On Windows, local MSVC + CMake + Ninja builds can also use `powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target dev|build|wheel|clean`.
 
 ### 2.1 Architecture of `mk/`
 
@@ -102,19 +104,20 @@ Because heavy Python LLM SDKs (`openai`, `anthropic`, `httpx`, `pydantic`, `anyi
 ```ini
 nofollow_imports = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
 copy_packages = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
-include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree
+include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree,ssl,hmac,uuid,decimal,lzma,bz2
 ```
 
 On Windows, `windows_jobs = 2` limits MSVC parallel heap usage to avoid `C1002: compiler is out of heap space`.
 
 ### 2.3 `mk/make.py` Standalone Pipeline (`target_all`)
 
-1. **Metadata (`_gen_build_info`)**: Reads `pyproject.toml` (overridden by `DANDELION_VERSION` / `DANDELION_TARGET` in CI) and writes `mk/lib/build_info.py`.
-2. **Compilation (`_run_nuitka`)**: Invokes Nuitka `--mode=standalone` with `--include-package=src.cli`, `--include-package=dandelion_core`, `--include-package-data=dandelion_core`, `--nofollow-import-to=src.remote`, `--include-module=_bisect`, and `--include-module=mk.lib.*`. Windows PE resources extract a purely numeric version via `_extract_numeric_pe_version()`.
-3. **Post-Processing (`_postprocess`)**:
+1. **Local Core Provenance Guard (`_verify_local_core_installed`)**: Validates `dandelion-core`'s PEP 610 `direct_url.json` to ensure it points inside `packages/dandelion-core`, `dist-wheels/`, or `dist/` (preventing accidental PyPI packaging unless `DANDELION_ALLOW_EXTERNAL_CORE=1` is explicitly set).
+2. **Metadata (`_gen_build_info`)**: Reads `pyproject.toml` (overridden by `DANDELION_VERSION` / `DANDELION_TARGET` in CI) and writes `mk/lib/build_info.py`.
+3. **Compilation (`_run_nuitka`)**: Invokes Nuitka `--mode=standalone` with `--include-package=src.cli`, `--include-package=dandelion_core`, `--include-package-data=dandelion_core`, `--nofollow-import-to=src.remote`, `--nofollow-import-to=src.tool`, `--include-module=_bisect`, and `--include-module=mk.lib.*`. Windows PE resources extract a purely numeric version via `_extract_numeric_pe_version()`.
+4. **Post-Processing (`_postprocess`)**:
    - Moves `main.dist` into `build/dandelion/bin/`.
-   - Copies the dependency closure of `copy_packages` (including `.dist-info`) and `.py`-only stdlib fallbacks into `bin/_stdlib_fallback/` (never copying host `lib-dynload/*.so` binaries).
-   - Creates `.env/`, `llm/{memory,skill,sysprompt}/`, `.log/`, pre-fills `.env/cli.cfg`, and omits Remote-only `llm/sysprompt/remote.md` from CLI standalone bundles.
+   - Copies the dependency closure of `copy_packages` (including `.dist-info`) and the lean pure-`.py` standard library (excluding `test/`, `tkinter/`, `site-packages/`, `lib-dynload/`, and native binaries) into `bin/_stdlib_fallback/` so post-build hot-plugged tools can import `imaplib`, `smtplib`, `email.*`, etc. without rebuilding Nuitka.
+   - Creates `.env/`, `llm/{memory,skill,sysprompt}/`, `tool/`, `.log/`, copies drop-in plugins from `src/tool/` and `src/cli/tool/` into `tool/`, pre-fills `.env/cli.cfg`, and omits Remote-only `llm/sysprompt/remote.md` from CLI standalone bundles.
    - Generates symlink-safe `dandelion.sh` (Linux) or `dandelion.cmd` (Windows), strips ELF binaries, and forces `DT_RPATH=$ORIGIN` via `patchelf`.
 
 ### 2.4 CI Build, PyPI Publish, and 3-Artifact Release
@@ -122,9 +125,9 @@ On Windows, `windows_jobs = 2` limits MSVC parallel heap usage to avoid `C1002: 
 `.github/workflows/release.yml` runs a unified pipeline:
 
 1. **`meta`**: Resolves exact pushed tag (`${GITHUB_REF_VALUE#refs/tags/}`), validates PEP 440 version + numeric Windows PE version, and detects pre-releases (`-alpha`/`-beta`/`-rc`).
-2. **`build-core-wheels` & `build-core-sdist`**: Uses `pypa/cibuildwheel@v3` on `manylinux2014` (`glibc 2.17`, `x86_64` & `aarch64`, statically linking cached `zlib 1.3.1` + `OpenSSL 3.0.15` + minimal HTTP/HTTPS `libcurl 8.11.1` via `mk/scripts/build_curl_static.sh`) and `windows-latest` (`AMD64`, WinHTTP). Produces `cp311-cp311` and forward-compatible `cp312-abi3` wheels, then verifies them on Python `3.11` and `3.13` inside `ubuntu:18.04`, `almalinux:8`, `ubuntu:24.04` (without `libcurl4`, checking `ldd`, `importlib.resources`, `SSHTool`, all 5 protocols, and verified OS CA TLS) and Windows.
-3. **`build` (Streamlined 3-Artifact Nuitka Matrix)**: Builds `dandelion-win-x86_64` (Windows host), `dandelion-linux-x86_64` (`quay.io/pypa/manylinux2014_x86_64`), and `dandelion-linux-aarch64` (`quay.io/pypa/manylinux2014_aarch64`) via `mk/scripts/docker_build.sh`, consuming the prebuilt `cp311` wheel with zero C++ recompile while preserving `prompt-toolkit`. Each Linux binary is smoke-tested inside `ubuntu:18.04`, `almalinux:8`, and `ubuntu:24.04` containers.
-4. **`publish-pypi` & `release`**: On `v*` tags, publishes `dandelion-core` via OIDC Trusted Publishing only after all wheel tests AND all 3 standalone builds pass, then uploads the 3 standalone zips plus wheels/sdist to GitHub Releases.
+2. **`build-core-wheels` & `build-core-sdist`**: Uses `pypa/cibuildwheel@v4.3` on `manylinux2014` (`glibc 2.17`, `x86_64` & `aarch64`, statically linking cached `zlib 1.3.1` + `OpenSSL 3.0.15` + minimal HTTP/HTTPS `libcurl 8.11.1` via `mk/scripts/build_curl_static.sh`) and `windows-latest` (`AMD64`, WinHTTP). Produces `cp311-cp311` and forward-compatible `cp312-abi3` wheels, then verifies them by direct local `.whl` path (asserting PEP 610 `direct_url.json` + SHA-256) on Python `3.11` and `3.13` inside `ubuntu:18.04`, `almalinux:8`, `ubuntu:24.04` (without `libcurl4`, checking `ldd`, `importlib.resources`, `SSHTool`, all 5 protocols, and verified OS CA TLS) and Windows.
+3. **`build` (Streamlined 3-Artifact Nuitka Matrix)**: Builds `dandelion-win-x86_64` (Windows host), `dandelion-linux-x86_64` (`quay.io/pypa/manylinux2014_x86_64`), and `dandelion-linux-aarch64` (`quay.io/pypa/manylinux2014_aarch64`) via `mk/scripts/docker_build.sh`, consuming the prebuilt `cp311` wheel with zero C++ recompile and strict `direct_url.json` verification while preserving `prompt-toolkit`. Each standalone binary is smoke-tested with a post-build drop-in `tool/smoke_imap_tool.py` (`import imaplib`) on Windows and inside `ubuntu:18.04`, `almalinux:8`, and `ubuntu:24.04` containers.
+4. **`publish-pypi` & `release`**: On `v*` tags, `publish-pypi` publishes `dandelion-core` via OIDC Trusted Publishing only after all wheel tests AND all 3 standalone builds pass, after which `release` uploads the 3 standalone zips plus wheels/sdist to GitHub Releases.
 
 ## 3. Package Layout Overview
 
@@ -221,5 +224,15 @@ All tools inherit `BaseTool(ABC)` (`dandelion_core/tool/base_tool.py`) implement
 
 Security boundaries at the tool layer:
 
-1. `BaseTool` enforces workspace path checks, interactive approval via `runtime.approve()`, post-approval path re-verification (`_prepare_path()`), and `O_NOFOLLOW` opens (`_open_secure()`).
-2. Shell tools (`BashTool`, `SSHTool`) share `ShellCommandGuard` (`dandelion_core/tool/shell/shell_guard.py`) — a single-pass quote-aware shell lexer handling escapes, heredocs/here-strings, redirections, subshells, command/parameter substitutions, globs/braces, wrapper verbs, and normalized sensitive/device path checks.
+1. `BaseTool` enforces workspace path checks, interactive approval via `runtime.approve()`, post-approval path re-verification (`_prepare_path()`), `O_NOFOLLOW` opens (`_open_secure()`), and CLI sandbox write-protection over `.env/`, `tool/`, `src/tool/`, `src/cli/tool/`, `src/remote/tool/`, and custom `TOOL_DIRS`.
+2. Shell tools (`BashTool`, `SSHTool`) share `ShellCommandGuard` (`dandelion_core/tool/shell/shell_guard.py`) — a single-pass quote-aware shell lexer handling escapes, heredocs/here-strings, redirections, subshells, command/parameter substitutions, globs/braces, wrapper verbs, and normalized sensitive/device/plugin-dir path checks.
+
+### 7.1 Zero-Rebuild Hot-Plugged Tools (`src/tool/`)
+
+Drop any single-file `.py` module or multi-file plugin package subclassing `BaseTool` into an anchored operator directory (never scanning untrusted `os.getcwd()`) without touching `packages/dandelion-core` or rebuilding C++/Nuitka:
+
+1. `<root>/src/tool/`: shared plugins loaded by both CLI and Remote;
+2. `<root>/src/cli/tool/` or `<root>/src/remote/tool/`: host-specific plugins;
+3. `<root>/tool/` (e.g. next to `dandelion.sh` / `dandelion.cmd` in standalone artifacts) and optional `[Main] TOOL_DIRS`.
+
+Core discovery is powered by `ToolContext`, signature-binding `BaseTool.create_instance()`, fault-isolated `ToolLoader` (`importlib.util.spec_from_file_location`), and instance-scoped `ToolsetRegistry`. Plugin settings can be placed under `[Tool:<name>]` in `.env/cli.cfg` or `.env/remote.cfg`. CLI exposes `tools` and `reload` commands for live mid-session reloads, while Remote refreshes `ToolsetRegistry` dynamically in `JobManager.submit()` and discovers plugins per background worker execution.

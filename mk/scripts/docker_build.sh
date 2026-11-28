@@ -44,7 +44,7 @@ fi
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "[*] Installing uv (pinned release, sha256-verified, no pipe-to-sh)"
-  UV_VERSION="0.11.16"
+  UV_VERSION="0.13.10"
   UV_ARCH="$(uname -m)"
   case "$UV_ARCH" in
     x86_64)
@@ -95,23 +95,39 @@ if [ ! -x /work/venv/bin/python ]; then
 fi
 
 echo "[*] Install prebuilt dandelion-core cp311 wheel + root deps & dev extras (preserving prompt-toolkit)"
-WHEEL_FILE="$(ls /work/dist-wheels/dandelion_core-*cp311*.whl 2>/dev/null | head -1 || true)"
-if [ -n "$WHEEL_FILE" ]; then
-  echo "[+] Using prebuilt wheel: $WHEEL_FILE"
-  uv pip install --python /work/venv/bin/python \
-    --find-links /work/dist-wheels \
-    --only-binary=dandelion-core \
-    --reinstall-package dandelion-core \
-    "$WHEEL_FILE" \
-    -e ".[dev]"
-else
-  echo "[-] Error: prebuilt cp311 dandelion-core wheel not found in /work/dist-wheels"
+shopt -s nullglob
+wheels=(/work/dist-wheels/dandelion_core-*-cp311-*.whl)
+if [ "${#wheels[@]}" -ne 1 ]; then
+  echo "[-] Error: expected exactly 1 prebuilt cp311 wheel in /work/dist-wheels, found ${#wheels[@]}"
   ls -la /work/dist-wheels 2>/dev/null || true
   exit 1
 fi
+WHEEL_FILE="${wheels[0]}"
+EXPECTED_WHEEL_SHA256="$(sha256sum "$WHEEL_FILE" | awk '{print $1}')"
+echo "[+] Using prebuilt wheel: $WHEEL_FILE"
+uv pip install --python /work/venv/bin/python \
+  --reinstall-package dandelion-core \
+  "$WHEEL_FILE" \
+  -e ".[dev]"
+uv pip install --python /work/venv/bin/python \
+  --no-deps --reinstall \
+  "$WHEEL_FILE"
 
-# Sanity check before Nuitka: verify both dandelion_core._native and prompt_toolkit are installed.
-/work/venv/bin/python -c "import prompt_toolkit, dandelion_core; from dandelion_core.utils.llm_provider import _native; print('[+] Verified env:', _native.__file__)"
+# Sanity check before Nuitka: verify prompt_toolkit, _native, and strict local wheel provenance.
+EXPECTED_WHEEL_SHA256="$EXPECTED_WHEEL_SHA256" /work/venv/bin/python -c '
+import importlib.metadata as m, json, os, prompt_toolkit, dandelion_core
+from dandelion_core.utils.llm_provider import _native
+raw = m.distribution("dandelion-core").read_text("direct_url.json")
+assert raw, "Missing PEP 610 direct_url.json (non-local dandelion-core)"
+du = json.loads(raw)
+url = du.get("url", "")
+assert url.startswith("file:///work/dist-wheels/"), f"Non-local dandelion-core: {du}"
+exp = os.environ.get("EXPECTED_WHEEL_SHA256", "")
+act = du.get("archive_info", {}).get("hashes", {}).get("sha256", "")
+if exp and act:
+    assert act == exp, f"Wheel SHA256 mismatch: {act} != {exp}"
+print("[+] Verified local wheel env:", _native.__file__, url)
+'
 
 if ! command -v patchelf >/dev/null 2>&1; then
   echo "[*] Installing patchelf from PyPI"

@@ -21,6 +21,8 @@ from ...utils.embedding import EmbeddingError
  # @brief Memory Class.
  #
 class MemoryTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #
@@ -95,9 +97,11 @@ class MemoryTool(BaseTool):
 
         if not name or not content:
             return False, "Error: name and content are required."
+        # End-if
 
         if scope not in ("global", "session"):
             return False, f"Error: scope must be 'global' or 'session', got '{scope}'."
+        # End-if
 
         # @note Write-time UTF-8/ASCII fallback guard: 'name' and 'scope' must
         # always be ASCII identifiers. 'description', 'tags', and 'content' may
@@ -131,6 +135,7 @@ class MemoryTool(BaseTool):
             # Disk-level failures (ENAMETOOLONG survivors, permission errors,
             # full disk) must never crash the agent turn.
             return False, f"Error: failed to write memory file: {e}"
+        # End-try
         if success:
             # No content echo: the model just generated this content and the
             # [Dandelion Context] block refreshes at the next user turn, so
@@ -153,6 +158,8 @@ class MemoryTool(BaseTool):
  # the global or active-session tier.
  #
 class ForgetMemoryTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #
@@ -248,6 +255,8 @@ class ForgetMemoryTool(BaseTool):
  # @brief Active semantic/keyword memory search tool.
  #
 class MemorySearchTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #

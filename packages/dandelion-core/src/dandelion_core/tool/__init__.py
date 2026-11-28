@@ -2,12 +2,16 @@
  # @file packages/dandelion-core/src/dandelion_core/tool/__init__.py
  # @date 2026/11/28
  #
- # @brief Built-in tool catalog for Agent runtimes.
- # Exports BaseTool, BaseDelegationTool, ShellCommandGuard, and all concrete
- # shell, filesystem, document, media, web, system, and agent-operation tools.
+ # @brief Built-in tool catalog and hot-plug extension loader exports.
+ # Exports BaseTool, ToolContext, ToolLoader, DiscoveryResult, ToolsetRegistry,
+ # BaseDelegationTool, ShellCommandGuard, and all concrete shell, filesystem,
+ # document, media, web, system, and agent-operation tools.
  #
 
 from .base_tool import BaseTool
+from .context import ToolContext
+from .loader import ToolLoader, DiscoveryResult, PROTECTED_CORE_TOOLS
+from ..subagent.registry import ToolsetRegistry
 from .shell.shell_guard import ShellCommandGuard
 from .shell.bash_tool import BashTool
 from .shell.ssh_tool import SSHTool
@@ -32,6 +36,11 @@ from .media.image_tool import ReadImageTool
 
 __all__ = [
     "BaseTool",
+    "ToolContext",
+    "ToolLoader",
+    "DiscoveryResult",
+    "PROTECTED_CORE_TOOLS",
+    "ToolsetRegistry",
     "BaseDelegationTool",
     "ShellCommandGuard",
     "BashTool",

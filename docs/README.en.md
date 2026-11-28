@@ -11,7 +11,8 @@ A CLI-style Agent tool powered by the standalone `dandelion-core` PyPI package (
 ## 1. Features
 
 - CLI-based interaction with no GUI;
-- Standalone `dandelion-core` package with precompiled binary wheels (`pip install dandelion-core`) for Ubuntu 18.04–26.04, CentOS 8+ / AlmaLinux 8+, and Windows — no local C++ toolchain required;
+- Standalone `dandelion-core` package with strict local-first monorepo development (`python mk/make.py dev`) plus precompiled binary wheels (`pip install dandelion-core`) for Ubuntu 18.04–26.04, CentOS 8+ / AlmaLinux 8+, and Windows;
+- Zero-rebuild tool hot-plugging: drop any `BaseTool` module or package into `src/tool/`, `src/cli/tool/`, `src/remote/tool/`, or `<install>/tool/` next to the standalone binary without editing `dandelion-core` or rebuilding (CLI includes `tools` and `reload` commands);
 - Native C++17 LLM provider engine with zero heavy SDK dependencies (`openai`, `anthropic`, `httpx`, `pydantic`, and `python-dotenv` removed);
 - Comprehensive logging, Git-style session branches, and unified `Stop` / `Rollback` / `Continue` turn interruption;
 - Manual backup of raw session history and metadata to Remote;
@@ -36,24 +37,29 @@ cd Dandelion
 It is recommended to manage your environment with `conda` or `venv`:
 
 ```bash
-# Option A: Install prebuilt dandelion-core wheel from PyPI + local CLI/Remote (no C++ compiler needed)
+# Option A (Recommended, Local-First): Atomic editable install of local packages/dandelion-core + root [dev]
+python mk/make.py dev
+# Equivalent pip command:
+# pip install -e packages/dandelion-core -e ".[dev]"
+# Or with uv (root pyproject.toml pins [tool.uv.sources] to local packages/dandelion-core):
+# uv sync --extra dev
+
+# Option B (Fallback without a local C++ compiler): Prebuilt dandelion-core wheel from PyPI + local CLI/Remote
 pip install dandelion-core
-pip install -e .
+pip install --no-deps -e .
+pip install prompt-toolkit requests
 
-# Option B: Build the native C++ extension from local source and install dev tools
-python mk/make.py native
-pip install -e ".[dev]"
-
-# Windows PowerShell helper for local native builds (CMake + Ninja + MSVC)
-powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target build
+# Windows PowerShell helper for local native builds & dev install (CMake + Ninja + MSVC)
+powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target dev
 ```
 
 Unified `mk/make.py` targets:
 
 ```bash
-python mk/make.py native   # Build and editable-install packages/dandelion-core
+python mk/make.py dev      # Local-first editable install of packages/dandelion-core + root [dev]
+python mk/make.py native   # Build and editable-install packages/dandelion-core only
 python mk/make.py wheel    # Build precompiled dandelion-core .whl into dist/
-python mk/make.py all      # Build Nuitka standalone executable into build/dandelion/
+python mk/make.py all      # Verify local dandelion-core provenance and build Nuitka standalone into build/dandelion/
 python mk/make.py ascii    # Verify 100% ASCII policy across .py/.cpp/.hpp/.h files
 python mk/make.py clean    # Clean caches, build/, dist/, and empty legacy dirs
 ```

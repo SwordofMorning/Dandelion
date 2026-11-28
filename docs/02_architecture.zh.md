@@ -23,6 +23,7 @@
     -> packages/dandelion-core/         # 独立内核 + 原生 C++17 / nanobind 多协议引擎
     -> src/cli/                         # 终端 CLI 宿主（InteractiveCLI、CLIRuntime）
     -> src/remote/                      # 远端服务宿主（RemoteLoop、RemoteRuntime）
+    -> src/tool/                        # 共享热插拔工具落盘目录（CLI 与 Remote 零重建自动发现）
     -> llm/                             # Skill（llm/skill）、全局记忆（llm/memory）与提示词模板
     -> .log/                            # 持久化会话目录（sess_xxx/）与日志
     -> .env/                            # 运维配置（cli.cfg、remote.cfg、devices.yaml、known_hosts）
@@ -61,7 +62,8 @@ Remote 通过 `python main.py remote ...` 或 `python -m src.remote ...` 启动�
 
 ```bash
 python mk/make.py            # 全量 Nuitka 独立构建（等同于 all）
-python mk/make.py all        # 构建独立可执行程序到 build/dandelion/
+python mk/make.py all        # 校验本地 dandelion-core 溯源并构建独立可执行程序到 build/dandelion/
+python mk/make.py dev        # 本地优先原子安装 packages/dandelion-core 与根项目 [dev] 依赖
 python mk/make.py native     # 编译并可编辑安装 packages/dandelion-core 原生扩展
 python mk/make.py wheel      # 打包预编译 dandelion-core .whl 到 dist/
 python mk/make.py sdist      # 打包 dandelion-core .tar.gz 源码包到 dist/
@@ -71,7 +73,7 @@ python mk/make.py version    # 打印项目名与版本号
 python mk/make.py sign       # Windows 可执行文件签名（占位，P3）
 ```
 
-Windows 本地可通过 `powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target build|wheel|clean` 自动定位 MSVC 并以 CMake + Ninja 编译原生扩展。
+Windows 本地可通过 `powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target dev|build|wheel|clean` 自动定位 MSVC 并以 CMake + Ninja 编译原生扩展。
 
 ### 2.1 `mk/` 目录架构
 
@@ -100,19 +102,20 @@ mk/
 ```ini
 nofollow_imports = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
 copy_packages = openpyxl,tabulate,certifi,urllib3,idna,charset_normalizer,requests,tzdata
-include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree
+include_std_modules = http.cookies,http.cookiejar,email.parser,email.message,html.parser,urllib.parse,urllib.request,urllib.error,csv,ctypes,sqlite3,xml.etree.ElementTree,ssl,hmac,uuid,decimal,lzma,bz2
 ```
 
 Windows 下通过 `windows_jobs = 2` 限制 MSVC 并行编译单元，避免触发 `C1002: compiler is out of heap space`。
 
 ### 2.3 `mk/make.py` 独立构建流程（`target_all`）
 
-1. **元数据生成（`_gen_build_info`）**：读取 `pyproject.toml`（CI 可通过 `DANDELION_VERSION` / `DANDELION_TARGET` 覆盖），生成 `mk/lib/build_info.py`。
-2. **核心编译（`_run_nuitka`）**：调用 Nuitka `--mode=standalone`，显式包含 `--include-package=src.cli`、`--include-package=dandelion_core`、`--include-package-data=dandelion_core`、`--include-module=_bisect`、`--include-module=mk.lib.*`，并排除 `--nofollow-import-to=src.remote`。Windows PE 版本号通过 `_extract_numeric_pe_version()` 提取纯数字版本。
-3. **后处理（`_postprocess`）**：
+1. **本地内核溯源校验（`_verify_local_core_installed`）**：检查 `dandelion-core` 的 PEP 610 `direct_url.json`，强制确保其来自本仓库 `packages/dandelion-core`、`dist-wheels/` 或 `dist/`（防止误打入 PyPI 版本；显式设置 `DANDELION_ALLOW_EXTERNAL_CORE=1` 可豁免）。
+2. **元数据生成（`_gen_build_info`）**：读取 `pyproject.toml`（CI 可通过 `DANDELION_VERSION` / `DANDELION_TARGET` 覆盖），生成 `mk/lib/build_info.py`。
+3. **核心编译（`_run_nuitka`）**：调用 Nuitka `--mode=standalone`，显式包含 `--include-package=src.cli`、`--include-package=dandelion_core`、`--include-package-data=dandelion_core`、`--include-module=_bisect`、`--include-module=mk.lib.*`，并排除 `--nofollow-import-to=src.remote` 与 `--nofollow-import-to=src.tool`（保持插件工具可编辑热插拔）。Windows PE 版本号通过 `_extract_numeric_pe_version()` 提取纯数字版本。
+4. **后处理（`_postprocess`）**：
    - 将 `main.dist` 迁入 `build/dandelion/bin/`；
-   - 复制 `copy_packages` 依赖闭包与仅含 `.py` 源码的标准库兜底到 `bin/_stdlib_fallback/`（禁止拷贝宿主机 `lib-dynload/*.so`）；
-   - 初始化 `.env/`、`llm/{memory,skill,sysprompt}/`、`.log/`，预填 `.env/cli.cfg`，并跳过 Remote 专属的 `llm/sysprompt/remote.md`；
+   - 复制 `copy_packages` 依赖闭包与精简纯 `.py` 标准库（排除 `test/`、`tkinter/`、`site-packages/`、`lib-dynload/` 与原生动态库）到 `bin/_stdlib_fallback/`，使构建后零重建落盘的工具可直接 `import imaplib`/`smtplib`/`email.*` 等标准库；
+   - 初始化 `.env/`、`llm/{memory,skill,sysprompt}/`、`tool/`、`.log/`，复制 `src/tool/` 与 `src/cli/tool/` 中的用户插件到 `tool/`，预填 `.env/cli.cfg`，并跳过 Remote 专属的 `llm/sysprompt/remote.md`；
    - 生成支持符号链接解引用的 `dandelion.sh`（Linux）或 `dandelion.cmd`（Windows），strip ELF 并用 `patchelf` 强制 `DT_RPATH=$ORIGIN`。
 
 ### 2.4 CI 构建、PyPI 发布与 3 产物发行矩阵
@@ -120,9 +123,9 @@ Windows 下通过 `windows_jobs = 2` 限制 MSVC 并行编译单元，避免触�
 `.github/workflows/release.yml` 串联完整发布流水线：
 
 1. **`meta`**：tag 推送时精确取 `${GITHUB_REF_VALUE#refs/tags/}`，严格校验 PEP 440 版本与数字 PE 版本，并对 `-alpha`/`-beta`/`-rc` 自动标记 `prerelease`。
-2. **`build-core-wheels` 与 `build-core-sdist`**：基于 `pypa/cibuildwheel@v3` 在 `manylinux2014`（`glibc 2.17`，`x86_64` & `aarch64`，通过 `mk/scripts/build_curl_static.sh` 静态链接缓存的 `zlib 1.3.1` + `OpenSSL 3.0.15` + 极简 HTTP/HTTPS `libcurl 8.11.1`）与 `windows-latest`（`AMD64`，系统 WinHTTP）产出 `cp311-cp311` 与向后/向前兼容的 `cp312-abi3` Wheel，随后在 `ubuntu:18.04`、`almalinux:8`、`ubuntu:24.04`（不装 `libcurl4`，校验 `ldd`、`importlib.resources`、`SSHTool`、5 协议与真实 OS CA TLS 握手）及 Windows Python 3.11/3.13 隔离环境中全量验证。
-3. **`build`（精简 3 产物 Nuitka 矩阵）**：分别构建 `dandelion-win-x86_64`、`dandelion-linux-x86_64`（`quay.io/pypa/manylinux2014_x86_64`）与 `dandelion-linux-aarch64`（`quay.io/pypa/manylinux2014_aarch64`）。Linux 侧通过 `mk/scripts/docker_build.sh` 直接消费预编译 `cp311` Wheel（零 C++ 重复编译、保留 `prompt-toolkit`），并将同一份二进制依次放入 `ubuntu:18.04`、`almalinux:8`、`ubuntu:24.04` 容器中执行冒烟测试。
-4. **`publish-pypi` 与 `release`**：仅当全部 Wheel 验证、sdist 与 3 份独立产物冒烟均通过后，在 `v*` tag 上通过 OIDC Trusted Publishing 自动发布 `dandelion-core` 至 PyPI，并将 3 份独立 zip 压缩包连同 Wheel/sdist 上传至 GitHub Releases。
+2. **`build-core-wheels` 与 `build-core-sdist`**：基于 `pypa/cibuildwheel@v4.3` 在 `manylinux2014`（`glibc 2.17`，`x86_64` & `aarch64`，通过 `mk/scripts/build_curl_static.sh` 静态链接缓存的 `zlib 1.3.1` + `OpenSSL 3.0.15` + 极简 HTTP/HTTPS `libcurl 8.11.1`）与 `windows-latest`（`AMD64`，系统 WinHTTP）产出 `cp311-cp311` 与向后/向前兼容的 `cp312-abi3` Wheel，随后在 `ubuntu:18.04`、`almalinux:8`、`ubuntu:24.04`（不装 `libcurl4`，直接按本地 `.whl` 路径安装并校核 PEP 610 `direct_url.json` 与 SHA-256、`ldd`、`importlib.resources`、`SSHTool`、5 协议与真实 OS CA TLS 握手）及 Windows Python 3.11/3.13 隔离环境中全量验证。
+3. **`build`（精简 3 产物 Nuitka 矩阵）**：分别构建 `dandelion-win-x86_64`、`dandelion-linux-x86_64`（`quay.io/pypa/manylinux2014_x86_64`）与 `dandelion-linux-aarch64`（`quay.io/pypa/manylinux2014_aarch64`）。Linux 侧通过 `mk/scripts/docker_build.sh` 直接消费预编译 `cp311` Wheel（零 C++ 重复编译、校验 `direct_url.json`、保留 `prompt-toolkit`），并将同一份二进制依次放入 `ubuntu:18.04`、`almalinux:8`、`ubuntu:24.04` 容器中落盘临时 `tool/smoke_imap_tool.py` 执行热插拔冒烟测试。
+4. **`publish-pypi` 与 `release`**：仅当全部 Wheel 验证、sdist 与 3 份独立产物冒烟均通过后，在 `v*` tag 上先由 `publish-pypi` 通过 OIDC Trusted Publishing 发布 `dandelion-core` 至 PyPI，再由 `release` 将 3 份独立 zip 压缩包连同 Wheel/sdist 上传至 GitHub Releases。
 
 ## 三、包分层概览
 
@@ -216,5 +219,15 @@ packages/dandelion-core/src/dandelion_core/
 
 工具层安全防线分为两类：
 
-1. `BaseTool` 提供通用路径沙箱检查、通过 `runtime.approve()` 触发的交互审批、审批后路径二次核验（`_prepare_path()`）以及 POSIX `O_NOFOLLOW` 安全打开（`_open_secure()`）。
-2. Shell 工具（`BashTool`、`SSHTool`）共享 `ShellCommandGuard`（`dandelion_core/tool/shell/shell_guard.py`），以单趟引号感知词法分析器精确处理转义、heredoc/here-string、重定向、子 Shell、命令/参数替换、通配符/花括号、包装动词以及归一化敏感/设备路径拦截。
+1. `BaseTool` 提供通用路径沙箱检查、通过 `runtime.approve()` 触发的交互审批、审批后路径二次核验（`_prepare_path()`）以及 POSIX `O_NOFOLLOW` 安全打开（`_open_secure()`），并在 CLI 沙箱下额外保护 `.env/`、`tool/`、`src/tool/`、`src/cli/tool/`、`src/remote/tool/` 及自定义 `TOOL_DIRS`。
+2. Shell 工具（`BashTool`、`SSHTool`）共享 `ShellCommandGuard`（`dandelion_core/tool/shell/shell_guard.py`），以单趟引号感知词法分析器精确处理转义、heredoc/here-string、重定向、子 Shell、命令/参数替换、通配符/花括号、包装动词以及归一化敏感/设备/插件目录路径拦截。
+
+### 7.1 零重建热插拔工具架构（`src/tool/`）
+
+无需修改 `packages/dandelion-core` 或重新构建 C++/Nuitka，只需编写单个 `.py` 文件或子包并放入以下任一锚定目录（永不扫描不可信 `os.getcwd()`）：
+
+1. `<root>/src/tool/`：CLI 与 Remote 共享的扩展工具；
+2. `<root>/src/cli/tool/` 或 `<root>/src/remote/tool/`：宿主专属扩展工具；
+3. `<root>/tool/`（如 Nuitka 独立产物 `dandelion.sh` / `dandelion.cmd` 同级目录）与 `[Main] TOOL_DIRS` 自定义目录。
+
+内核侧由 `ToolContext`、`BaseTool.create_instance()`（按 `__init__` 签名自动依赖注入）、`ToolLoader`（基于 `importlib.util.spec_from_file_location` 故障隔离加载与防内置覆盖）及实例级 `ToolsetRegistry` 统一驱动；插件可在 `.env/cli.cfg` 或 `.env/remote.cfg` 中使用 `[Tool:<name>]` 声明配置。CLI 提供 `tools` 与 `reload` 实时热重载命令，Remote 在 `JobManager.submit()` 遇新 `toolset` 时自动刷新注册表且后台 Worker 每次执行均动态发现工具。

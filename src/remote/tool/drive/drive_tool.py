@@ -180,6 +180,8 @@ class _GoogleDriveClient:
  # @brief Tool confining all Google Drive operations to the 'Dandelion Remote' folder.
  #
 class GoogleDriveTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Bind the tool to the server config, workspace and synced session store.
      #

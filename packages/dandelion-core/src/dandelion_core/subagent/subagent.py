@@ -13,7 +13,7 @@ import os
 import time
 from .i_subagent import ISubAgent
 from .result import SubAgentResult
-from .registry import TOOLSET_REGISTRY
+from .registry import ToolsetRegistry
 from .dispatch import dispatch_tool_calls, in_worker_thread
 from ..tool.media import (
     MediaToolBase,
@@ -95,6 +95,7 @@ class SubAgent(ISubAgent):
                 workspace_dir=self.workspace_dir,
                 parent_tools=self.logical_tool_names,
                 caller_label=self.subagent_id,
+                toolset_registry=getattr(pool, "toolset_registry", None),
             )
             self.tools["spawn_subagent"] = RestrictedSpawnTool(
                 pool=pool,
@@ -160,14 +161,8 @@ class SubAgent(ISubAgent):
     def _build_system_prompt(self, role_prompt):
         if "spawn_subagent" in self.tools:
             remaining = self.max_depth - self.depth
-            toolset_lines = []
-            for ts_name, ts_tools in TOOLSET_REGISTRY.items():
-                avail = [t for t in ts_tools if t in self.logical_tool_names]
-                if avail:
-                    toolset_lines.append(f"- '{ts_name}': {', '.join(avail)}")
-                # End-if
-            # End-for
-            toolsets_block = "\n".join(toolset_lines)
+            ts_registry = getattr(self.pool, "toolset_registry", None) or ToolsetRegistry()
+            toolsets_block = ts_registry.format_prompt_lines(self.logical_tool_names)
             depth_info = (
                 f"You are a SubAgent at depth {self.depth}/{self.max_depth} "
                 f"(model: {self.model_spec.alias}, {remaining} delegation level(s) remaining).\n"
@@ -243,10 +238,14 @@ class SubAgent(ISubAgent):
             return
         # End-if
         args = block.input if isinstance(block.input, dict) else {}
+        handler = self.tools.get(block.name)
+        artifact_arg = getattr(handler, "ARTIFACT_PATH_ARG", None)
         if block.name in WRITE_TOOLS:
             path = args.get("file_path")
         elif block.name == "markdown_editor" and args.get("action") in MARKDOWN_WRITE_ACTIONS:
             path = args.get("file_path")
+        elif artifact_arg:
+            path = args.get(str(artifact_arg))
         else:
             return
         # End-if
@@ -254,7 +253,7 @@ class SubAgent(ISubAgent):
             return
         # End-if
 
-        workspace = getattr(self.tools.get(block.name), "workspace_dir", None)
+        workspace = getattr(handler, "workspace_dir", None)
         path = str(path)
         if workspace and not os.path.isabs(path):
             path = os.path.join(workspace, path)

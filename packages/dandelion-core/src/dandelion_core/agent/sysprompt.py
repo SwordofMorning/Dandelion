@@ -15,6 +15,8 @@ import os
 import platform
 import shutil
 
+from ..subagent.registry import ToolsetRegistry
+
 
 ##
  # @brief Abstract base class for constructing static system prompts and dynamic context blocks.
@@ -40,6 +42,9 @@ class BasePromptBuilder(ABC):
         self.workspace_dir = workspace_dir
         self.session_manager = session_manager
         self.tool_names = frozenset(tool_names) if tool_names is not None else None
+        self.toolset_registry = None
+        self.worker_tool_names = None
+        self.extension_tools = {}
 
         self.os_name = platform.system()
         self.has_pwsh = shutil.which("powershell") is not None
@@ -139,6 +144,8 @@ class BasePromptBuilder(ABC):
             "SubAgents cannot delegate further (SUB_DEPTH=1).\n" if sub_depth == 1 else
             f"SubAgents may delegate down to depth {sub_depth} (SUB_DEPTH={sub_depth}).\n"
         )
+        registry = self.toolset_registry if self.toolset_registry is not None else ToolsetRegistry()
+        toolsets_block = registry.format_prompt_lines(self.worker_tool_names)
         return (
             "## SubAgent Orchestration (Let LLM Decide)\n"
             "You have access to a SubAgent cluster for delegating isolated or parallel sub-tasks.\n"
@@ -154,12 +161,30 @@ class BasePromptBuilder(ABC):
             "5. If a SubAgent fails, inspect its returned error message and decide whether to retry, switch to another configured 'model', or complete the work directly.\n"
             + nesting +
             "### Available Toolsets:\n"
-            "- 'minimal': read_file, write_file, list_directory, get_time\n"
-            "- 'filesystem': read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, load_skill, read_pdf, read_image\n"
-            "- 'code_analysis': read_file, grep_search, list_directory, bash, ssh, tavily_search, memory_search\n"
-            "- 'data_processing': read_excel, write_excel, write_file, markdown_editor, load_skill\n"
-            "- 'full': bash, ssh, read_file, write_file, list_directory, grep_search, markdown_editor, edit_file, read_excel, write_excel, get_time, load_skill, tavily_search, read_pdf, read_image, memory_search"
+            + toolsets_block
         )
+    # End-def
+
+    ##
+     # @brief Build a deterministic section listing any hot-plugged extension tools.
+     #
+     # @return Extension tools section string, or empty string when none are installed.
+     #
+    def _build_extension_tools_section(self):
+        ext = getattr(self, "extension_tools", None)
+        if not ext:
+            return ""
+        # End-if
+        lines = ["## Installed Extension Tools"]
+        for name in sorted(ext.keys()):
+            desc = str(ext.get(name) or "").strip()
+            if desc:
+                lines.append(f"- '{name}': {desc}")
+            else:
+                lines.append(f"- '{name}'")
+            # End-if
+        # End-for
+        return "\n".join(lines)
     # End-def
 
     ##
@@ -293,6 +318,10 @@ class DefaultPromptBuilder(BasePromptBuilder):
         subagent_sec = self._build_subagent_orchestration_section()
         if subagent_sec:
             sections.append(subagent_sec)
+        # End-if
+        ext_sec = self._build_extension_tools_section()
+        if ext_sec:
+            sections.append(ext_sec)
         # End-if
         skills_sec = self._build_skills_section()
         if skills_sec:

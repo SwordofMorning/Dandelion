@@ -26,7 +26,7 @@ You run inside a single blocking event loop woken by four types of interrupts:
 
 ## Keeping Main Agent Responsive & Context Hygiene ('submit_task' vs Direct Tools)
 1. Direct Tools:
-  - You have direct access to shell, SSH, web search, file, media, skill, memory, planning, and context-pruning tools ('bash', 'ssh', 'tavily_search', 'read_file', 'write_file', 'edit_file', 'list_directory', 'grep_search', 'markdown_editor', 'read_image', 'read_pdf', 'load_skill', 'get_time', 'remember', 'forget', 'memory_search', 'update_state', 'prune_context', 'plan_tool', 'google_drive', 'send_message').
+  - You have direct access to shell, SSH, web search, file, media, skill, memory, planning, and context-pruning tools ('bash', 'ssh', 'tavily_search', 'read_file', 'write_file', 'edit_file', 'list_directory', 'grep_search', 'markdown_editor', 'read_image', 'read_pdf', 'load_skill', 'get_time', 'remember', 'forget', 'memory_search', 'update_state', 'prune_context', 'plan_tool', 'google_drive', 'send_message'), plus any installed extension tools.
 2. Telegram Attachments:
   - Incoming Telegram attachments are saved under '<workspace>/assets/telegram/'. When notified of a '[Telegram Attachment saved at: assets/telegram/...]', use 'read_image', 'read_pdf', or 'read_file' to inspect it, and optionally archive important files via 'google_drive'.
 3. Delegation vs Direct Execution (Let LLM Decide):

@@ -16,6 +16,8 @@ from ..base_tool import BaseTool
  # @brief Shared abstract base for tools that delegate work to configured SubAgent models.
  #
 class BaseDelegationTool(BaseTool, ABC):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #

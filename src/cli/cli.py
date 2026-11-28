@@ -19,6 +19,7 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 
 from dandelion_core.host import BaseAgentHost
 from dandelion_core.utils.llm_provider.blocks import RequestCancelledError
@@ -81,8 +82,8 @@ class InteractiveCLI(BaseAgentHost):
             self.repair_interrupted_tools(self.agent)
         # End-if
 
-        # Initialize prompt_toolkit session with in-memory history
-        if HAS_PTK:
+        # Initialize prompt_toolkit session with in-memory history (interactive TTY only)
+        if HAS_PTK and sys.stdin.isatty():
             self.prompt_session = PromptSession(history=InMemoryHistory())
         else:
             self.prompt_session = None
@@ -131,6 +132,8 @@ class InteractiveCLI(BaseAgentHost):
             'vim': None,
             'load': PathCompleter(expanduser=True),
             'status': None,
+            'tools': None,
+            'reload': None,
             'commit': None,
             'sync': {'--session': session_targets},
             'remote': {'-v': None},
@@ -159,6 +162,8 @@ class InteractiveCLI(BaseAgentHost):
             "   load <filepath>       : Load a local file into the prompt buffer.\n\n"
             " Core Operations:\n"
             "   status                : View current session and staged buffer.\n"
+            "   tools                 : List active built-in and hot-plugged tools.\n"
+            "   reload                : Reload hot-plugged tools without restarting.\n"
             "   commit                : Send the staged buffer to LLM.\n"
             "   clear                 : Clear the staged buffer.\n"
             "   sync                  : Back up all sessions to the configured Remote.\n"
@@ -531,6 +536,79 @@ class InteractiveCLI(BaseAgentHost):
         # End-if
         self.cli.raw("-" * 50)
         self.cli.raw(f"    (Total: {len(self.staged_message)} chars)\n")
+    # End-def
+
+    ##
+     # @brief `tools` command handle.
+     # List active built-in and hot-plugged tools plus registered SubAgent toolsets.
+     #
+    def _cmd_tools(self):
+        tools = getattr(self.agent, "tools", None) or {}
+        ext_tools = (
+            getattr(self.agent, "extension_tools", None)
+            or getattr(getattr(self.agent, "prompt_builder", None), "extension_tools", None)
+            or {}
+        )
+        ext_names = set(ext_tools.keys()) if isinstance(ext_tools, dict) else set(ext_tools)
+        builtin_names = sorted(name for name in tools if name not in ext_names)
+        plugin_names = sorted(name for name in tools if name in ext_names)
+
+        self.cli.success(f"\nActive Tools ({len(tools)} total):")
+        if builtin_names:
+            self.cli.info("Built-in   : " + ", ".join(builtin_names))
+        # End-if
+        if plugin_names:
+            self.cli.info("Hot-plugged: " + ", ".join(plugin_names))
+        else:
+            self.cli.info("Hot-plugged: (none)")
+        # End-if
+
+        pool = getattr(self.agent, "pool", None)
+        registry = getattr(pool, "toolset_registry", None)
+        if registry is not None and hasattr(registry, "names"):
+            self.cli.info("Toolsets   : " + ", ".join(registry.names()))
+        # End-if
+
+        errors = getattr(self.agent, "tool_load_errors", None) or []
+        for err in errors:
+            self.cli.warning(f"Tool load warning: {err}")
+        # End-for
+        self.cli.raw("")
+    # End-def
+
+    ##
+     # @brief `reload` command handle.
+     # Re-scan configured tool directories and rebuild agent tools without restarting.
+     #
+    def _cmd_reload(self):
+        if not hasattr(self.agent, "reload_tools"):
+            self.cli.error("Current agent does not support live tool reload.")
+            return
+        # End-if
+
+        result = self.agent.reload_tools()
+        tools = getattr(self.agent, "tools", None) or {}
+        ext_tools = (
+            getattr(self.agent, "extension_tools", None)
+            or getattr(getattr(self.agent, "prompt_builder", None), "extension_tools", None)
+            or {}
+        )
+        ext_names = sorted(ext_tools.keys()) if isinstance(ext_tools, dict) else sorted(ext_tools)
+        self.cli.success(f"Reloaded tools: {len(tools)} active ({len(ext_names)} hot-plugged).")
+        if ext_names:
+            self.cli.info("Hot-plugged: " + ", ".join(ext_names))
+        # End-if
+
+        errors = []
+        if isinstance(result, dict):
+            errors = result.get("errors") or []
+        # End-if
+        if not errors:
+            errors = getattr(self.agent, "tool_load_errors", None) or []
+        # End-if
+        for err in errors:
+            self.cli.warning(f"Tool load warning: {err}")
+        # End-for
     # End-def
 
     ##
@@ -1004,9 +1082,9 @@ class InteractiveCLI(BaseAgentHost):
         signal.signal(signal.SIGINT, self._on_sigint)
 
         # Try to load HAS_PTK (tab completion)
-        if HAS_PTK:
+        if HAS_PTK and self.prompt_session is not None:
             self.cli.success("Bash-style Tab completion enabled (Powered by prompt_toolkit).")
-        else:
+        elif not HAS_PTK:
             self.cli.error("prompt_toolkit not found. Fallback to basic input. (pip install prompt_toolkit)")
         # End-if
 
@@ -1085,7 +1163,7 @@ class InteractiveCLI(BaseAgentHost):
 
                 # 3. ----- @par Read user input -----
 
-                if HAS_PTK:
+                if HAS_PTK and self.prompt_session is not None:
                     cmd_input = self.prompt_session.prompt(
                         ANSI(prompt_str_ansi),
                         completer=self._build_completer(),
@@ -1132,6 +1210,10 @@ class InteractiveCLI(BaseAgentHost):
                     self._cmd_load(args)
                 elif command == 'status':
                     self._cmd_status()
+                elif command == 'tools':
+                    self._cmd_tools()
+                elif command == 'reload':
+                    self._cmd_reload()
                 elif command == 'sync':
                     self._cmd_sync(args)
                 elif command == 'remote':

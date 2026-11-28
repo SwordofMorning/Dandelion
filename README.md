@@ -12,7 +12,8 @@
 ## 一、功能特性
 
 - CLI 式交互，无 GUI；
-- 独立 `dandelion-core` 包，支持在 Ubuntu 18.04–26.04、CentOS 8+ 与 Windows 上直接通过 `pip install dandelion-core` 安装预编译二进制 Wheel，无需本地 C++ 工具链；
+- 独立 `dandelion-core` 包，支持本地优先开发（`python mk/make.py dev`）及在 Ubuntu 18.04–26.04、CentOS 8+ 与 Windows 上直接通过 `pip install dandelion-core` 安装预编译二进制 Wheel；
+- 零重建工具热插拔：将继承 `BaseTool` 的单文件或插件包放入 `src/tool/`、`src/cli/tool/`、`src/remote/tool/` 或独立二进制旁的 `tool/` 目录，无需修改 `dandelion-core` 或重新构建即可生效（CLI 支持 `tools` / `reload` 命令）；
 - 原生 C++17 LLM 引擎，彻底移除 `openai`、`anthropic`、`httpx`、`pydantic`、`python-dotenv` 等重型 Python SDK；
 - 完善的日志、Git 风格会话分支管理与三选一中断控制（`Stop` / `Rollback` / `Continue`）；
 - 手动将会话原始历史和元数据备份到 Remote；
@@ -37,24 +38,29 @@ cd Dandelion
 建议先通过 `conda` 或 `venv` 管理环境：
 
 ```bash
-# 方式 A：直接安装 PyPI 预编译内核 + 本地源码（无需 C++ 编译器）
+# 方式 A（推荐，本地优先）：原子化可编辑安装本地 packages/dandelion-core + 根项目开发依赖
+python mk/make.py dev
+# 等价 pip 命令：
+# pip install -e packages/dandelion-core -e ".[dev]"
+# 或使用 uv（根目录 pyproject.toml 已声明 [tool.uv.sources] 本地优先）：
+# uv sync --extra dev
+
+# 方式 B（无本地 C++ 编译器时的回退方案）：安装 PyPI 预编译内核 + 本地 CLI/Remote
 pip install dandelion-core
-pip install -e .
+pip install --no-deps -e .
+pip install prompt-toolkit requests
 
-# 方式 B：从本地源码编译原生 C++ 扩展并安装开发依赖
-python mk/make.py native
-pip install -e ".[dev]"
-
-# Windows PowerShell 原生扩展编译辅助脚本（CMake + Ninja + MSVC）
-powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target build
+# Windows PowerShell 本地原生构建与开发安装辅助脚本（CMake + Ninja + MSVC）
+powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target dev
 ```
 
 常用统一构建命令（`mk/make.py`）：
 
 ```bash
-python mk/make.py native   # 编译并可编辑安装 packages/dandelion-core 原生扩展
+python mk/make.py dev      # 本地优先可编辑安装 packages/dandelion-core 与根项目 [dev] 依赖
+python mk/make.py native   # 仅编译并可编辑安装 packages/dandelion-core 原生扩展
 python mk/make.py wheel    # 将 packages/dandelion-core 打包为 .whl 到 dist/
-python mk/make.py all      # 构建 Nuitka 独立可执行文件到 build/dandelion/
+python mk/make.py all      # 校验本地 dandelion-core 溯源并构建 Nuitka 独立可执行文件到 build/dandelion/
 python mk/make.py ascii    # 检查 .py/.cpp/.hpp/.h 源码是否满足 100% ASCII 规范
 python mk/make.py clean    # 清理缓存、build/、dist/ 及遗留空目录
 ```

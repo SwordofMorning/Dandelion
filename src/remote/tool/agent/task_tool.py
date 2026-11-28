@@ -18,6 +18,8 @@ from dandelion_core.tool.base_tool import BaseTool
  # @brief Submit non-blocking background work from the remote main agent.
  #
 class SubmitTaskTool(BaseDelegationTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Bind the tool to its remote conversation and job manager.
      #
@@ -26,13 +28,31 @@ class SubmitTaskTool(BaseDelegationTool):
      # @param workspace Workspace assigned to the task or remote session.
      # @param context Callable returning an immutable snapshot of recent history.
      # @param registry Optional ModelRegistry for SubAgent model discovery.
+     # @param toolset_registry Optional ToolsetRegistry for dynamic toolset schemas.
      #
      # @return None.
      #
-    def __init__(self, jobs, session_id, workspace, context, registry=None):
+    def __init__(self, jobs, session_id, workspace, context, registry=None, toolset_registry=None):
         resolved_registry = registry if registry is not None else getattr(jobs, "registry", None)
         super().__init__(workspace_dir=workspace, registry=resolved_registry)
         self.jobs, self.session_id, self.context = jobs, session_id, context
+        self.toolset_registry = toolset_registry
+    # End-def
+
+    ##
+     # @brief Resolve currently available SubAgent toolset names dynamically.
+     #
+     # @return List of available toolset name strings.
+     #
+    def _available_toolsets(self):
+        jobs_reg = getattr(self.jobs, "toolset_registry", None)
+        if jobs_reg is not None and hasattr(jobs_reg, "names"):
+            return list(jobs_reg.names())
+        # End-if
+        if self.toolset_registry is not None and hasattr(self.toolset_registry, "names"):
+            return list(self.toolset_registry.names())
+        # End-if
+        return list(TOOLSET_REGISTRY)
     # End-def
 
     ##
@@ -72,7 +92,7 @@ class SubmitTaskTool(BaseDelegationTool):
                 ),
                 "task_description": {"type": "string"},
                 "role_prompt": {"type": "string"},
-                "toolset": {"type": "string", "enum": list(TOOLSET_REGISTRY)},
+                "toolset": {"type": "string", "enum": self._available_toolsets()},
             },
             "required": ["model", "task_description"],
         }
@@ -117,6 +137,8 @@ class SubmitTaskTool(BaseDelegationTool):
  # @brief Expose conversation background jobs and persistent schedules.
  #
 class TaskControlTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Bind the tool to its remote conversation and job manager.
      #

@@ -39,7 +39,7 @@ DEFAULT_MEDIA_LIMITS = {
     "max_pdf_bytes": 15 * 1024 * 1024,
     "max_pdf_pages": 100,
     "max_media_per_request": 8,
-    "pdf_tokens_per_page": 258,
+    "pdf_tokens_per_page": 960,
     "image_cost_factor": 1.2,
     "pdf_cost_factor": 1.2,
     "media_cost_fallback": 2000,
@@ -233,6 +233,7 @@ class MediaToolBase(BaseTool, ABC):
     def prepare_media(self, file_path, action_desc):
         if not file_path:
             return None, None, None, 0, "Error: No file path provided."
+        # End-if
 
         if not os.path.isabs(file_path):
             file_path = os.path.join(self.workspace_dir, file_path)

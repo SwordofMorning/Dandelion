@@ -13,31 +13,77 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
+from mk.lib.paths import tool_dirs as resolve_tool_dirs
+
 
 ##
  # @brief Adapt the Core SubAgentPool for an isolated background job.
  #
 class JobExecutor:
     ##
-     # @brief Retain worker configuration, private data root, and operator config dir.
+     # @brief Retain worker configuration, private data root, operator config dir, and tool dirs.
      #
      # @param config Loaded model and routing configuration.
      # @param data_dir Private remote-service data directory.
      # @param config_dir Optional operator config directory (.env) for SSH devices.yaml/known_hosts.
+     # @param tool_dirs Optional ordered directories scanned for hot-plugged Remote tools.
+     # @param workspace_dir Optional default server workspace directory for registry discovery.
      #
      # @return None.
      #
-    def __init__(self, config, data_dir, config_dir=None):
+    def __init__(self, config, data_dir, config_dir=None, tool_dirs=None, workspace_dir=None):
         from dandelion_core.utils import ModelRegistry
 
         self.config = config
         self.data_dir = Path(data_dir)
         self.config_dir = config_dir
+        self.workspace_dir = workspace_dir
+        extra_tool_dirs = config.get("TOOL_DIRS") if isinstance(config, dict) else None
+        remote_root = str(Path(__file__).resolve().parents[3])
+        self.tool_dirs = (
+            list(tool_dirs)
+            if tool_dirs is not None
+            else resolve_tool_dirs("remote", extra_tool_dirs, root_dir=remote_root)
+        )
         self.registry = ModelRegistry(
             config.get("ALL_MODELS", []),
             config.get("SUB_LIST", []),
             enabled=int(config.get("SUB_DEPTH", 1)) > 0,
         )
+    # End-def
+
+    ##
+     # @brief Discover an up-to-date ToolsetRegistry from build_worker_pool for Remote workers.
+     #
+     # @param workspace_dir Optional workspace directory used for tool initialization.
+     #
+     # @return Populated ToolsetRegistry instance.
+     #
+    def build_toolset_registry(self, workspace_dir=None):
+        from dandelion_core.agent.tools import build_worker_pool
+        from dandelion_core.subagent.registry import ToolsetRegistry
+        from ..runtime import RemoteRuntime
+
+        ws = str(workspace_dir or self.workspace_dir or self.data_dir)
+        try:
+            pool = build_worker_pool(
+                config=self.config,
+                client=None,
+                session_manager=None,
+                workspace_dir=ws,
+                runtime=RemoteRuntime(),
+                config_dir=self.config_dir,
+                host="remote",
+                tool_dirs=self.tool_dirs,
+            )
+            reg = getattr(pool, "toolset_registry", None)
+            if reg is not None:
+                return reg
+            # End-if
+        except Exception:
+            pass
+        # End-try
+        return ToolsetRegistry()
     # End-def
 
     ##
@@ -79,6 +125,8 @@ class JobExecutor:
             workspace_dir=job["workspace"],
             runtime=runtime,
             config_dir=self.config_dir,
+            host="remote",
+            tool_dirs=self.tool_dirs,
         )
         task = job["task_description"]
         if job["context"]:
@@ -105,10 +153,12 @@ class JobManager:
      # @param store Shared durable store with its connection lock.
      # @param executor Callable executing one job with its cancellation event.
      # @param max_workers Maximum number of background worker threads.
+     # @param registry Optional ModelRegistry for validating SubAgent models.
+     # @param toolset_registry Optional ToolsetRegistry for validating worker toolsets.
      #
      # @return None.
      #
-    def __init__(self, store, executor, max_workers=4, registry=None):
+    def __init__(self, store, executor, max_workers=4, registry=None, toolset_registry=None):
         if isinstance(max_workers, bool) or int(max_workers) < 1:
             raise ValueError("max_workers must be positive")
         # End-if
@@ -123,6 +173,50 @@ class JobManager:
         self._started = False
         self._closed = False
         self._stopping = threading.Event()
+        self.toolset_registry = (
+            toolset_registry
+            if toolset_registry is not None
+            else self._discover_toolset_registry()
+        )
+    # End-def
+
+    ##
+     # @brief Build a fresh ToolsetRegistry from the configured executor or Core defaults.
+     #
+     # @param workspace_dir Optional workspace directory hint for discovery.
+     #
+     # @return ToolsetRegistry instance.
+     #
+    def _discover_toolset_registry(self, workspace_dir=None):
+        from dandelion_core.subagent.registry import ToolsetRegistry
+
+        builder = getattr(self.executor, "build_toolset_registry", None)
+        if callable(builder):
+            try:
+                discovered = builder(workspace_dir=workspace_dir)
+                if discovered is not None:
+                    return discovered
+                # End-if
+            except Exception:
+                pass
+            # End-try
+        # End-if
+        return ToolsetRegistry()
+    # End-def
+
+    ##
+     # @brief Re-scan Remote tool directories and refresh self.toolset_registry live.
+     #
+     # @param workspace_dir Optional workspace directory hint for discovery.
+     #
+     # @return Refreshed ToolsetRegistry instance.
+     #
+    def refresh_toolset_registry(self, workspace_dir=None):
+        refreshed = self._discover_toolset_registry(workspace_dir=workspace_dir)
+        with self._lock:
+            self.toolset_registry = refreshed
+        # End-with
+        return refreshed
     # End-def
 
     ##
@@ -169,9 +263,14 @@ class JobManager:
         if not all(isinstance(value, str) for value in (role_prompt, toolset, context)):
             raise ValueError("role_prompt, toolset and context must be text")
         # End-if
-        from dandelion_core.subagent.registry import TOOLSET_REGISTRY
-        if toolset not in TOOLSET_REGISTRY:
-            raise ValueError("Unknown worker toolset")
+        if not self.toolset_registry.has(toolset):
+            ws_hint = workspace if isinstance(workspace, str) and os.path.isdir(workspace) else None
+            self.refresh_toolset_registry(workspace_dir=ws_hint)
+        # End-if
+        if not self.toolset_registry.has(toolset):
+            raise ValueError(
+                f"Unknown worker toolset '{toolset}'. Available toolsets: {self.toolset_registry.names()}"
+            )
         # End-if
         workspace = os.path.realpath(workspace)
         if not os.path.isdir(workspace):

@@ -815,6 +815,22 @@ public:
                 gen["thinking_level"] = ResolveGeminiLevel(m_cfg.effort, m_cfg.model_id);
             }
         }
+        else if (m_cfg.thinking == "disabled" && m_flavor != "none")
+        {
+            std::string bare_low = Lower(m_bare_model);
+            if (StartsWith(bare_low, "gemini-2.5-flash"))
+            {
+                gen["thinking_budget"] = 0;
+            }
+            else if (IsGemini25(m_bare_model))
+            {
+                gen["thinking_budget"] = 128;
+            }
+            else if (!IsLegacyGemini(m_bare_model))
+            {
+                gen["thinking_level"] = (Contains(bare_low, "gemini-3") && Contains(bare_low, "flash")) ? "minimal" : "low";
+            }
+        }
         if (nb::len(gen) > 0)
         {
             body["generation_config"] = gen;

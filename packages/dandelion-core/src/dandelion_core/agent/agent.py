@@ -117,19 +117,29 @@ class MyAgent:
      # @param tool_factory Optional callable constructing the main-agent tool mapping.
      # @param prompt_builder_cls Optional BasePromptBuilder subclass or factory.
      # @param config_dir Optional operator config directory (e.g. <root>/.env for Remote).
+     # @param host Host tag string ("core", "cli", "remote") for hot-plug tool discovery.
+     # @param tool_dirs Optional ordered list of operator hot-plug tool directories.
+     # @param protected_dirs Optional iterable of sandbox-protected directory paths.
      #
      # @return None.
      #
     def __init__(self, config, session_manager, workspace_dir, runtime=None,
-                 tool_factory=None, prompt_builder_cls=None, config_dir=None):
+                 tool_factory=None, prompt_builder_cls=None, config_dir=None,
+                 host="core", tool_dirs=None, protected_dirs=None):
         # ----- @par 1. Init members -----
         self.config = config
         self.session = session_manager
         self.workspace_dir = workspace_dir
         self.config_dir = config_dir
+        self.host = str(host or "core").strip().lower() or "core"
+        self.tool_dirs = list(tool_dirs) if tool_dirs else []
+        self.protected_dirs = tuple(protected_dirs) if protected_dirs else ()
         self.runtime = runtime or Runtime()
         self.tool_factory = tool_factory or build_tools
         self.pool = None
+        self.toolset_registry = None
+        self.extension_tools = {}
+        self.tool_load_errors = []
         self.sub_concurrency = max(int(config.get("SUB_CONCURRENCY", 4)), 1)
         self.error_count = 0
         self.thinking = str(config.get("THINKING", "disabled")).strip().lower()
@@ -199,6 +209,9 @@ class MyAgent:
         self.tools = self.tool_factory(self)
         for tool in self.tools.values():
             tool.runtime = self.runtime
+            if self.protected_dirs and not getattr(tool, "protected_dirs", None):
+                tool.protected_dirs = self.protected_dirs
+            # End-if
         # End-for
         self.tool_schemas = [
             {
@@ -209,6 +222,48 @@ class MyAgent:
             for tool in self.tools.values()
         ]
         self.prompt_builder.tool_names = frozenset(self.tools)
+        ts_registry = getattr(self.pool, "toolset_registry", None) or self.toolset_registry
+        self.prompt_builder.toolset_registry = ts_registry
+        self.prompt_builder.worker_tool_names = (
+            frozenset(self.pool.all_tools) if self.pool is not None else None
+        )
+        ext_tools = dict(self.extension_tools) if self.extension_tools else {}
+        if ext_tools:
+            visible_names = set(self.tools.keys())
+            if self.pool is not None:
+                visible_names.update(self.pool.all_tools.keys())
+            # End-if
+            ext_tools = {k: v for k, v in ext_tools.items() if k in visible_names}
+        # End-if
+        self.prompt_builder.extension_tools = ext_tools
+    # End-def
+
+    ##
+     # @brief Live-reload hot-plugged tools, SubAgent pool, schemas, and prompt metadata.
+     #
+     # Purges all dynamically loaded _dandelion_ext_* modules from sys.modules and
+     # re-runs tool_factory(self) so newly dropped or edited plugin files take
+     # effect without restarting the process.
+     #
+     # @return Summary dictionary with purged_modules, total_tools, tool_names,
+     #         extension_tools, worker_toolsets, and errors.
+     #
+    def reload_tools(self) -> dict:
+        from ..tool.loader import ToolLoader
+
+        purged = ToolLoader.purge_loaded_modules()
+        self.extension_tools = {}
+        self.tool_load_errors = []
+        self._init_tools()
+        ts_registry = getattr(self.pool, "toolset_registry", None) or self.toolset_registry
+        return {
+            "purged_modules": purged,
+            "total_tools": len(self.tools),
+            "tool_names": sorted(self.tools.keys()),
+            "extension_tools": sorted(self.extension_tools.keys()),
+            "worker_toolsets": ts_registry.names() if ts_registry is not None else [],
+            "errors": list(self.tool_load_errors),
+        }
     # End-def
 
     ##

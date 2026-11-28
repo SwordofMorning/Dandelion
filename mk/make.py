@@ -13,6 +13,7 @@
  # @usage
  #   python mk/make.py            : full standalone build (same as 'all')
  #   python mk/make.py all        : build standalone executable into build/
+ #   python mk/make.py dev        : local-first editable install of dandelion-core + root [dev]
  #   python mk/make.py native     : build & install packages/dandelion-core editable
  #   python mk/make.py wheel      : build precompiled dandelion-core wheel into dist/
  #   python mk/make.py sdist      : build dandelion-core source distribution into dist/
@@ -55,7 +56,6 @@ if ROOT_DIR not in sys.path:
 STALE_SRC_DIRS = (
     os.path.join("src", "core"),
     os.path.join("src", "subagent"),
-    os.path.join("src", "tool"),
     os.path.join("src", "utils"),
 )
 
@@ -67,6 +67,7 @@ USAGE = """Usage: python mk/make.py [target] [args...]
 Targets:
   (none)   : full standalone build (same as 'all')
   all      : build standalone executable into build/
+  dev      : local-first editable install of dandelion-core + root [dev]
   native   : build & install packages/dandelion-core native C++ extension
   wheel    : build precompiled dandelion-core .whl into dist/
   sdist    : build dandelion-core source distribution (.tar.gz) into dist/
@@ -137,9 +138,77 @@ def _project_meta():
 def _check_nuitka():
     if importlib.util.find_spec("nuitka") is None:
         print("[-] Nuitka is not installed.")
-        print("    Install with: pip install -e \".[dev]\"")
+        print("    Install with: python mk/make.py dev  (or: pip install -e packages/dandelion-core -e \".[dev]\")")
         sys.exit(1)
     # End-if
+# End-def
+
+
+##
+ # @brief Verify installed dandelion-core originates from this repository (PEP 610 direct_url.json).
+ #
+ # Rejects accidental PyPI installations unless DANDELION_ALLOW_EXTERNAL_CORE=1 is set.
+ # Accepts editable installs from packages/dandelion-core or local wheels from dist-wheels/ / dist/.
+ #
+def _verify_local_core_installed():
+    if os.environ.get("DANDELION_ALLOW_EXTERNAL_CORE", "").strip() == "1":
+        print("[!] Warning: DANDELION_ALLOW_EXTERNAL_CORE=1 set; skipping local dandelion-core provenance check.")
+        return
+    # End-if
+
+    import importlib.metadata as imeta
+    import json
+    from urllib.parse import urlparse
+    from urllib.request import url2pathname
+
+    try:
+        dist = imeta.distribution("dandelion-core")
+    except imeta.PackageNotFoundError:
+        print("[-] FATAL: dandelion-core is not installed.")
+        print("    Fix with: python mk/make.py dev")
+        sys.exit(1)
+    # End-try
+
+    raw = dist.read_text("direct_url.json")
+    if not raw:
+        print("[-] FATAL: Installed dandelion-core came from PyPI (missing PEP 610 direct_url.json).")
+        print("    Local builds must use packages/dandelion-core, dist-wheels/, or dist/.")
+        print("    Fix with: python mk/make.py dev  (or set DANDELION_ALLOW_EXTERNAL_CORE=1 to override)")
+        sys.exit(1)
+    # End-if
+
+    try:
+        info = json.loads(raw)
+    except Exception as exc:
+        print("[-] FATAL: Invalid direct_url.json for dandelion-core: " + str(exc))
+        sys.exit(1)
+    # End-try
+
+    url = info.get("url", "") if isinstance(info, dict) else ""
+    parsed = urlparse(url)
+    if parsed.scheme != "file":
+        print("[-] FATAL: Installed dandelion-core is not a local file:// install (" + str(url) + ").")
+        sys.exit(1)
+    # End-if
+
+    path_part = parsed.path
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        path_part = "//" + parsed.netloc + path_part
+    # End-if
+    local_path = os.path.realpath(url2pathname(path_part))
+
+    allowed_roots = (
+        os.path.realpath(os.path.join(ROOT_DIR, "packages", "dandelion-core")),
+        os.path.realpath(os.path.join(ROOT_DIR, "dist-wheels")),
+        os.path.realpath(os.path.join(ROOT_DIR, "dist")),
+    )
+    if not any(local_path == r or local_path.startswith(r + os.sep) for r in allowed_roots):
+        print("[-] FATAL: Installed dandelion-core points outside this repository: " + local_path)
+        print("    Fix with: python mk/make.py dev  (or set DANDELION_ALLOW_EXTERNAL_CORE=1 to override)")
+        sys.exit(1)
+    # End-if
+
+    print("[+] Verified local dandelion-core (" + dist.version + "): " + local_path)
 # End-def
 
 
@@ -250,6 +319,7 @@ def _run_nuitka(cfg, name, version):
         "--include-package=dandelion_core",
         "--include-package-data=dandelion_core",
         "--nofollow-import-to=src.remote",
+        "--nofollow-import-to=src.tool",
         "--include-module=_bisect",
         "--include-module=mk.lib.paths",
         "--include-module=mk.lib.build_info",
@@ -470,102 +540,83 @@ def _copy_dependency_closure(roots, dst_dir):
 
 
 ##
- # @brief Copy stdlib modules imported by bypassed packages into bin/_stdlib_fallback.
+ # @brief Bundle the lean pure-Python standard library into bin/_stdlib_fallback.
+ #
+ # Ensures both bypassed packages and post-build hot-plugged tools (e.g. imaplib,
+ # smtplib, poplib, ftplib, email.*, tomllib) work without rebuilding Nuitka,
+ # while excluding tests, GUI/tooling bloat, site-packages, and host binaries.
  #
  # @param bin_dir Destination directory (bin/).
  #
 def _copy_stdlib_fallback(bin_dir):
-    import ast
-    import sys as _sys
+    import sysconfig
 
-    stdlib_names = set(_sys.stdlib_module_names)
+    stdlib_dir = sysconfig.get_path("stdlib")
+    if not stdlib_dir or not os.path.isdir(stdlib_dir):
+        print("  [-] Warning: stdlib directory not found: " + str(stdlib_dir))
+        return
+    # End-if
+
     fallback_dir = os.path.join(bin_dir, "_stdlib_fallback")
     os.makedirs(fallback_dir, exist_ok=True)
 
-    copied = set()
-    scanned_files = set()
-    changed = True
-    rounds = 0
+    excluded_dirs = {
+        "test",
+        "tests",
+        "tkinter",
+        "idlelib",
+        "turtledemo",
+        "ensurepip",
+        "venv",
+        "lib2to3",
+        "pydoc_data",
+        "site-packages",
+        "dist-packages",
+        "lib-dynload",
+        "__pycache__",
+        "plat-linux",
+        "tools",
+    }
+    excluded_exts = (".so", ".pyd", ".dll", ".dylib", ".a", ".pyc", ".pyo", ".exe", ".lib")
 
-    while changed and rounds < 10:
-        changed = False
-        rounds += 1
-        found = set()
-
-        for dirpath, dirnames, filenames in os.walk(bin_dir):
-            if "__pycache__" in dirnames:
-                dirnames.remove("__pycache__")
+    copied_files = 0
+    for dirpath, dirnames, filenames in os.walk(stdlib_dir):
+        rel_dir = os.path.relpath(dirpath, stdlib_dir)
+        is_top = rel_dir == "."
+        filtered = []
+        for d in sorted(dirnames):
+            if d in excluded_dirs:
+                continue
             # End-if
-            for fn in filenames:
-                if not fn.endswith(".py"):
-                    continue
-                # End-if
-                path = os.path.join(dirpath, fn)
-                if path in scanned_files:
-                    continue
-                # End-if
-                scanned_files.add(path)
-                try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        tree = ast.parse(f.read())
-                    # End-with
-                except Exception:
-                    continue
-                # End-try
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            top = alias.name.split(".")[0]
-                            if top in stdlib_names:
-                                found.add(top)
-                            # End-if
-                        # End-for
-                    elif isinstance(node, ast.ImportFrom) and node.module:
-                        top = node.module.split(".")[0]
-                        if top in stdlib_names:
-                            found.add(top)
-                        # End-if
-                    # End-if
-                # End-for
-            # End-for
+            if d.startswith("config-") or d.startswith("."):
+                continue
+            # End-if
+            if is_top and d.lower() in ("site-packages", "dist-packages", "lib-dynload"):
+                continue
+            # End-if
+            filtered.append(d)
         # End-for
+        dirnames[:] = filtered
 
-        for mod in sorted(found):
-            if mod in copied:
+        for fn in sorted(filenames):
+            if not fn.endswith(".py"):
                 continue
             # End-if
-            spec = importlib.util.find_spec(mod)
-            if spec is None:
+            if fn.endswith(excluded_exts):
                 continue
             # End-if
-            if spec.submodule_search_locations:
-                src = spec.submodule_search_locations[0]
-                dst = os.path.join(fallback_dir, mod)
-                # Restrict stdlib fallback strictly to Python sources (never copy
-                # host lib-dynload *.so/*.pyd binaries with raw host RPATHs).
-                shutil.copytree(
-                    src,
-                    dst,
-                    dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.so", "*.pyd", "*.dll", "*.dylib"),
-                )
-            elif spec.origin and spec.origin not in ("built-in", "frozen") and spec.origin.endswith(".py"):
-                dst = os.path.join(fallback_dir, os.path.basename(spec.origin))
-                if os.path.exists(dst):
-                    copied.add(mod)
-                    continue
-                # End-if
-                shutil.copy2(spec.origin, dst)
-            else:
+            src_path = os.path.join(dirpath, fn)
+            if os.path.islink(src_path) and not os.path.isfile(src_path):
                 continue
             # End-if
-            copied.add(mod)
-            changed = True
-            print("  [+] Stdlib fallback: " + mod)
+            dst_dir = fallback_dir if is_top else os.path.join(fallback_dir, rel_dir)
+            os.makedirs(dst_dir, exist_ok=True)
+            shutil.copy2(src_path, os.path.join(dst_dir, fn))
+            copied_files += 1
         # End-for
-    # End-while
+    # End-for
 
-    print("  [+] Stdlib fallbacks in: " + fallback_dir)
+    print("  [+] Bundled " + str(copied_files) + " pure-Python stdlib files into: " + fallback_dir)
 # End-def
 
 
@@ -663,7 +714,7 @@ def _postprocess(cfg, name, version):
 
     # ----- @par 2. Create required workspace directories -----
     print("[*] Creating workspace layout...")
-    workspace_dirs = [".env", "llm/memory", "llm/skill", "llm/sysprompt", ".log"]
+    workspace_dirs = [".env", "llm/memory", "llm/skill", "llm/sysprompt", "tool", ".log"]
     for d in workspace_dirs:
         d_path = os.path.join(target_dir, d.replace("/", os.sep))
         os.makedirs(d_path, exist_ok=True)
@@ -671,7 +722,48 @@ def _postprocess(cfg, name, version):
             f.write("")
         # End-with
     # End-for
-    print("  [+] Created directories: .env, llm, .log")
+    print("  [+] Created directories: .env, llm, tool, .log")
+
+    # Copy any drop-in plugin modules/packages from src/tool/ and src/cli/tool/
+    # into <target_dir>/tool/ while skipping bare __init__.py markers.
+    dst_tool_dir = os.path.join(target_dir, "tool")
+    copied_plugins = 0
+    for rel_tool_src in (os.path.join("src", "tool"), os.path.join("src", "cli", "tool")):
+        src_tool_dir = os.path.join(ROOT_DIR, rel_tool_src)
+        if not os.path.isdir(src_tool_dir):
+            continue
+        # End-if
+        for entry_name in sorted(os.listdir(src_tool_dir)):
+            if entry_name.startswith(".") or entry_name == "__pycache__":
+                continue
+            # End-if
+            src_item = os.path.join(src_tool_dir, entry_name)
+            dst_item = os.path.join(dst_tool_dir, entry_name)
+            if os.path.isfile(src_item):
+                if entry_name == "__init__.py" or not entry_name.endswith(".py"):
+                    continue
+                # End-if
+                shutil.copy2(src_item, dst_item)
+                copied_plugins += 1
+                print("  [+] Copied tool plugin: " + os.path.join(rel_tool_src, entry_name))
+            elif os.path.isdir(src_item):
+                shutil.copytree(
+                    src_item,
+                    dst_item,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".*"),
+                )
+                copied_plugins += 1
+                print("  [+] Copied tool plugin package: " + os.path.join(rel_tool_src, entry_name) + "/")
+            # End-if
+        # End-for
+    # End-for
+    if copied_plugins:
+        keep = os.path.join(dst_tool_dir, ".keep")
+        if os.path.exists(keep):
+            os.remove(keep)
+        # End-if
+    # End-if
 
     # Copy bundled subdirectories under llm/ (e.g. skill/, sysprompt/) into the
     # artifact while keeping runtime llm/memory/ empty.
@@ -828,6 +920,7 @@ def _remove_empty_dirs(root):
  # @brief Target: build standalone executable (default).
  #
 def target_all():
+    _verify_local_core_installed()
     name, version = _project_meta()
     cfg = _load_config()
 
@@ -841,6 +934,36 @@ def target_all():
     _gen_build_info(version)
     _run_nuitka(cfg, name, version)
     _postprocess(cfg, name, version)
+# End-def
+
+
+##
+ # @brief Target: atomic local-first editable install of dandelion-core + root [dev].
+ #
+def target_dev():
+    cfg = _load_config()
+    core_rel = cfg.get("core", "package_dir", fallback=os.path.join("packages", "dandelion-core"))
+    core_dir = os.path.join(ROOT_DIR, core_rel)
+    if not os.path.isdir(core_dir):
+        print("[-] Core package directory not found: " + core_dir)
+        sys.exit(1)
+    # End-if
+
+    cmd = [sys.executable, "-m", "pip", "install"]
+    if _has_local_core_build_deps():
+        cmd.append("--no-build-isolation")
+    # End-if
+    cmd.extend(["-e", core_dir, "-e", ".[dev]"])
+
+    print("[*] Installing local dandelion-core + root dev dependencies (local-first)...")
+    print("[*] Executing: " + " ".join(cmd))
+    result = subprocess.run(cmd, cwd=ROOT_DIR)
+    if result.returncode != 0:
+        print("[-] Local dev install failed with exit code " + str(result.returncode))
+        sys.exit(result.returncode)
+    # End-if
+    _verify_local_core_installed()
+    print("[+] Local dev environment ready in: " + sys.executable)
 # End-def
 
 
@@ -932,7 +1055,11 @@ def target_sdist():
     # End-if
 
     os.makedirs(out_dir, exist_ok=True)
-    cmd = [sys.executable, "-m", "build", "--sdist", "--outdir", out_dir, core_dir]
+    cmd = [sys.executable, "-m", "build", "--sdist"]
+    if _has_local_core_build_deps():
+        cmd.append("--no-isolation")
+    # End-if
+    cmd.extend(["--outdir", out_dir, core_dir])
     print("[*] Building dandelion-core sdist into " + os.path.relpath(out_dir, ROOT_DIR) + "/...")
     print("[*] Executing: " + " ".join(cmd))
     result = subprocess.run(cmd, cwd=ROOT_DIR)
@@ -1080,6 +1207,7 @@ def main():
 
     handlers = {
         "all": target_all,
+        "dev": target_dev,
         "native": target_native,
         "wheel": target_wheel,
         "sdist": target_sdist,

@@ -1,26 +1,31 @@
 ##
  # @file packages/dandelion-core/src/dandelion_core/tool/agent/state_tool.py
- # @date 2026/08/13
+ # @date 2026/11/28
  #
  # @brief Session-scoped task-state update tool.
  # Merges the current target, pending todos and completed items into task_state.json.
  # Enforces ASCII state fields and atomically persists each updated state.
  #
 
-import os
 import json
+import os
 from ..base_tool import BaseTool
+
 
 ##
  # @brief State Update Class.
  #
 class StateTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #
      # @param workspace_dir Default to current directory if not explicitly provided.
      # @param session_manager Session manager; resolves the active session's
-     # task_state.json dynamically.
+     #        task_state.json dynamically.
+     #
+     # @return None.
      #
     def __init__(self, workspace_dir=None, session_manager=None):
         super().__init__(workspace_dir)
@@ -43,10 +48,14 @@ class StateTool(BaseTool):
     def _get_state_file(self):
         if self.session_manager is not None:
             return self.session_manager.ensure_task_state_file()
+        # End-if
         return None
+    # End-def
 
     ##
      # @brief Return tool's name.
+     #
+     # @return Tool identifier string.
      #
     def get_name(self):
         return "update_state"
@@ -54,6 +63,8 @@ class StateTool(BaseTool):
 
     ##
      # @brief Return tool's description.
+     #
+     # @return Human-readable tool description.
      #
     def get_description(self):
         return (
@@ -68,6 +79,8 @@ class StateTool(BaseTool):
     ##
      # @brief Return tool's schema.
      #
+     # @return JSON input schema dictionary.
+     #
     def get_schema(self):
         # All fields optional: execute() merges into existing state, so the
         # model can update a single field without rewriting the whole state.
@@ -78,15 +91,16 @@ class StateTool(BaseTool):
                 "todos": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of pending sub-tasks."
+                    "description": "List of pending sub-tasks.",
                 },
                 "completed": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of completed sub-tasks."
-                }
-            }
+                    "description": "List of completed sub-tasks.",
+                },
+            },
         }
+    # End-def
 
     ##
      # @brief Load current task state.
@@ -103,23 +117,31 @@ class StateTool(BaseTool):
             # No active session: execute() reports the error before writing;
             # nothing to read here.
             return state
+        # End-if
         if os.path.exists(state_file):
             try:
                 with open(state_file, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
+                # End-with
                 # Keep the loaded value only when it is a dict; otherwise the
                 # file is malformed (e.g. manual edits) and execute would crash
                 # on state["target"] updates.
                 if isinstance(loaded, dict):
                     state = loaded
                 else:
-                    self._emit(f"[-] Warning: task state at {state_file} is not a JSON "
-                          "object; falling back to a fresh default state.")
+                    self._emit(
+                        f"[-] Warning: task state at {state_file} is not a JSON "
+                        "object; falling back to a fresh default state."
+                    )
+                # End-if
             except Exception as e:
                 # A corrupt state file must not break the tool, but the loss is
                 # loud: the next successful update overwrites the corrupt file.
                 self._emit(f"[-] Warning: failed to parse task state at {state_file}: {e}")
+            # End-try
+        # End-if
         return state
+    # End-def
 
     ##
      # @brief Write JSON atomically (tmp + os.replace).
@@ -130,15 +152,16 @@ class StateTool(BaseTool):
      # @note A crash mid-write never leaves a half-written task_state.json
      # (the attention anchor would be lost and silently reset to defaults).
      #
+     # @return None.
+     #
     @staticmethod
     def _atomic_write_json(path, state):
-        """Write JSON atomically (tmp + os.replace) so a crash mid-write never
-        leaves a half-written task_state.json (the attention anchor would be
-        lost and silently reset to defaults on the next turn)."""
         tmp_path = path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
+        # End-with
         os.replace(tmp_path, path)
+    # End-def
 
     ##
      # @brief Check whether a value contains non-ASCII characters.
@@ -151,7 +174,9 @@ class StateTool(BaseTool):
     def _has_non_ascii(value):
         if isinstance(value, list):
             return any(ord(ch) > 127 for v in value for ch in str(v or ""))
+        # End-if
         return any(ord(ch) > 127 for ch in str(value or ""))
+    # End-def
 
     ##
      # @brief Safely render todos/completed as a single string.
@@ -164,9 +189,12 @@ class StateTool(BaseTool):
     def _coerce_list(value):
         if value is None:
             return ""
+        # End-if
         if isinstance(value, list):
             return ", ".join(str(x) for x in value if x is not None)
+        # End-if
         return str(value)
+    # End-def
 
     ##
      # @brief Update the task state (target/todos/completed).
@@ -178,7 +206,7 @@ class StateTool(BaseTool):
      # enforcement (Language Policy) rejects non-ASCII values with a hint.
      #
      # @return (success_bool, result_string) result_string echoes the merged
-     # state on success so the model sees it immediately.
+     #         state on success so the model sees it immediately.
      #
     def execute(self, **kwargs):
         # Session-scoped only: without an active session there is no place to
@@ -186,6 +214,7 @@ class StateTool(BaseTool):
         # (the legacy llm/task fallback was removed).
         if self.session_manager is None:
             return False, "Error: 'update_state' requires an active session (no session manager attached)."
+        # End-if
 
         # Merge semantics: only provided fields are updated, so partial
         # updates never wipe out the rest of the task state.
@@ -201,27 +230,35 @@ class StateTool(BaseTool):
                     "(non-ASCII text breaks internal handling). Please translate "
                     f"'{kwargs.get(key)}' to English and re-submit."
                 )
+            # End-if
+        # End-for
 
         if "target" in kwargs and kwargs.get("target") is not None:
             state["target"] = kwargs.get("target")
+        # End-if
         if "todos" in kwargs and kwargs.get("todos") is not None:
             state["todos"] = kwargs.get("todos")
+        # End-if
         if "completed" in kwargs and kwargs.get("completed") is not None:
             state["completed"] = kwargs.get("completed")
+        # End-if
 
         try:
-            state_file = self._get_state_file()  # ensures the blank file exists
+            state_file = self._get_state_file()
             # A manager may be attached without an active session directory
             # (ensure_task_state_file() -> None). Report it as a tool error
             # instead of crashing on None + '.tmp' inside _atomic_write_json().
             if not state_file:
                 return False, "Error: 'update_state' found no active session directory to persist task state."
+            # End-if
             self._atomic_write_json(state_file, state)
         except OSError as e:
             # Disk-level failures (state path corrupted into a directory, full
             # disk, permission errors) surface as a tool error instead of
             # crashing the whole agent turn.
             return False, f"Error: failed to write task state: {e}"
+        # End-try
+
         # Echo the merged state back so the model sees it immediately in the
         # tool result (fresh region, cache-friendly). Mid-tool-loop the
         # [Dandelion Context] block is only refreshed at user turns, so
@@ -233,3 +270,5 @@ class StateTool(BaseTool):
             f"- Pending TODOs: {self._coerce_list(state.get('todos'))}\n"
             f"- Completed: {self._coerce_list(state.get('completed'))}"
         )
+    # End-def
+# End-class

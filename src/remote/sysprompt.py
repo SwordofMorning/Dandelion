@@ -71,6 +71,22 @@ class RemotePromptBuilder(BasePromptBuilder):
         )
         sections = [self._load_sysprompt_file("remote.md", fallback=default_body)]
 
+        ext_sec = self._build_extension_tools_section()
+        if ext_sec:
+            sections.append(ext_sec)
+        # End-if
+
+        if self._has_tool("submit_task"):
+            ts_reg = getattr(self, "toolset_registry", None)
+            if ts_reg is not None and hasattr(ts_reg, "format_prompt_lines"):
+                worker_names = getattr(self, "worker_tool_names", None)
+                ts_lines = ts_reg.format_prompt_lines(worker_names)
+                if ts_lines:
+                    sections.append("Available Background SubAgent Toolsets ('submit_task'):\n" + ts_lines)
+                # End-if
+            # End-if
+        # End-if
+
         skills_sec = self._build_skills_section()
         if skills_sec:
             sections.append(skills_sec)

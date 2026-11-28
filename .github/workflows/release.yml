@@ -25,7 +25,7 @@ jobs:
       is_release: ${{ steps.set_tag.outputs.is_release }}
       is_prerelease: ${{ steps.set_tag.outputs.is_prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -122,12 +122,12 @@ jobs:
             os: windows-latest
             cibw_archs: AMD64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Cache compiled static zlib + OpenSSL 3.0 + minimal HTTP/HTTPS libcurl 8.11
       - name: Cache static OpenSSL/libcurl (Linux)
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .wheel-deps-cache
           key: static-curl-v2-${{ matrix.cibw_archs }}-${{ hashFiles('mk/scripts/build_curl_static.sh') }}
@@ -144,7 +144,8 @@ jobs:
         env:
           PEP440_VER: ${{ needs.meta.outputs.pep440_version }}
         run: |
-          python3 -c '
+          if python3 --version >/dev/null 2>&1; then PY=python3; else PY=python; fi
+          "$PY" -c '
           import os, pathlib, re
           p = pathlib.Path("packages/dandelion-core/pyproject.toml")
           ver = os.environ["PEP440_VER"]
@@ -154,7 +155,7 @@ jobs:
           '
 
       - name: Build wheels with cibuildwheel
-        uses: pypa/cibuildwheel@v3
+        uses: pypa/cibuildwheel@v4.3
         with:
           package-dir: packages/dandelion-core
           output-dir: dist-wheels
@@ -162,14 +163,14 @@ jobs:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
 
       # Restore runner UID/GID ownership on .wheel-deps-cache written by root inside
-      # manylinux2014 so actions/cache@v4 can archive and clean it cleanly.
+      # manylinux2014 so actions/cache@v6 can archive and clean it cleanly.
       - name: Fix .wheel-deps-cache ownership (Linux)
         if: always() && runner.os == 'Linux'
         run: |
           if [ -d "${{ github.workspace }}/.wheel-deps-cache" ]; then
             docker run --rm \
               -v "${{ github.workspace }}/.wheel-deps-cache:/opt/dandelion-deps" \
-              "quay.io/pypa/manylinux2014_${{ matrix.cibw_archs }}" \
+              ubuntu:24.04 \
               chown -R "$(id -u):$(id -g)" /opt/dandelion-deps || true
           fi
 
@@ -180,7 +181,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          UV_VERSION="0.11.16"
+          UV_VERSION="0.13.10"
           UV_ARCH="$(uname -m)"
           case "$UV_ARCH" in
             x86_64)  UV_TARGET="x86_64-unknown-linux-gnu" ;;
@@ -203,11 +204,25 @@ jobs:
           install -m 755 "$UV_BIN" /tmp/uv-host/uv-bin
 
           VERIFY_PY=$(cat <<'PYEOF'
-          import os, subprocess, sys, tempfile
+          import importlib.metadata, json, os, subprocess, sys, tempfile
           import dandelion_core
           from dandelion_core.agent.sysprompt import BasePromptBuilder
           from dandelion_core.tool.shell.ssh_tool import SSHTool
           from dandelion_core.utils.llm_provider import _native, create_provider
+
+          # Enforce strict local-wheel PEP 610 provenance (never silently pulled from PyPI)
+          du_raw = importlib.metadata.distribution("dandelion-core").read_text("direct_url.json")
+          assert du_raw, "Missing PEP 610 direct_url.json (installed from PyPI instead of /wheels!)"
+          du = json.loads(du_raw)
+          url = du.get("url", "")
+          assert url.startswith("file:///wheels/"), f"Not installed from local /wheels: {du}"
+          exp_name = os.environ.get("EXPECTED_WHEEL_NAME", "")
+          if exp_name:
+              assert url.endswith("/" + exp_name), f"Unexpected wheel filename: {url} vs {exp_name}"
+          exp_sha = os.environ.get("EXPECTED_WHEEL_SHA256", "")
+          act_sha = du.get("archive_info", {}).get("hashes", {}).get("sha256", "")
+          if exp_sha and act_sha:
+              assert act_sha == exp_sha, f"Wheel SHA256 mismatch: {act_sha} != {exp_sha}"
 
           so_path = os.path.abspath(_native.__file__)
           assert so_path.startswith(os.path.abspath(sys.prefix)), f"_native outside venv: {so_path}"
@@ -265,7 +280,9 @@ jobs:
                 if [[ "$VERIFY_IMAGE" == ubuntu:* ]]; then
                   export DEBIAN_FRONTEND=noninteractive
                   if ! apt-get update -qq; then
-                    sed -i "s|http://archive.ubuntu.com|http://old-releases.ubuntu.com|g; s|http://security.ubuntu.com|http://old-releases.ubuntu.com|g; s|https://archive.ubuntu.com|https://old-releases.ubuntu.com|g; s|https://security.ubuntu.com|https://old-releases.ubuntu.com|g; s|http://ports.ubuntu.com|http://old-releases.ports.ubuntu.com|g; s|https://ports.ubuntu.com|https://old-releases.ports.ubuntu.com|g" /etc/apt/sources.list
+                    if [ -f /etc/apt/sources.list ]; then
+                      sed -i "s|http://archive.ubuntu.com|http://old-releases.ubuntu.com|g; s|http://security.ubuntu.com|http://old-releases.ubuntu.com|g; s|https://archive.ubuntu.com|https://old-releases.ubuntu.com|g; s|https://security.ubuntu.com|https://old-releases.ubuntu.com|g; s|http://ports.ubuntu.com|http://old-releases.ports.ubuntu.com|g; s|https://ports.ubuntu.com|https://old-releases.ports.ubuntu.com|g" /etc/apt/sources.list
+                    fi
                     apt-get update -qq
                   fi
                   # Install ONLY ca-certificates; libcurl4 must remain absent!
@@ -280,12 +297,24 @@ jobs:
                 export UV_PYTHON_INSTALL_DIR=/tmp/uv-py
                 # Test cp311 wheel on Python 3.11 AND cp312-abi3 wheel on Python 3.13!
                 uv python install 3.11 3.13
+                shopt -s nullglob
                 for pyver in 3.11 3.13; do
-                  echo "--- Testing wheel under Python ${pyver} in ${VERIFY_IMAGE} ---"
+                  if [ "$pyver" = "3.11" ]; then
+                    matches=(/wheels/dandelion_core-*-cp311-*.whl)
+                  else
+                    matches=(/wheels/dandelion_core-*-cp312-abi3-*.whl)
+                  fi
+                  if [ "${#matches[@]}" -ne 1 ]; then
+                    echo "[-] Expected exactly 1 local wheel for Python ${pyver}, found ${#matches[@]}: ${matches[*]}"
+                    exit 1
+                  fi
+                  WHEEL_FILE="${matches[0]}"
+                  EXPECTED_WHEEL_SHA256="$(sha256sum "$WHEEL_FILE" | awk '{print $1}')"
+                  EXPECTED_WHEEL_NAME="$(basename "$WHEEL_FILE")"
+                  echo "--- Testing local wheel ${WHEEL_FILE} under Python ${pyver} in ${VERIFY_IMAGE} ---"
                   uv venv "/tmp/venv-${pyver}" --python "${pyver}"
-                  uv pip install --python "/tmp/venv-${pyver}/bin/python" \
-                    --find-links /wheels --only-binary=dandelion-core dandelion-core
-                  "/tmp/venv-${pyver}/bin/python" -I -c "$VERIFY_PY"
+                  uv pip install --python "/tmp/venv-${pyver}/bin/python" "$WHEEL_FILE"
+                  EXPECTED_WHEEL_SHA256="$EXPECTED_WHEEL_SHA256" EXPECTED_WHEEL_NAME="$EXPECTED_WHEEL_NAME" "/tmp/venv-${pyver}/bin/python" -I -c "$VERIFY_PY"
                 done
               '
           done
@@ -293,14 +322,14 @@ jobs:
       - name: Set up Python 3.11 for Windows wheel verification
         if: runner.os == 'Windows'
         id: win-py311
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Set up Python 3.13 for Windows cp312-abi3 wheel verification
         if: runner.os == 'Windows'
         id: win-py313
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
@@ -313,10 +342,26 @@ jobs:
         run: |
           set -euo pipefail
           WIN_VERIFY_PY=$(cat <<'PYEOF'
-          import os, sys, tempfile
+          import importlib.metadata, json, os, sys, tempfile
+          from urllib.parse import urlparse
+          from urllib.request import url2pathname
           from dandelion_core.agent.sysprompt import BasePromptBuilder
           from dandelion_core.tool.shell.ssh_tool import SSHTool
           from dandelion_core.utils.llm_provider import _native, create_provider
+
+          # Enforce strict local-wheel PEP 610 provenance before chdir
+          du_raw = importlib.metadata.distribution("dandelion-core").read_text("direct_url.json")
+          assert du_raw, "Missing PEP 610 direct_url.json (installed from PyPI instead of dist-wheels!)"
+          du = json.loads(du_raw)
+          url = du.get("url", "")
+          assert url.startswith("file://"), f"Non-local direct_url: {du}"
+          resolved = os.path.realpath(url2pathname(urlparse(url).path))
+          expected_root = os.path.realpath("dist-wheels")
+          assert resolved.startswith(expected_root + os.sep), f"Wheel outside dist-wheels: {resolved}"
+          exp_sha = os.environ.get("EXPECTED_WHEEL_SHA256", "")
+          act_sha = du.get("archive_info", {}).get("hashes", {}).get("sha256", "")
+          if exp_sha and act_sha:
+              assert act_sha == exp_sha, f"Wheel SHA256 mismatch: {act_sha} != {exp_sha}"
 
           pyd_path = os.path.abspath(_native.__file__)
           assert pyd_path.startswith(os.path.abspath(sys.prefix)), pyd_path
@@ -348,21 +393,30 @@ jobs:
           print(f"[+] Windows wheel verification PASS (Python {sys.version_info.major}.{sys.version_info.minor}): {pyd_path}")
           PYEOF
           )
+          shopt -s nullglob
           for pyver in 311 313; do
             if [ "$pyver" = "311" ]; then
               PY_BIN="$WIN_PY311"
+              matches=(dist-wheels/dandelion_core-*-cp311-*.whl)
             else
               PY_BIN="$WIN_PY313"
+              matches=(dist-wheels/dandelion_core-*-cp312-abi3-*.whl)
             fi
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "[-] Expected exactly 1 local wheel for cp${pyver}, found ${#matches[@]}: ${matches[*]}"
+              exit 1
+            fi
+            WHEEL_FILE="${matches[0]}"
+            EXPECTED_WHEEL_SHA256="$("$PY_BIN" -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$WHEEL_FILE")"
             VENV_DIR="/tmp/win-wheel-verify-${pyver}"
             rm -rf "$VENV_DIR"
             "$PY_BIN" -m venv "$VENV_DIR"
-            "$VENV_DIR/Scripts/python.exe" -m pip install --find-links dist-wheels --only-binary=dandelion-core dandelion-core
-            "$VENV_DIR/Scripts/python.exe" -I -c "$WIN_VERIFY_PY"
+            "$VENV_DIR/Scripts/python.exe" -m pip install "$WHEEL_FILE"
+            EXPECTED_WHEEL_SHA256="$EXPECTED_WHEEL_SHA256" "$VENV_DIR/Scripts/python.exe" -I -c "$WIN_VERIFY_PY"
           done
 
       - name: Upload dandelion-core wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: core-wheels-${{ matrix.label }}
           path: dist-wheels/*.whl
@@ -373,9 +427,9 @@ jobs:
     name: Sdist dandelion-core
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -399,7 +453,7 @@ jobs:
           python -m build --sdist --outdir dist-sdist packages/dandelion-core
 
       - name: Upload dandelion-core sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: core-sdist
           path: dist-sdist/*.tar.gz
@@ -435,15 +489,24 @@ jobs:
             docker_image: quay.io/pypa/manylinux2014_aarch64
             wheel_artifact: core-wheels-linux-aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      - name: Set up Python (host mode only)
+        if: matrix.build_mode == 'host'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      # Stamp only package version fields on release tags; keep root's
+      # "dandelion-core>=0.1.0" dependency floor unchanged for local-first dev.
       - name: Sync root and core pyproject versions with release tag (PEP 440)
         if: needs.meta.outputs.is_release == 'true'
         shell: bash
         env:
           PEP440_VER: ${{ needs.meta.outputs.pep440_version }}
         run: |
-          python3 -c '
+          if python3 --version >/dev/null 2>&1; then PY=python3; else PY=python; fi
+          "$PY" -c '
           import os, pathlib, re
           ver = os.environ["PEP440_VER"]
           for rel in ("pyproject.toml", "packages/dandelion-core/pyproject.toml"):
@@ -454,27 +517,21 @@ jobs:
           '
 
       - name: Download prebuilt dandelion-core wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.wheel_artifact }}
           path: dist-wheels
 
-      - name: Set up Python (host mode only)
-        if: matrix.build_mode == 'host'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Cache Virtual Environment
         id: cache-venv
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: venv
           key: venv-v4-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'packages/dandelion-core/pyproject.toml') }}
 
       - name: Cache Standalone Python (uv)
         if: matrix.build_mode == 'docker'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .uv-python
           key: uv-python-v2-${{ matrix.os_name }}-${{ matrix.arch }}-manylinux2014-3.11
@@ -486,20 +543,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s nullglob
           if [ ! -x venv/Scripts/python.exe ]; then
             rm -rf venv
             python -m venv venv
           fi
           echo "${{ github.workspace }}/venv/Scripts" >> "$GITHUB_PATH"
           venv/Scripts/python.exe -m pip install --upgrade pip
-          WHEEL_FILE="$(ls dist-wheels/dandelion_core-*cp311*.whl | head -1)"
+          wheels=(dist-wheels/dandelion_core-*-cp311-*.whl)
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "[-] Expected exactly 1 cp311 wheel in dist-wheels/, found ${#wheels[@]}: ${wheels[*]}"
+            exit 1
+          fi
+          WHEEL_FILE="${wheels[0]}"
+          EXPECTED_WHEEL_SHA256="$(venv/Scripts/python.exe -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$WHEEL_FILE")"
           echo "[+] Installing prebuilt wheel: $WHEEL_FILE"
-          venv/Scripts/python.exe -m pip install --find-links dist-wheels --only-binary=dandelion-core "$WHEEL_FILE" -e ".[dev]"
+          venv/Scripts/python.exe -m pip install "$WHEEL_FILE" -e ".[dev]"
           venv/Scripts/python.exe -m pip install --force-reinstall --no-deps "$WHEEL_FILE"
-          venv/Scripts/python.exe -c "import prompt_toolkit, tzdata, dandelion_core; from dandelion_core.utils.llm_provider import _native; print('[+] Verified env:', _native.__file__)"
+          EXPECTED_WHEEL_SHA256="$EXPECTED_WHEEL_SHA256" venv/Scripts/python.exe -c '
+          import importlib.metadata as m, json, os, prompt_toolkit, tzdata, dandelion_core
+          from urllib.parse import urlparse
+          from urllib.request import url2pathname
+          from dandelion_core.utils.llm_provider import _native
+          raw = m.distribution("dandelion-core").read_text("direct_url.json")
+          assert raw, "Missing PEP 610 direct_url.json (non-local dandelion-core)"
+          du = json.loads(raw)
+          url = du.get("url", "")
+          assert url.startswith("file://"), f"Non-local direct_url: {du}"
+          resolved = os.path.realpath(url2pathname(urlparse(url).path))
+          assert resolved.startswith(os.path.realpath("dist-wheels") + os.sep), f"Wheel outside dist-wheels: {resolved}"
+          exp = os.environ.get("EXPECTED_WHEEL_SHA256", "")
+          act = du.get("archive_info", {}).get("hashes", {}).get("sha256", "")
+          if exp and act:
+              assert act == exp, f"Wheel SHA256 mismatch: {act} != {exp}"
+          print("[+] Verified local wheel env:", _native.__file__, url)
+          '
 
       - name: Cache Nuitka Artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .nuitka-cache
           key: build-cache-v8-${{ matrix.os_name }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'packages/dandelion-core/pyproject.toml', 'mk/make.py', 'mk/config/build.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -514,7 +595,7 @@ jobs:
           DANDELION_VERSION: ${{ needs.meta.outputs.tag }}
           DANDELION_PE_VERSION: ${{ needs.meta.outputs.pe_version }}
         run: |
-          python mk/make.py all
+          venv/Scripts/python.exe mk/make.py all
 
       - name: Build with Nuitka (manylinux2014 Docker)
         if: matrix.build_mode == 'docker'
@@ -528,6 +609,16 @@ jobs:
             -w /work \
             "${{ matrix.docker_image }}" \
             bash mk/scripts/docker_build.sh
+
+      # Ensure root-owned build caches are restored even if Docker is OOM-killed or cancelled.
+      - name: Fix Docker build ownership (Linux)
+        if: always() && matrix.build_mode == 'docker'
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/work" \
+            ubuntu:24.04 \
+            sh -c 'chown -R "$1" /work/venv /work/.uv-python /work/.nuitka-cache /work/build /work/mk/lib/build_info.py /work/*.egg-info 2>/dev/null || true' \
+            _ "$(id -u):$(id -g)"
 
       - name: Prepare Artifact
         shell: bash
@@ -554,18 +645,35 @@ jobs:
         env:
           PYTHONFAULTHANDLER: "1"
         run: |
+          set -euo pipefail
           rm -rf /tmp/dandelion-smoke
           cp -r "upload_stage/dandelion-${{ matrix.os_name }}-${{ matrix.arch }}" /tmp/dandelion-smoke
+          cat <<'PYEOF' > /tmp/dandelion-smoke/tool/smoke_imap_tool.py
+          import imaplib, ssl, hmac, uuid
+          from dandelion_core.tool.base_tool import BaseTool
+
+          class SmokeImapTool(BaseTool):
+              def get_name(self):
+                  return "smoke_imap"
+              def get_description(self):
+                  return "Smoke-test hot-plugged IMAP tool."
+              def get_schema(self):
+                  return {"type": "object", "properties": {}}
+              def execute(self, **kwargs):
+                  return True, f"ok:{imaplib.IMAP4_SSL.__name__}:{ssl.OPENSSL_VERSION}"
+          PYEOF
           cd /tmp/dandelion-smoke
-          OUT=$(timeout 60 cmd //c dandelion.cmd < /dev/null 2>&1 || true)
-          echo "$OUT" | head -8
+          OUT=$(printf 'tools\nexit\n' | timeout 60 cmd //c dandelion.cmd 2>&1 || true)
+          echo "$OUT" | head -20
           echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed: entry did not start"; echo "$OUT"; exit 1; }
-          echo "$OUT" | grep -qE "Agent Initialization Successful|Failed to load config" || { echo "[-] Smoke failed: unexpected runtime output"; echo "$OUT"; exit 1; }
-          echo "[+] Smoke OK on Windows"
+          echo "$OUT" | grep -q "Agent Initialization Successful" || { echo "[-] Smoke failed: agent did not initialize"; echo "$OUT"; exit 1; }
+          echo "$OUT" | grep -q "smoke_imap" || { echo "[-] Smoke failed: hot-plugged smoke_imap tool not loaded"; echo "$OUT"; exit 1; }
+          rm -rf /tmp/dandelion-smoke
+          echo "[+] Smoke + hot-plug imaplib OK on Windows"
 
       # Run the SAME single Linux binary inside Ubuntu 18.04, AlmaLinux 8 (CentOS 8),
       # and Ubuntu 24.04 containers. Mount $SRC_APP read-only and copy into /tmp/app
-      # inside each container so root-created .log/sess_* never touches the host runner!
+      # inside each container so root-created .log/sess_* and temp tool plugins never touch the host!
       - name: Smoke Test (Ubuntu 18.04, AlmaLinux 8, Ubuntu 24.04 containers)
         if: matrix.build_mode == 'docker'
         env:
@@ -578,15 +686,34 @@ jobs:
             OUT=$(timeout 120 docker run --rm \
               -v "$SRC_APP:/app-ro:ro" \
               -e PYTHONFAULTHANDLER=1 -e LD_LIBRARY_PATH= -e PYTHONHOME= -e PYTHONPATH= \
-              "$img" bash -c 'cp -a /app-ro /tmp/app && cd /tmp/app && ./dandelion.sh < /dev/null' 2>&1 || true)
-            echo "$OUT" | head -8
+              "$img" bash -c '
+                cp -a /app-ro /tmp/app
+                cat <<'"'"'PYEOF'"'"' > /tmp/app/tool/smoke_imap_tool.py
+          import imaplib, ssl, hmac, uuid
+          from dandelion_core.tool.base_tool import BaseTool
+
+          class SmokeImapTool(BaseTool):
+              def get_name(self):
+                  return "smoke_imap"
+              def get_description(self):
+                  return "Smoke-test hot-plugged IMAP tool."
+              def get_schema(self):
+                  return {"type": "object", "properties": {}}
+              def execute(self, **kwargs):
+                  return True, f"ok:{imaplib.IMAP4_SSL.__name__}:{ssl.OPENSSL_VERSION}"
+          PYEOF
+                cd /tmp/app
+                printf "tools\nexit\n" | ./dandelion.sh
+              ' 2>&1 || true)
+            echo "$OUT" | head -20
             echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed on ${img}"; echo "$OUT"; exit 1; }
-            echo "$OUT" | grep -qE "Agent Initialization Successful|Failed to load config" || { echo "[-] Smoke failed on ${img}: unexpected runtime output"; echo "$OUT"; exit 1; }
-            echo "[+] Smoke OK on ${img}"
+            echo "$OUT" | grep -q "Agent Initialization Successful" || { echo "[-] Smoke failed on ${img}: agent did not initialize"; echo "$OUT"; exit 1; }
+            echo "$OUT" | grep -q "smoke_imap" || { echo "[-] Smoke failed on ${img}: hot-plugged smoke_imap tool not loaded"; echo "$OUT"; exit 1; }
+            echo "[+] Smoke + hot-plug imaplib OK on ${img}"
           done
 
       - name: Upload Standalone Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dandelion-${{ matrix.os_name }}-${{ matrix.arch }}
           path: upload_stage
@@ -606,7 +733,7 @@ jobs:
       id-token: write
     steps:
       - name: Download all dandelion-core distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: core-*
           path: dist-all
@@ -621,21 +748,21 @@ jobs:
 
   # 5. Release Job: Upload 3 standalone zips + dandelion-core wheels/sdist to GitHub Releases
   release:
-    needs: [meta, build, build-core-wheels, build-core-sdist]
-    if: needs.meta.outputs.is_release == 'true'
+    needs: [meta, build, build-core-wheels, build-core-sdist, publish-pypi]
+    if: success() && needs.meta.outputs.is_release == 'true'
     name: Create GitHub Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Download Standalone Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: dandelion-*
           path: artifacts/standalone
 
       - name: Download Core Wheels and Sdist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: core-*
           path: artifacts/dists
@@ -665,7 +792,7 @@ jobs:
           ls -lh "$RELEASE_DIR"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
           name: Release ${{ needs.meta.outputs.tag }}

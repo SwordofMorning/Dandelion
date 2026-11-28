@@ -15,7 +15,7 @@ import os
 from collections import deque
 
 from ..base_tool import BaseTool
-from ...subagent.registry import TOOLSET_REGISTRY
+from ...subagent.registry import ToolsetRegistry
 
 VALID_STRATEGIES = ("parallel", "sequential", "mixed")
 MAX_PLAN_SUBTASKS = 20
@@ -105,6 +105,8 @@ def _sequential_waves(ordered_ids, deps_map):
  # @brief Structured TaskPlan validation tool ("Let LLM Decide" + strict invariants).
  #
 class PlanTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #
@@ -112,12 +114,21 @@ class PlanTool(BaseTool):
      # @param workspace_dir Workspace root directory used to canonicalize target_files.
      # @param parent_tools Optional set of logical tool names bounding nested SubAgents.
      # @param caller_label Diagnostic label for runtime progress output.
+     # @param toolset_registry Optional instance-scoped ToolsetRegistry for dynamic toolsets.
      #
-    def __init__(self, registry, workspace_dir=None, parent_tools=None, caller_label="MainAgent"):
+    def __init__(
+        self,
+        registry,
+        workspace_dir=None,
+        parent_tools=None,
+        caller_label="MainAgent",
+        toolset_registry=None,
+    ):
         super().__init__(workspace_dir=workspace_dir)
         self.registry = registry
         self.parent_tools = set(parent_tools) if parent_tools is not None else None
         self.caller_label = caller_label
+        self.toolset_registry = toolset_registry if toolset_registry is not None else ToolsetRegistry()
     # End-def
 
     ##
@@ -203,7 +214,7 @@ class PlanTool(BaseTool):
                             "model": model_prop,
                             "toolset": {
                                 "type": "string",
-                                "enum": list(TOOLSET_REGISTRY.keys()),
+                                "enum": self.toolset_registry.names(),
                                 "description": "Pre-defined worker toolset for this subtask.",
                             },
                             "description": {
@@ -292,14 +303,14 @@ class PlanTool(BaseTool):
             # End-if
 
             toolset = str(item.get("toolset") or "").strip()
-            if toolset not in TOOLSET_REGISTRY:
+            if not self.toolset_registry.has(toolset):
                 return False, (
                     f"Error: subtask '{sid}' specifies unknown toolset {toolset!r}. "
-                    f"Available toolsets: {list(TOOLSET_REGISTRY.keys())}"
+                    f"Available toolsets: {self.toolset_registry.names()}"
                 )
             # End-if
             if self.parent_tools is not None:
-                effective = [t for t in TOOLSET_REGISTRY[toolset] if t in self.parent_tools]
+                effective = [t for t in self.toolset_registry.members(toolset) if t in self.parent_tools]
                 if not effective:
                     return False, (
                         f"Error: subtask '{sid}' toolset '{toolset}' has no overlap with "

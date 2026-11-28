@@ -14,6 +14,8 @@ from ..base_tool import BaseTool
  # @brief Load Skill Class.
  #
 class LoadSkillTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Constructor.
      #

@@ -30,6 +30,11 @@ class CLIPromptBuilder(BasePromptBuilder):
             sections.append(subagent_sec)
         # End-if
 
+        ext_sec = self._build_extension_tools_section()
+        if ext_sec:
+            sections.append(ext_sec)
+        # End-if
+
         skills_sec = self._build_skills_section()
         if skills_sec:
             sections.append(skills_sec)

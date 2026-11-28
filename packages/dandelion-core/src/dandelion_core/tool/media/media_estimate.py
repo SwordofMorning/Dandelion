@@ -38,8 +38,9 @@ IMAGE_SMALL_SIDE_PX = 384
 # Tile edge in pixels.
 IMAGE_TILE_PX = 768
 
-# Conservative per-page cost for a PDF page (treated as an image by the model).
-TOKENS_PER_PDF_PAGE = 258
+# Conservative per-page cost for a PDF page (calibrated against Gemini 4
+# multimodal PDF billing of ~944 tokens/page).
+TOKENS_PER_PDF_PAGE = 960
 # Fallback page size used when the page-object scan is inconclusive.
 PDF_BYTES_PER_PAGE_FALLBACK = 4096
 
@@ -84,6 +85,7 @@ def format_cost_marker(cost):
 def parse_cost_marker(text):
     if not text:
         return 0
+    # End-if
 
     marker = "cost="
     start = text.find(marker)
@@ -320,11 +322,14 @@ def estimate_image_cost(file_path, factor=IMAGE_COST_FACTOR):
  #
  # @param file_path Path of the PDF file.
  # @param factor Safety factor (defaults to PDF_COST_FACTOR).
+ # @param tokens_per_page Per-page base token cost (defaults to
+ # TOKENS_PER_PDF_PAGE).
  #
  # @return (cost_tokens, pages, page_source) where page_source is "scan" or
  # "fallback".
  #
-def estimate_pdf_cost(file_path, factor=PDF_COST_FACTOR):
+def estimate_pdf_cost(file_path, factor=PDF_COST_FACTOR,
+                      tokens_per_page=TOKENS_PER_PDF_PAGE):
     pages = read_pdf_pages(file_path)
     source = "scan"
     if pages <= 0:
@@ -337,7 +342,8 @@ def estimate_pdf_cost(file_path, factor=PDF_COST_FACTOR):
         source = "fallback"
     # End-if
 
-    cost = max(int(pages * TOKENS_PER_PDF_PAGE * factor + 0.999), 1)
+    per_page = TOKENS_PER_PDF_PAGE if tokens_per_page is None else tokens_per_page
+    cost = max(int(pages * per_page * factor + 0.999), 1)
     return cost, pages, source
 # End-def
 

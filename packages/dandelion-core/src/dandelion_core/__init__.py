@@ -3,8 +3,9 @@
  # @date 2026/11/28
  #
  # @brief Standalone Dandelion Core execution package.
- # Exposes the abstract runtime and host bases, sync wire protocol, main agent,
- # prompt builders, memory, skill catalog, compaction, pruning, and turn runner.
+ # Exposes the abstract runtime and host bases, hot-plug tool context/loader
+ # and toolset registry, sync wire protocol, main agent, prompt builders,
+ # memory, skill catalog, compaction, pruning, and turn runner.
  #
 
 from .runtime import BaseRuntime, DefaultRuntime, Runtime
@@ -36,12 +37,16 @@ from .agent import (
     MODE_ROLLBACK,
 )
 from .host import BaseAgentHost
+from .tool import ToolContext, ToolLoader, ToolsetRegistry
 
 __all__ = [
     "BaseRuntime",
     "DefaultRuntime",
     "Runtime",
     "BaseAgentHost",
+    "ToolContext",
+    "ToolLoader",
+    "ToolsetRegistry",
     "MyAgent",
     "MemoryManager",
     "SkillManager",

@@ -42,6 +42,7 @@ import os
 import configparser
 import json
 import ipaddress
+import math
 import re
 from urllib.parse import urlsplit
 
@@ -238,6 +239,10 @@ _MEDIA_LIMIT_KEYS = {
     "max_pdf_bytes": (int, None),
     "max_pdf_pages": (int, 1),
     "max_media_per_request": (int, 1),
+    "pdf_tokens_per_page": (int, 1),
+    "image_cost_factor": (float, 0.01),
+    "pdf_cost_factor": (float, 0.01),
+    "media_cost_fallback": (int, 1),
 }
 
 ##
@@ -344,6 +349,11 @@ def _parse_media_limits(model_data, model_id=""):
                 continue
             # End-if
         else:
+            if isinstance(raw, bool):
+                print(f"[-] Warning: model '{model_id}': invalid {key}={raw!r}; "
+                      f"using default.")
+                continue
+            # End-if
             try:
                 value = cast(raw)
             except (TypeError, ValueError):
@@ -351,6 +361,11 @@ def _parse_media_limits(model_data, model_id=""):
                       f"using default.")
                 continue
             # End-try
+            if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+                print(f"[-] Warning: model '{model_id}': invalid {key}={raw!r}; "
+                      f"using default.")
+                continue
+            # End-if
         # End-if
         if minimum is not None and value < minimum:
             print(f"[-] Warning: model '{model_id}': {key}={raw!r} below the "
@@ -694,6 +709,93 @@ def _parse_memory_config(config):
 # End-def
 
 ##
+ # @brief Parse optional [Main] TOOL_DIRS list from config.
+ #
+ # Accepts comma- or semicolon-delimited paths as well as a JSON string list,
+ # stripping surrounding whitespace and quotes.
+ #
+ # @param config ConfigParser instance.
+ #
+ # @return Ordered deduplicated list of configured tool directory paths.
+ #
+def _parse_tool_dirs(config):
+    raw = config.get("Main", "TOOL_DIRS", fallback="", raw=True).strip()
+    if not raw:
+        return []
+    # End-if
+    items = []
+    if raw.startswith("[") and raw.endswith("]"):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                items = [str(x) for x in parsed if isinstance(x, str)]
+            else:
+                items = re.split(r"[,;]", raw)
+            # End-if
+        except json.JSONDecodeError:
+            items = re.split(r"[,;]", raw)
+        # End-try
+    else:
+        items = re.split(r"[,;]", raw)
+    # End-if
+    dirs = []
+    for token in items:
+        cleaned = str(token or "").strip()
+        if (
+            len(cleaned) >= 2
+            and (
+                (cleaned.startswith('"') and cleaned.endswith('"'))
+                or (cleaned.startswith("'") and cleaned.endswith("'"))
+            )
+        ):
+            cleaned = cleaned[1:-1].strip()
+        # End-if
+        if cleaned and cleaned not in dirs:
+            dirs.append(cleaned)
+        # End-if
+    # End-for
+    return dirs
+# End-def
+
+
+##
+ # @brief Parse one [Tool:<name>] / [Tool.<name>] or custom tool INI section.
+ #
+ # Reads values raw (avoiding ConfigParser % interpolation errors), strips
+ # surrounding quotes, and expands exact $VAR / ${VAR} environment placeholders.
+ #
+ # @param config ConfigParser instance.
+ # @param section Exact section header string in config.
+ #
+ # @return Dict mapping lowercase option names to normalized string values.
+ #
+def _parse_tool_section(config, section):
+    opts = {}
+    for opt_key in config.options(section):
+        raw_val = config.get(section, opt_key, fallback="", raw=True).strip()
+        if (
+            len(raw_val) >= 2
+            and (
+                (raw_val.startswith('"') and raw_val.endswith('"'))
+                or (raw_val.startswith("'") and raw_val.endswith("'"))
+            )
+        ):
+            raw_val = raw_val[1:-1].strip()
+        # End-if
+        placeholder = re.fullmatch(
+            r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
+            raw_val,
+        )
+        if placeholder:
+            raw_val = os.environ.get(placeholder.group(1) or placeholder.group(2), "").strip()
+        # End-if
+        opts[opt_key.strip().lower()] = raw_val
+    # End-for
+    return opts
+# End-def
+
+
+##
  # @brief Load config.
  # 
  # @param file_path file path to config.
@@ -751,18 +853,38 @@ def load_api_config(file_path):
     sub_depth = _parse_non_negative_int(config, "SUB_DEPTH", DEFAULT_SUB_DEPTH)
     sub_concurrency = max(_parse_non_negative_int(config, "SUB_CONCURRENCY", DEFAULT_SUB_CONCURRENCY), 1)
 
-    # Read Search API Key
+    # Read Search API Key and optional hot-plug tool directories
     tavily_api_key = config.get("Main", "TAVILY_API_KEY", fallback="")
+    tool_dirs = _parse_tool_dirs(config)
 
-    # ----- @par 2. LLM Providers Section -----
+    # ----- @par 2. LLM Providers & Custom Tool Sections -----
 
     all_models = []
     registered_names = set()
     active_profile = None
+    tool_config = {}
+    provider_marker_keys = {"model_list", "api_key", "base_url", "sdk_type"}
 
     # Iterate through all sections to parse providers and find the main agent.
     for section in config.sections():
-        if section.lower() in ("main", "remote", "server", "telegram", "drive", "memory", "embedding"):
+        sec_low = section.strip().lower()
+        if sec_low in ("main", "remote", "server", "telegram", "drive", "memory", "embedding"):
+            continue
+        # End-if
+
+        if sec_low.startswith("tool:") or sec_low.startswith("tool."):
+            tool_name = sec_low[5:].strip()
+            if tool_name:
+                tool_config[tool_name] = _parse_tool_section(config, section)
+            # End-if
+            continue
+        # End-if
+
+        section_opts = {k.strip().lower() for k in config.options(section)}
+        if not (section_opts & provider_marker_keys):
+            if sec_low not in tool_config:
+                tool_config[sec_low] = _parse_tool_section(config, section)
+            # End-if
             continue
         # End-if
 
@@ -874,6 +996,8 @@ def load_api_config(file_path):
         "TELEGRAM": telegram_cfg,
         "DRIVE": drive_cfg,
         "MEMORY": _parse_memory_config(config),
+        "TOOL_DIRS": tool_dirs,
+        "TOOL_CONFIG": tool_config,
     }
 # End-def
 

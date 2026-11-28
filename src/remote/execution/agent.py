@@ -13,32 +13,20 @@ import json
 from pathlib import Path
 
 from dandelion_core.host import BaseAgentHost
+from mk.lib.paths import tool_dirs as resolve_tool_dirs
 
 from ..runtime import RemoteRuntime
 from ..sysprompt import RemotePromptBuilder
 from ..tool import SubmitTaskTool, TaskControlTool, SendMessageTool, GoogleDriveTool
 
-MAIN_DIRECT_TOOLS = (
-    "bash",
-    "ssh",
-    "tavily_search",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "list_directory",
-    "grep_search",
-    "markdown_editor",
-    "read_image",
-    "read_pdf",
-    "load_skill",
-    "get_time",
-    "remember",
-    "forget",
-    "memory_search",
-    "update_state",
-    "prune_context",
-    "plan_tool",
-)
+# Tools excluded from the Remote main agent (delegated to background workers
+# via submit_task instead of synchronous inline execution). Any built-in or
+# hot-plugged extension tool not in this denylist passes through automatically.
+EXCLUDED_REMOTE_MAIN_TOOLS = frozenset({
+    "spawn_subagent",
+    "read_excel",
+    "write_excel",
+})
 
 # Re-export shared interrupted tool recovery from Core BaseAgentHost.
 repair_interrupted_tools = BaseAgentHost.repair_interrupted_tools
@@ -54,10 +42,20 @@ repair_interrupted_tools = BaseAgentHost.repair_interrupted_tools
  # @param hub Optional ChannelHub for SendMessageTool.
  # @param backups Optional shared BackupStore for synced session overview.
  # @param config_dir Optional operator config directory (.env) for SSH devices.yaml/known_hosts.
+ # @param tool_dirs Optional ordered directories scanned for hot-plugged Remote tools.
  #
  # @return Callable creating a core agent for one conversation.
  #
-def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None, config_dir=None):
+def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None,
+                       config_dir=None, tool_dirs=None):
+    extra_tool_dirs = config.get("TOOL_DIRS") if isinstance(config, dict) else None
+    remote_root = str(Path(__file__).resolve().parents[3])
+    remote_tool_dirs = (
+        list(tool_dirs)
+        if tool_dirs is not None
+        else resolve_tool_dirs("remote", extra_tool_dirs, root_dir=remote_root)
+    )
+
     ##
      # @brief Build or restore one remote conversation agent.
      #
@@ -98,7 +96,7 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
         # End-def
 
         ##
-         # @brief Mount direct shell/SSH/search/file/memory/pruning tools plus Remote delegation and communication tools.
+         # @brief Mount direct shell/SSH/search/file/memory/pruning/extension tools plus Remote delegation and communication tools.
          #
          # @param agent Agent whose runtime, session and history are used.
          #
@@ -117,13 +115,22 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
             # End-def
 
             result = {
-                name: shared[name]
-                for name in MAIN_DIRECT_TOOLS
-                if name in shared
+                name: tool
+                for name, tool in shared.items()
+                if name not in EXCLUDED_REMOTE_MAIN_TOOLS
             }
+            pool_ts_reg = getattr(getattr(agent, "pool", None), "toolset_registry", None)
+            if pool_ts_reg is not None and hasattr(jobs, "toolset_registry"):
+                jobs.toolset_registry = pool_ts_reg
+            # End-if
             if agent.pool.max_depth > 0 and agent.client.registry.get_all_specs():
                 result["submit_task"] = SubmitTaskTool(
-                    jobs, str(session_id), workspace, context, registry=agent.client.registry
+                    jobs,
+                    str(session_id),
+                    workspace,
+                    context,
+                    registry=agent.client.registry,
+                    toolset_registry=pool_ts_reg,
                 )
             # End-if
             result["task_control"] = TaskControlTool(jobs, str(session_id))
@@ -142,6 +149,8 @@ def make_agent_factory(config, data_dir, workspace, jobs, hub=None, backups=None
             tool_factory=tools,
             prompt_builder_cls=prompt_factory,
             config_dir=config_dir,
+            host="remote",
+            tool_dirs=remote_tool_dirs,
         )
         BaseAgentHost.repair_interrupted_tools(agent)
         return agent

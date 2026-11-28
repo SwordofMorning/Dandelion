@@ -4,6 +4,7 @@
 @brief Windows PowerShell helper for building packages/dandelion-core via CMake + Ninja + MSVC (cl.exe).
 
 Usage:
+    powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target dev
     powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target build
     powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target wheel
     powershell -ExecutionPolicy Bypass -File mk/scripts/build_native.ps1 -Target clean
@@ -11,7 +12,7 @@ Usage:
 
 [CmdletBinding()]
 param(
-    [ValidateSet("build", "clean", "wheel")]
+    [ValidateSet("build", "dev", "clean", "wheel")]
     [string]$Target = "build",
     [string]$Python = "python",
     [string]$OutputDir = "dist"
@@ -92,6 +93,32 @@ function Test-LocalCoreBuildDeps {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Assert-LocalCoreDirectUrl {
+    param(
+        [string]$ExpectedRoot
+    )
+    $checkCode = @'
+import importlib.metadata as m, json, os, sys
+from urllib.parse import urlparse
+from urllib.request import url2pathname
+
+raw = m.distribution("dandelion-core").read_text("direct_url.json")
+assert raw, "Missing PEP 610 direct_url.json (installed dandelion-core is not local)"
+info = json.loads(raw)
+url = info.get("url", "")
+parsed = urlparse(url)
+assert parsed.scheme == "file", f"Non-local direct_url scheme: {url}"
+local_path = os.path.realpath(url2pathname(parsed.path))
+expected = os.path.realpath(sys.argv[1])
+assert local_path == expected or local_path.startswith(expected + os.sep), f"Installed dandelion-core outside expected root: {local_path} vs {expected}"
+print("[+] Verified PEP 610 direct_url.json:", local_path)
+'@
+    & $Python -I -c $checkCode $ExpectedRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "Local dandelion-core direct_url.json verification failed."
+    }
+}
+
 if ($Target -eq "clean") {
     Write-Host "[*] Cleaning native build artifacts..."
     $toClean = @(
@@ -138,11 +165,37 @@ if ($Target -eq "build") {
     if ($LASTEXITCODE -ne 0) {
         throw "Native editable install failed with exit code $LASTEXITCODE."
     }
+    Assert-LocalCoreDirectUrl -ExpectedRoot $CoreDir
     & $Python -I -c "from dandelion_core.utils.llm_provider import _native; print('[+] Loaded native module:', _native.__file__)"
     if ($LASTEXITCODE -ne 0) {
         throw "Native module verification import failed."
     }
     Write-Host "[+] Native build succeeded."
+    exit 0
+}
+
+if ($Target -eq "dev") {
+    Write-Host "[*] Installing local dandelion-core + root dev dependencies (local-first)..."
+    $pipArgs = @("-m", "pip", "install")
+    if ($HasLocalDeps) {
+        $pipArgs += "--no-build-isolation"
+    }
+    Push-Location $RootDir
+    try {
+        $pipArgs += @("-e", $CoreDir, "-e", ".[dev]")
+        & $Python @pipArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Local dev install failed with exit code $LASTEXITCODE."
+        }
+    } finally {
+        Pop-Location
+    }
+    Assert-LocalCoreDirectUrl -ExpectedRoot $CoreDir
+    & $Python -I -c "from dandelion_core.utils.llm_provider import _native; print('[+] Loaded native module:', _native.__file__)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Native module verification import failed."
+    }
+    Write-Host "[+] Local dev environment ready."
     exit 0
 }
 

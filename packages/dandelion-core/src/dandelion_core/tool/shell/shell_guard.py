@@ -99,6 +99,10 @@ _INLINE_SENSITIVE_PATTERNS = (
     ("/etc", re.compile(r"(?<![A-Za-z0-9_])[/\\]etc(?=$|[/\\'\"\s,;:)\]}&|])", re.IGNORECASE)),
     ("../", re.compile(r"(?<![A-Za-z0-9_.])\.\.(?=$|[/\\'\"\s,;:)\]}&|])")),
     ("~/", re.compile(r"(?<![A-Za-z0-9_])~[/\\]")),
+    ("src/cli/tool/", re.compile(r"(?<![A-Za-z0-9_])src[/\\]cli[/\\]tool(?=$|[/\\'\"\s,;:)\]}&|])", re.IGNORECASE)),
+    ("src/remote/tool/", re.compile(r"(?<![A-Za-z0-9_])src[/\\]remote[/\\]tool(?=$|[/\\'\"\s,;:)\]}&|])", re.IGNORECASE)),
+    ("src/tool/", re.compile(r"(?<![A-Za-z0-9_])src[/\\]tool(?=$|[/\\'\"\s,;:)\]}&|])", re.IGNORECASE)),
+    ("tool/", re.compile(r"(?<![A-Za-z0-9_.-])tool[/\\]", re.IGNORECASE)),
 )
 
 # Maximum recursion depth for command substitutions and -c/eval unwrapping.
@@ -1394,18 +1398,62 @@ class ShellCommandGuard:
     # End-def
 
     ##
+     # @brief Check whether normalized path segments target a protected plugin directory.
+     #
+     # Matches workspace-relative tool/ (requiring a slash or backslash) as well as
+     # src/tool/, src/cli/tool/, and src/remote/tool/ path sequences.
+     #
+     # @param item Raw or decoded path candidate string.
+     #
+     # @return Matched sensitive label ("src/cli/tool/", "src/remote/tool/", "src/tool/",
+     #         "tool/") or None.
+     #
+    @staticmethod
+    def _match_plugin_dir_path(item):
+        if not item or ("/" not in item and "\\" not in item):
+            return None
+        # End-if
+        norm_parts = [p.lower() for p in re.split(r"[/\\]+", item) if p and p != "."]
+        if not norm_parts:
+            return None
+        # End-if
+        is_abs = item.startswith("/") or item.startswith("\\") or bool(re.match(r"^[a-zA-Z]:", item))
+        if not is_abs and norm_parts[0] == "tool":
+            return "tool/"
+        # End-if
+        n = len(norm_parts)
+        for idx in range(n):
+            if norm_parts[idx] != "src":
+                continue
+            # End-if
+            if idx + 2 < n and norm_parts[idx + 1] == "cli" and norm_parts[idx + 2] == "tool":
+                return "src/cli/tool/"
+            # End-if
+            if idx + 2 < n and norm_parts[idx + 1] == "remote" and norm_parts[idx + 2] == "tool":
+                return "src/remote/tool/"
+            # End-if
+            if idx + 1 < n and norm_parts[idx + 1] == "tool":
+                return "src/tool/"
+            # End-if
+        # End-for
+        return None
+    # End-def
+
+    ##
      # @brief Inspect a path-like token for sensitive local boundary patterns.
      #
      # Does NOT blindly normalize POSIX backslash escapes to slashes; checks
-     # POSIX-unescaped text on '/' AND raw text for Windows-style '..\', '\etc', '~\'.
+     # POSIX-unescaped text on '/' AND raw text for Windows-style '..\', '\etc', '~\',
+     # and protected hot-plug tool directories when sandbox=True.
      #
      # @param token Decoded (POSIX-unescaped) token text.
      # @param raw_token Optional raw token preserving unquoted backslashes.
+     # @param sandbox Whether CLI sandbox rules (including plugin dirs) apply.
      #
-     # @return Matched sensitive pattern label (".env", "/etc", "../", "~/") or None.
+     # @return Matched sensitive pattern label or None.
      #
-    @staticmethod
-    def match_sensitive_path(token, raw_token=None):
+    @classmethod
+    def match_sensitive_path(cls, token, raw_token=None, sandbox=True):
         if not token and not raw_token:
             return None
         # End-if
@@ -1452,6 +1500,13 @@ class ShellCommandGuard:
                     return "../"
                 # End-if
             # End-for
+
+            if sandbox:
+                plugin_hit = cls._match_plugin_dir_path(item)
+                if plugin_hit:
+                    return plugin_hit
+                # End-if
+            # End-if
         # End-for
 
         # Also catch explicit Windows backslash patterns in raw unescaped input (e.g. cat ..\secret).
@@ -1469,6 +1524,12 @@ class ShellCommandGuard:
             # End-if
             if rt_low.startswith(".env\\") or "\\.env\\" in rt_low or rt_low.endswith("\\.env"):
                 return ".env"
+            # End-if
+            if sandbox:
+                plugin_hit = cls._match_plugin_dir_path(rt)
+                if plugin_hit:
+                    return plugin_hit
+                # End-if
             # End-if
         # End-if
 

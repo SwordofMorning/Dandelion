@@ -16,6 +16,8 @@ from dandelion_core.tool.base_tool import BaseTool
  # @brief Tool enabling Dandelion Remote to send messages to the user on demand.
  #
 class SendMessageTool(BaseTool):
+    AUTO_REGISTER = False
+
     ##
      # @brief Bind the communication tool to a conversation session and channel hub.
      #

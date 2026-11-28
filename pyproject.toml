@@ -23,10 +23,14 @@ dev = [
     "tzdata",
 ]
 
-# Keep only the active src.cli*, src.remote*, and mk.* namespaces in wheels.
+# Keep only the active src.cli*, src.remote*, src.tool*, and mk.* namespaces in wheels.
 # Explicit discovery prevents stale legacy directories under src/ from leaking.
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src", "src.cli*", "src.remote*", "mk", "mk.*"]
+include = ["src", "src.cli*", "src.remote*", "src.tool*", "mk", "mk.*"]
 exclude = ["*.egg-info", "*.__pycache__"]
 namespaces = true
+
+# Strict local-first resolution for uv sync / uv run inside the monorepo.
+[tool.uv.sources]
+dandelion-core = { path = "packages/dandelion-core", editable = true }
