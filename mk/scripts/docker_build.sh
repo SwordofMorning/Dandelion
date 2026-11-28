@@ -34,8 +34,8 @@ restore_ownership() {
 trap restore_ownership EXIT
 
 echo "[*] Toolchain check inside manylinux2014 ($(uname -m))"
-gcc --version | head -1
-ldd --version | head -1
+gcc --version | sed -n '1p'
+ldd --version | sed -n '1p'
 
 if ! command -v ccache >/dev/null 2>&1; then
   echo "[*] Installing ccache (best-effort)"
@@ -75,8 +75,8 @@ if ! command -v uv >/dev/null 2>&1; then
   rm -rf /tmp/uv-extract
   mkdir -p /tmp/uv-extract
   tar -xzf /tmp/uv.tar.gz -C /tmp/uv-extract
-  UV_BIN="$(find /tmp/uv-extract -type f -name uv | head -1)"
-  UVX_BIN="$(find /tmp/uv-extract -type f -name uvx | head -1)"
+  UV_BIN="$(find /tmp/uv-extract -type f -name uv -print -quit)"
+  UVX_BIN="$(find /tmp/uv-extract -type f -name uvx -print -quit)"
   if [ -z "$UV_BIN" ] || [ -z "$UVX_BIN" ]; then
     echo "[-] uv tarball layout unexpected (uv/uvx binaries not found)"
     exit 1
@@ -106,11 +106,12 @@ WHEEL_FILE="${wheels[0]}"
 EXPECTED_WHEEL_SHA256="$(sha256sum "$WHEEL_FILE" | awk '{print $1}')"
 echo "[+] Using prebuilt wheel: $WHEEL_FILE"
 uv pip install --python /work/venv/bin/python \
+  --no-sources \
   --reinstall-package dandelion-core \
   "$WHEEL_FILE" \
   -e ".[dev]"
 uv pip install --python /work/venv/bin/python \
-  --no-deps --reinstall \
+  --no-sources --no-deps --reinstall \
   "$WHEEL_FILE"
 
 # Sanity check before Nuitka: verify prompt_toolkit, _native, and strict local wheel provenance.

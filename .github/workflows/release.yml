@@ -200,7 +200,7 @@ jobs:
             exit 1
           fi
           tar -xzf /tmp/uv-host/uv.tar.gz -C /tmp/uv-host
-          UV_BIN="$(find /tmp/uv-host -type f -name uv | head -1)"
+          UV_BIN="$(find /tmp/uv-host -type f -name uv -print -quit)"
           install -m 755 "$UV_BIN" /tmp/uv-host/uv-bin
 
           cat <<'PYEOF' > /tmp/uv-host/verify_wheel.py
@@ -669,10 +669,10 @@ jobs:
           PYEOF
           cd /tmp/dandelion-smoke
           OUT=$(printf 'tools\nexit\n' | timeout 60 cmd //c dandelion.cmd 2>&1 || true)
-          echo "$OUT" | head -20
-          echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed: entry did not start"; echo "$OUT"; exit 1; }
-          echo "$OUT" | grep -q "Agent Initialization Successful" || { echo "[-] Smoke failed: agent did not initialize"; echo "$OUT"; exit 1; }
-          echo "$OUT" | grep -q "smoke_imap" || { echo "[-] Smoke failed: hot-plugged smoke_imap tool not loaded"; echo "$OUT"; exit 1; }
+          sed -n '1,20p' <<<"$OUT"
+          grep -q "Initializing Dandelion Project" <<<"$OUT" || { echo "[-] Smoke failed: entry did not start"; echo "$OUT"; exit 1; }
+          grep -q "Agent Initialization Successful" <<<"$OUT" || { echo "[-] Smoke failed: agent did not initialize"; echo "$OUT"; exit 1; }
+          grep -q "smoke_imap" <<<"$OUT" || { echo "[-] Smoke failed: hot-plugged smoke_imap tool not loaded"; echo "$OUT"; exit 1; }
           rm -rf /tmp/dandelion-smoke
           echo "[+] Smoke + hot-plug imaplib OK on Windows"
 
@@ -719,10 +719,10 @@ jobs:
               -v "/tmp/smoke-host:/smoke-host:ro" \
               -e PYTHONFAULTHANDLER=1 -e LD_LIBRARY_PATH= -e PYTHONHOME= -e PYTHONPATH= \
               "$img" bash /smoke-host/run_smoke.sh 2>&1 || true)
-            echo "$OUT" | head -20
-            echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed on ${img}"; echo "$OUT"; exit 1; }
-            echo "$OUT" | grep -q "Agent Initialization Successful" || { echo "[-] Smoke failed on ${img}: agent did not initialize"; echo "$OUT"; exit 1; }
-            echo "$OUT" | grep -q "smoke_imap" || { echo "[-] Smoke failed on ${img}: hot-plugged smoke_imap tool not loaded"; echo "$OUT"; exit 1; }
+            sed -n '1,20p' <<<"$OUT"
+            grep -q "Initializing Dandelion Project" <<<"$OUT" || { echo "[-] Smoke failed on ${img}"; echo "$OUT"; exit 1; }
+            grep -q "Agent Initialization Successful" <<<"$OUT" || { echo "[-] Smoke failed on ${img}: agent did not initialize"; echo "$OUT"; exit 1; }
+            grep -q "smoke_imap" <<<"$OUT" || { echo "[-] Smoke failed on ${img}: hot-plugged smoke_imap tool not loaded"; echo "$OUT"; exit 1; }
             echo "[+] Smoke + hot-plug imaplib OK on ${img}"
           done
 
