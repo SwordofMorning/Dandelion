@@ -203,25 +203,24 @@ jobs:
           UV_BIN="$(find /tmp/uv-host -type f -name uv | head -1)"
           install -m 755 "$UV_BIN" /tmp/uv-host/uv-bin
 
-          VERIFY_PY=$(cat <<'PYEOF'
-          import importlib.metadata, json, os, subprocess, sys, tempfile
+          cat <<'PYEOF' > /tmp/uv-host/verify_wheel.py
+          import hashlib, importlib.metadata, json, os, pathlib, subprocess, sys, tempfile
           import dandelion_core
           from dandelion_core.agent.sysprompt import BasePromptBuilder
           from dandelion_core.tool.shell.ssh_tool import SSHTool
           from dandelion_core.utils.llm_provider import _native, create_provider
+
+          wheel_file = os.environ["EXPECTED_WHEEL_FILE"]
+          exp_sha = hashlib.sha256(pathlib.Path(wheel_file).read_bytes()).hexdigest()
 
           # Enforce strict local-wheel PEP 610 provenance (never silently pulled from PyPI)
           du_raw = importlib.metadata.distribution("dandelion-core").read_text("direct_url.json")
           assert du_raw, "Missing PEP 610 direct_url.json (installed from PyPI instead of /wheels!)"
           du = json.loads(du_raw)
           url = du.get("url", "")
-          assert url.startswith("file:///wheels/"), f"Not installed from local /wheels: {du}"
-          exp_name = os.environ.get("EXPECTED_WHEEL_NAME", "")
-          if exp_name:
-              assert url.endswith("/" + exp_name), f"Unexpected wheel filename: {url} vs {exp_name}"
-          exp_sha = os.environ.get("EXPECTED_WHEEL_SHA256", "")
+          assert url == "file://" + wheel_file, f"Not installed from expected local wheel: {url} vs file://{wheel_file}"
           act_sha = du.get("archive_info", {}).get("hashes", {}).get("sha256", "")
-          if exp_sha and act_sha:
+          if act_sha:
               assert act_sha == exp_sha, f"Wheel SHA256 mismatch: {act_sha} != {exp_sha}"
 
           so_path = os.path.abspath(_native.__file__)
@@ -266,57 +265,63 @@ jobs:
           img_name = os.environ.get("VERIFY_IMAGE", "")
           print(f"[+] PASS Python {sys.version_info.major}.{sys.version_info.minor} on {img_name}: {so_path}")
           PYEOF
-          )
-          export VERIFY_PY
+
+          cat <<'SHEOF' > /tmp/uv-host/run_container_verify.sh
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "$VERIFY_IMAGE" == ubuntu:* ]]; then
+            export DEBIAN_FRONTEND=noninteractive
+            if ! apt-get update -qq; then
+              if [ -f /etc/apt/sources.list ]; then
+                sed -i "s|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g; s|http://ports.ubuntu.com/ubuntu-ports|http://old-releases.ubuntu.com/ubuntu|g" /etc/apt/sources.list
+              fi
+              apt-get update -qq
+            fi
+            # Install ONLY ca-certificates; libcurl4 must remain absent!
+            apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null
+            if dpkg -s libcurl4 >/dev/null 2>&1 || dpkg -s libcurl4t64 >/dev/null 2>&1; then
+              echo "[-] FATAL: libcurl4 is installed in $VERIFY_IMAGE; container test is invalid"
+              exit 1
+            fi
+            echo "[+] Confirmed libcurl4/libcurl4t64 is NOT installed in $VERIFY_IMAGE"
+          fi
+
+          export UV_PYTHON_INSTALL_DIR=/uv-cache/py
+          export UV_CACHE_DIR=/uv-cache/cache
+          # Test cp311 wheel on Python 3.11 AND cp312-abi3 wheel on Python 3.13!
+          uv python install 3.11 3.13
+          shopt -s nullglob
+          for pyver in 3.11 3.13; do
+            if [ "$pyver" = "3.11" ]; then
+              matches=(/wheels/dandelion_core-*-cp311-*.whl)
+            else
+              matches=(/wheels/dandelion_core-*-cp312-abi3-*.whl)
+            fi
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "[-] Expected exactly 1 local wheel for Python ${pyver}, found ${#matches[@]}: ${matches[*]}"
+              exit 1
+            fi
+            WHEEL_FILE="${matches[0]}"
+            echo "--- Testing local wheel ${WHEEL_FILE} under Python ${pyver} in ${VERIFY_IMAGE} ---"
+            rm -rf "/tmp/venv-${pyver}"
+            uv venv "/tmp/venv-${pyver}" --python "${pyver}"
+            uv pip install --python "/tmp/venv-${pyver}/bin/python" "$WHEEL_FILE"
+            EXPECTED_WHEEL_FILE="$WHEEL_FILE" "/tmp/venv-${pyver}/bin/python" -I /uv-host/verify_wheel.py
+          done
+          SHEOF
+          chmod +x /tmp/uv-host/run_container_verify.sh
+          rm -rf /tmp/uv-shared-cache
+          mkdir -p /tmp/uv-shared-cache
 
           for img in ubuntu:18.04 almalinux:8 ubuntu:24.04; do
             echo "=== Verifying manylinux2014 wheel inside ${img} (${UV_ARCH}) ==="
             docker run --rm \
               -v "${{ github.workspace }}/dist-wheels:/wheels:ro" \
+              -v "/tmp/uv-host:/uv-host:ro" \
               -v "/tmp/uv-host/uv-bin:/usr/local/bin/uv:ro" \
+              -v "/tmp/uv-shared-cache:/uv-cache" \
               -e "VERIFY_IMAGE=${img}" \
-              -e VERIFY_PY \
-              "$img" bash -euo pipefail -c '
-                if [[ "$VERIFY_IMAGE" == ubuntu:* ]]; then
-                  export DEBIAN_FRONTEND=noninteractive
-                  if ! apt-get update -qq; then
-                    if [ -f /etc/apt/sources.list ]; then
-                      sed -i "s|http://archive.ubuntu.com|http://old-releases.ubuntu.com|g; s|http://security.ubuntu.com|http://old-releases.ubuntu.com|g; s|https://archive.ubuntu.com|https://old-releases.ubuntu.com|g; s|https://security.ubuntu.com|https://old-releases.ubuntu.com|g; s|http://ports.ubuntu.com|http://old-releases.ports.ubuntu.com|g; s|https://ports.ubuntu.com|https://old-releases.ports.ubuntu.com|g" /etc/apt/sources.list
-                    fi
-                    apt-get update -qq
-                  fi
-                  # Install ONLY ca-certificates; libcurl4 must remain absent!
-                  apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null
-                  if dpkg -s libcurl4 >/dev/null 2>&1 || dpkg -s libcurl4t64 >/dev/null 2>&1; then
-                    echo "[-] FATAL: libcurl4 is installed in $VERIFY_IMAGE; container test is invalid"
-                    exit 1
-                  fi
-                  echo "[+] Confirmed libcurl4/libcurl4t64 is NOT installed in $VERIFY_IMAGE"
-                fi
-
-                export UV_PYTHON_INSTALL_DIR=/tmp/uv-py
-                # Test cp311 wheel on Python 3.11 AND cp312-abi3 wheel on Python 3.13!
-                uv python install 3.11 3.13
-                shopt -s nullglob
-                for pyver in 3.11 3.13; do
-                  if [ "$pyver" = "3.11" ]; then
-                    matches=(/wheels/dandelion_core-*-cp311-*.whl)
-                  else
-                    matches=(/wheels/dandelion_core-*-cp312-abi3-*.whl)
-                  fi
-                  if [ "${#matches[@]}" -ne 1 ]; then
-                    echo "[-] Expected exactly 1 local wheel for Python ${pyver}, found ${#matches[@]}: ${matches[*]}"
-                    exit 1
-                  fi
-                  WHEEL_FILE="${matches[0]}"
-                  EXPECTED_WHEEL_SHA256="$(sha256sum "$WHEEL_FILE" | awk '{print $1}')"
-                  EXPECTED_WHEEL_NAME="$(basename "$WHEEL_FILE")"
-                  echo "--- Testing local wheel ${WHEEL_FILE} under Python ${pyver} in ${VERIFY_IMAGE} ---"
-                  uv venv "/tmp/venv-${pyver}" --python "${pyver}"
-                  uv pip install --python "/tmp/venv-${pyver}/bin/python" "$WHEEL_FILE"
-                  EXPECTED_WHEEL_SHA256="$EXPECTED_WHEEL_SHA256" EXPECTED_WHEEL_NAME="$EXPECTED_WHEEL_NAME" "/tmp/venv-${pyver}/bin/python" -I -c "$VERIFY_PY"
-                done
-              '
+              "$img" bash /uv-host/run_container_verify.sh
           done
 
       - name: Set up Python 3.11 for Windows wheel verification
@@ -681,14 +686,9 @@ jobs:
         run: |
           set -euo pipefail
           SRC_APP="$PWD/upload_stage/dandelion-${{ matrix.os_name }}-${{ matrix.arch }}"
-          for img in ubuntu:18.04 almalinux:8 ubuntu:24.04; do
-            echo "=== Smoke testing dandelion-${{ matrix.os_name }}-${{ matrix.arch }} inside ${img} ==="
-            OUT=$(timeout 120 docker run --rm \
-              -v "$SRC_APP:/app-ro:ro" \
-              -e PYTHONFAULTHANDLER=1 -e LD_LIBRARY_PATH= -e PYTHONHOME= -e PYTHONPATH= \
-              "$img" bash -c '
-                cp -a /app-ro /tmp/app
-                cat <<'"'"'PYEOF'"'"' > /tmp/app/tool/smoke_imap_tool.py
+          rm -rf /tmp/smoke-host
+          mkdir -p /tmp/smoke-host
+          cat <<'PYEOF' > /tmp/smoke-host/smoke_imap_tool.py
           import imaplib, ssl, hmac, uuid
           from dandelion_core.tool.base_tool import BaseTool
 
@@ -702,9 +702,23 @@ jobs:
               def execute(self, **kwargs):
                   return True, f"ok:{imaplib.IMAP4_SSL.__name__}:{ssl.OPENSSL_VERSION}"
           PYEOF
-                cd /tmp/app
-                printf "tools\nexit\n" | ./dandelion.sh
-              ' 2>&1 || true)
+          cat <<'SHEOF' > /tmp/smoke-host/run_smoke.sh
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cp -a /app-ro /tmp/app
+          cp /smoke-host/smoke_imap_tool.py /tmp/app/tool/smoke_imap_tool.py
+          cd /tmp/app
+          printf "tools\nexit\n" | ./dandelion.sh
+          SHEOF
+          chmod +x /tmp/smoke-host/run_smoke.sh
+
+          for img in ubuntu:18.04 almalinux:8 ubuntu:24.04; do
+            echo "=== Smoke testing dandelion-${{ matrix.os_name }}-${{ matrix.arch }} inside ${img} ==="
+            OUT=$(timeout 120 docker run --rm \
+              -v "$SRC_APP:/app-ro:ro" \
+              -v "/tmp/smoke-host:/smoke-host:ro" \
+              -e PYTHONFAULTHANDLER=1 -e LD_LIBRARY_PATH= -e PYTHONHOME= -e PYTHONPATH= \
+              "$img" bash /smoke-host/run_smoke.sh 2>&1 || true)
             echo "$OUT" | head -20
             echo "$OUT" | grep -q "Initializing Dandelion Project" || { echo "[-] Smoke failed on ${img}"; echo "$OUT"; exit 1; }
             echo "$OUT" | grep -q "Agent Initialization Successful" || { echo "[-] Smoke failed on ${img}: agent did not initialize"; echo "$OUT"; exit 1; }
